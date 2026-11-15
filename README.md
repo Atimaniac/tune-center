@@ -1,57 +1,500 @@
-# tune-center
-- **GPU** - Nvidia GTX/RTX and AMD Radeon graphics card clocks and core clock/voltage curve for Nvidia cards (formerly NVCurve).
-- **CPU** - Intel: power limits, voltage offsets, and Core IccMax; AMD Ryzen: Curve Optimizer for each core and PBO limits.
-- **FAN** - motherboard fan control: manual or temperature-dependent curve with profiles (formerly FanCtl).
-- **SENSORS** - all temperature readings and fan speeds.
-- **POWER** - current CPU and GPU power consumption, total, and a counter for the energy used in the current session.
-- **OPTIONS** - launching from Windows, minimizing to the tray, and a light theme.
-- **ABOUT** - program version, description, and components used.
+# Tune Center
 
-# Requirements
+*English (skrócona wersja): [README.en.md](README.en.md)*
+
+Jedno okno z siedmioma zakładkami (Windows 10/11, 64-bit). Zakładki
+przełącza się przyciskami w nagłówku, obok logo:
+
+- **GPU** - zegary kart Nvidia GTX/RTX i AMD Radeon oraz krzywa zegar
+  rdzenia / napięcie dla kart Nvidia (dawny NVCurve).
+- **CPU** - Intel: limity mocy, offsety napięcia i Core IccMax;
+  AMD Ryzen: Curve Optimizer dla każdego rdzenia i limity PBO.
+- **FAN** - sterowanie wentylatorami płyty głównej: ręcznie lub krzywą
+  zależną od temperatury, z profilami (dawny FanCtl).
+- **SENSORS** - wszystkie odczyty temperatur i obroty wentylatorów.
+- **POWER** - aktualny pobór mocy procesora i karty graficznej, suma
+  oraz licznik energii zużytej w bieżącej sesji.
+- **OPTIONS** - uruchamianie z Windows, minimalizowanie do zasobnika
+  i jasny motyw.
+- **ABOUT** - wersja programu, opis i użyte składniki.
+
+Stan połączenia z czujnikami ("Czujniki: połączono") jest na pasku na
+samym dole okna. W dalszej części opisu sekcje noszą polskie nazwy:
+"Karta graficzna" to zakładka GPU, "Procesor" - CPU, "Wentylatory" - FAN,
+"Czujniki" - SENSORS.
+
+Interfejs i logika są w Rust (egui). Czujniki płyty głównej obsługuje mały
+proces pomocniczy `sensor-bridge` oparty na bibliotece LibreHardwareMonitor,
+a kartę graficzną - bezpośrednio biblioteki sterowników: `nvapi64.dll`
+(Nvidia) i `atiadlxx.dll` (AMD).
+
+## Wymagania
+
+- Rust: https://rustup.rs (toolchain `stable-x86_64-pc-windows-msvc`,
+  instalator poprosi o Visual Studio Build Tools)
 - .NET SDK 8: https://dotnet.microsoft.com/download
-- PawnIO driver (https://pawnio.eu) - required for newer versions
+- Sterownik PawnIO (https://pawnio.eu) - potrzebny nowszym wersjom
+  LibreHardwareMonitor do dostępu do układu Super I/O płyty głównej
+- Sterownik Nvidia lub AMD Adrenalin (dla zakładki "Karta graficzna")
 
-LibreHardwareMonitor to access the motherboard's Super I/O
-- Nvidia or AMD Adrenalin driver (for the "Graphics Card" tab)
+## Budowanie i uruchamianie
+
+W PowerShell, w katalogu projektu:
+
+    .\build.ps1
+
+Gotowy program trafia do `dist\`. Pliki `tunecenter.exe` i `sensor-bridge.exe`
+muszą leżeć w tym samym katalogu. Uruchom `dist\tunecenter.exe` jako
+administrator (prawy przycisk -> "Uruchom jako administrator").
+
+Parametry:
+
+- `--demo` - symulowana karta graficzna, nic nie trafia do sprzętu
+  (dobre na pierwsze uruchomienie),
+- `--minimized` - start zminimalizowany (używa go autostart).
+
+## Instalator
+
+1. Zainstaluj Inno Setup 6.3 lub nowszy: `winget install JRSoftware.InnoSetup`
+2. Uruchom `.\build-installer.ps1`
+
+Powstanie `installer-output\TuneCenter-Setup.exe`. Instalator:
+
+- kopiuje program do `C:\Program Files\Tune Center` i tworzy skrót w menu Start,
+- sprawdza, czy są .NET 8 Runtime i sterownik PawnIO; brakujące proponuje
+  zainstalować (pola wyboru), pobierając je przez `winget`,
+- ustawia program tak, by zawsze startował jako administrator,
+- przy odinstalowaniu usuwa zadanie autostartu i pliki ustawień.
+
+Sterownika Nvidia instalator nie instaluje.
+
+### Aktualizacja
+
+Uruchomienie nowszego instalatora na komputerze, na którym Tune Center już
+jest, działa jako aktualizacja:
+
+- na starcie pojawia się pytanie z wersją zainstalowaną i nową,
+- kreator pokazuje "Gotowy do aktualizacji" i przycisk "Aktualizuj",
+- działający program (także schowany w zasobniku) jest zamykany,
+- pliki są podmieniane w tym samym katalogu, a ustawienia, profile
+  wentylatorów, profile GPU i autostart zostają.
+
+Przy tej samej wersji instalator proponuje ponowną instalację (naprawę),
+a przy starszej ostrzega przed zastąpieniem nowszej.
+
+Przed zbudowaniem nowego instalatora trzeba podnieść numer wersji w dwóch
+miejscach: `version` w `Cargo.toml` i `AppVersion` w `installer.iss`.
+
+## Karta graficzna
+
+- **Informacje**: temperatura, użycie, zegary, napięcie, aktywne offsety.
+- **Zegary**: offset rdzenia i pamięci; zakresy suwaków podaje sterownik.
+- **Krzywa V/F**:
+  - przeciągnij punkt w pionie, aby zmienić zegar przy danym napięciu,
+  - Shift + przeciąganie przesuwa całą krzywą,
+  - "Wyrównaj w prawo" ustawia wszystkie punkty na prawo od zaznaczonego
+    (wyższe napięcie) na jego częstotliwość (undervolting),
+  - po "Wyrównaj w prawo" obok przycisków widać "Limit napięcia: X mV".
+    Po każdym "Zastosuj" program odczytuje krzywą z karty i obniża punkty
+    o wyższym napięciu, które sterownik zaokrąglił powyżej zaznaczonego -
+    inaczej karta sięgałaby po ich napięcie. Ręczna zmiana pojedynczego
+    punktu wyłącza to pilnowanie,
+  - "Ten sam offset wszędzie" nadaje wszystkim punktom offset zaznaczonego,
+  - szara linia to krzywa fabryczna, żółty krzyż to bieżący punkt pracy.
+- Zmiany trafiają do karty dopiero po kliknięciu **Zastosuj**. Zapis jest
+  od razu odblokowany - nie ma już osobnego pola potwierdzenia.
+- **Profile 1-5**: kliknij "Zapisz" - numery od 1 do 5 zaczną pulsować -
+  i wybierz numer, pod którym zapisać bieżące ustawienia. Kliknięcie numeru
+  poza trybem zapisu wczytuje profil (do karty trafia po "Zastosuj").
+  Puste sloty są wyszarzone. Plik: `gpu-profiles.json` obok programu;
+  pojedynczy profil ze starszej wersji trafia do slotu 1.
+  Profile GPU są osobne od profili wentylatorów.
+- **Uruchamiaj profil z Windows**: program pamięta ostatnio zapisany lub
+  wczytany profil (`gpu-settings.json`) i po zaznaczeniu tego pola stosuje
+  go przy każdym swoim uruchomieniu. Żeby działo się to przy starcie
+  systemu, trzeba też włączyć "Uruchamiaj z Windows" w zakładce OPTIONS.
+  Zabezpieczenie: jeśli po automatycznym zastosowaniu profilu program nie
+  przepracuje minuty (zawieszenie albo restart komputera), przy następnym
+  starcie opcja wyłącza się sama i karta zostaje na ustawieniach
+  fabrycznych. Zwykłe zamknięcie programu nie jest liczone jako zawieszenie.
+- **Eksportuj / Importuj**: zapisuje bieżące ustawienia do wybranego pliku
+  `.json` i wczytuje je z powrotem, np. po ponownej instalacji programu lub
+  systemu. Import wstawia ustawienia do edycji: "Zastosuj" wysyła je do
+  karty, a "Zapisz" i numer zachowuje je w programie. Plik pamięta
+  producenta karty i nie wczyta się na karcie drugiego producenta.
+- Gdy program nie znajdzie karty Nvidia ani AMD, zakładka działa w trybie demo.
+
+## Procesor
+
+Program rozpoznaje producenta procesora i pokazuje tylko jego opcje: na
+Ryzenie nie ma ustawień Intela i odwrotnie. Ustawienia trafiają do procesora
+przez sterownik PawnIO i jego oficjalne moduły (pobierane przez `build.ps1`
+do `dist\modules\`).
 
 ### AMD Ryzen
-Supported Desktop Processors:
 
-| Processor | Curve Optimizer | PBO Limits |
+Obsługiwane procesory do komputerów stacjonarnych:
+
+| Procesor | Curve Optimizer | Limity PBO |
 | --- | --- | --- |
-| Ryzen 5000 (Zen 3) | yes, -30..+30 | yes |
-| Ryzen 7000 (Zen 4) | yes, -50..+30 | yes |
-| Ryzen 9000 (Zen 5) | yes, -50..+30 | yes |
+| Ryzen 5000 (Zen 3) | tak, -30..+30 | tak |
+| Ryzen 7000 (Zen 4) | tak, -50..+30 | tak |
+| Ryzen 9000 (Zen 5) | tak, -50..+30 | tak |
+
+- **Curve Optimizer**: kafelek dla każdego rdzenia z bieżącą wartością
+  i polem nowej. "Wpisz do wszystkich" wypełnia pola jedną wartością; do
+  procesora trafiają dopiero po "Zastosuj Curve Optimizer". Przed zapisem
+  program sprawdza, czy odczyt marginesu działa, a po zapisie porównuje
+  odczyt z zadaną wartością.
+- **Ryzen 5000**: zapis marginesu idzie przez skrzynkę MP1 (polecenie 0x35),
+  a odczyt kontrolny przez RSMU (0x7C). Jeśli odczyt nie działa na danym
+  procesorze, program niczego nie zapisuje.
+- **Limity PBO**: PPT (W), TDC (A), EDC (A) i skalar PBO (1x-10x), każdy
+  wysyłany osobnym przyciskiem. Kolumna "Obecnie" pokazuje wartości
+  z tabeli procesora (tabela PM), a pola startują od nich.
+- **Potwierdzanie limitów**: układ tabeli PM zależy od jej wersji.
+  Potwierdzone układy to 0x380804, 0x380805 i 0x380904 (Ryzen 5000) oraz
+  0x620105 (Ryzen 9000). Dla innych wersji wartość ma znak zapytania,
+  dopóki nie ustawisz danego limitu: po zapisie program szuka zadanej
+  wartości w tabeli i, jeśli leży w innym polu niż zakładane, poprawia
+  odczyt. Gdy tabela nie pokazuje zadanej wartości, program mówi to wprost
+  (płyta mogła ograniczyć limit).
+- Mapa rdzeni pochodzi z procesora (w modelach 12-rdzeniowych numer rdzenia
+  w systemie nie odpowiada wprost miejscu w układzie). Jeśli nie zgadza się
+  z liczbą rdzeni widzianą przez system, Curve Optimizer jest wyłączany.
+- Ustawienia działają do restartu lub uśpienia komputera. Zamknij Ryzen
+  Master na czas zmian.
+- Logika ma testy na symulowanym procesorze (18 testów). Na prawdziwym
+  Ryzenie kod nie był uruchamiany.
 
 ### Intel
-- **Power Limits**: Turbo Boost Power Max (PL1), Turbo Boost Short Power Max
-(PL2), and Turbo Boost Power Time Window.
-- **Voltage Offset** separately for P-cores, E-cores, and cache (Ring),
-in the range of -250 to +50 mV.
-- **Core IccMax** - core current limit (12th, 13th, and 14th generation processors).
 
+Co można zmieniać:
 
-### Fans
+- **Limity mocy**: Turbo Boost Power Max (PL1), Turbo Boost Short Power Max
+  (PL2) i Turbo Boost Power Time Window.
+- **Offset napięcia** osobno dla rdzeni P, rdzeni E i cache (Ring),
+  w zakresie -250..+50 mV.
+- **Core IccMax** - limit prądu rdzeni (procesory 12., 13. i 14. generacji).
 
-- **Auto (BIOS)** - the fan is controlled by the motherboard (default).
-- **Manual** - constant control with the slider.
-- **Curve** - control depends on the selected temperature sensor
-(default: CPU); the curve points are dragged with the mouse.
+Jak to działa:
 
-### Sensors
+- Każda sekcja ma własny przycisk "Zastosuj"; wcześniej trzeba zaznaczyć
+  "Rozumiem ryzyko, odblokuj zapis".
+- Przy każdym zapisie program odczytuje bieżącą wartość, podmienia tylko
+  zmieniane pole, zapisuje i odczytuje ponownie. Jeśli procesor nie przyjął
+  wartości, pojawia się błąd z tym, co zadano i co odczytano.
+- Ustawienia działają do restartu komputera. Program nie zapisuje ich na
+  stałe i nie stosuje przy starcie systemu - po zawieszeniu wystarczy restart.
+- Zamknij Intel XTU i ThrottleStop; korzystają z tych samych rejestrów.
 
-The SENSORS tab shows only the most important temperatures: one main sensor each for the CPU, graphics card, motherboard, hard drives, and RAM (if supported by your hardware).
+Czego nie ma i dlaczego:
+
+- **Mnożnik osobno dla każdego rdzenia P i E** (jak w panelu "Per-Core
+  Tuning" w XTU). Zakładka pokazuje limity mnożnika tylko do odczytu.
+  Moduł PawnIO nie pozwala zapisywać rejestrów mnożników turbo (0x1AD,
+  0x650), a polecenia, którymi XTU ustawia mnożnik pojedynczego rdzenia,
+  nie są publicznie opisane; XTU używa do tego własnego sterownika Intela.
+- **Voltage Override** (stałe napięcie) i tryb napięcia - tylko odczyt.
+- Profile i automatyczne stosowanie ustawień procesora.
+
+Uwagi:
+
+- Jeśli BIOS ma włączoną blokadę (Overclocking Lock, Undervolt Protection,
+  blokada limitów mocy), procesor odrzuci zapis i program pokaże błąd.
+- Na części płyt obowiązuje dodatkowy limit mocy po stronie płyty; wtedy
+  działa niższy z dwóch i podniesienie PL1/PL2 w programie nic nie zmieni.
+- Układ poleceń dla napięcia i IccMax pochodzi z projektu PowerMonkey
+  (Alder Lake). Raptor Lake korzysta z tej samej platformy, ale nie był
+  osobno potwierdzony.
+- Logika zapisu ma testy na symulowanym procesorze (16 testów). Na
+  prawdziwym procesorze kod nie był uruchamiany.
+
+### Karty AMD Radeon
+
+- Obsługiwany jest interfejs Overdrive 8, czyli seria RX 5000 i nowsze.
+  Starsze karty pokazują tylko odczyty w "Informacje".
+- **Zegary**: zamiast offsetów ustawia się bezwzględną wartość maksymalnego
+  zegara rdzenia i pamięci (tak działa sterownik AMD).
+- **Krzywa V/F** jest niedostępna (wyszarzona).
+- W zakładce **Wentylatory** dla wentylatorów karty AMD niedostępny jest
+  tryb "Krzywa"; zostają "Auto" i "Ręcznie".
+- Profil GPU zapisany dla karty jednego producenta nie wczyta się na karcie
+  drugiego (offsety i wartości bezwzględne nie są zamienne).
+- Zamknij AMD Software: Adrenalin na czas strojenia - może nadpisywać
+  ustawienia.
+
+## Wentylatory
+
+- **Auto (BIOS)** - wentylatorem steruje płyta główna (domyślnie).
+- **Ręcznie** - stałe wysterowanie suwakiem.
+- **Krzywa** - wysterowanie zależne od wybranego czujnika temperatury
+  (domyślnie procesor); punkty krzywej przeciąga się myszą.
+
+**Profile:** zmiany zapisują się na bieżąco w aktywnym profilu. Aby utworzyć
+kolejny (np. "Cichy", "Gry"), wpisz nazwę i kliknij "Zapisz jako nowy" -
+powstanie kopia bieżących ustawień. Wszystko jest przechowywane
+w `tunecenter-config.json` obok programu.
+
+**Uruchamiaj z Windows** (pole w zakładce OPTIONS): tworzy zadanie `TuneCenter` w Harmonogramie zadań
+Windows (przy logowaniu, z najwyższymi uprawnieniami, bez pytania UAC).
+Program startuje wtedy zminimalizowany i od razu stosuje aktywny profil
+wentylatorów. Po przeniesieniu programu do innego katalogu odznacz
+i zaznacz pole ponownie.
+
+### Puste złącza
+
+Złącza płyty głównej, które pokazują 0 obr./min albo nie mają odczytu, są
+ukryte, o ile działają w trybie Auto. Wentylatory karty graficznej są widoczne
+zawsze (często stoją przy niskiej temperaturze). Ukryte złącza pokazuje
+pole "Pokaż złącza bez wentylatora".
+
+## Czujniki
+
+Zakładka SENSORS pokazuje tylko najważniejsze temperatury: po jednym głównym
+czujniku dla procesora, karty graficznej, płyty głównej, dysków i pamięci RAM
+(jeśli sprzęt je udostępnia). Kafelki dzielą między siebie całe okno, więc
+wszystkie są widoczne bez przewijania; liczba kolumn i wielkość cyfr zależą od
+rozmiaru okna. Obroty wentylatorów są w zakładce FAN.
 
 ## Power
 
-- Separate tiles for the processor and each graphics card: current
-power consumption (W), average and maximum for the session, and energy used (Wh).
-- **Total**: total power consumption, average and maximum, total energy,
-session time, and the "Reset counter" button. The maximum total is the highest
-instantaneous total, not the sum of individual maximums.
-- The bar below the value shows the current consumption relative to the session maximum.
-- The counter runs from program startup, even with the window minimized.
-- Interruptions longer than 5 seconds (computer sleep) are not included.
-- This is the consumption of the processor and graphics card based on their own sensors, not the entire computer; the motherboard, disks, fans, and power supply losses
-are not included.
-- Processor power requires administrator privileges and the PawnIO driver.
+- Osobny kafelek dla procesora i dla każdej karty graficznej: aktualny
+  pobór mocy (W), średnia i maksimum z sesji oraz zużyta energia (Wh).
+- **Razem**: suma poboru mocy, jej średnia i maksimum, łączna energia,
+  czas sesji i przycisk "Wyzeruj licznik". Maksimum sumy to największa
+  chwilowa suma, a nie suma osobnych maksimów.
+- Pasek pod wartością pokazuje bieżący pobór względem maksimum sesji.
+- Licznik działa od uruchomienia programu, także przy zminimalizowanym
+  oknie. Przerwy dłuższe niż 5 s (uśpienie komputera) nie są doliczane.
+- To pobór samego procesora i karty graficznej według ich własnych
+  czujników, a nie całego komputera; płyta, dyski, wentylatory i straty
+  zasilacza nie są wliczone.
+- Moc procesora wymaga uprawnień administratora i sterownika PawnIO.
+
+## Minimalizowanie do zasobnika
+
+Domyślnie przycisk minimalizacji chowa okno do zasobnika systemowego (ikona
+przy zegarze) zamiast na pasek zadań. Lewy klik na ikonie przywraca okno,
+prawy otwiera menu "Pokaż Tune Center" / "Zakończ". Sterowanie wentylatorami
+i licznik energii działają dalej. Pole "Minimalizuj do zasobnika" w zakładce OPTIONS
+wyłącza to zachowanie. Autostart uruchamia program od razu w zasobniku.
+
+Okno schowane w zasobniku nie jest rysowane i praktycznie nie obciąża
+procesora (wcześniejsze wersje z eframe 0.29 zajmowały wtedy cały rdzeń).
+Animacja wentylatorów w zakładce FAN jest ograniczona do ok. 30 klatek/s.
+
+Windows może schować nową ikonę pod strzałką "^" przy zegarze; można ją
+stamtąd przeciągnąć na pasek.
+
+## Zmiana rozmiaru okna
+
+Układ dopasowuje się do okna: zakładki, przyciski i pola w nagłówku
+zawijają się do kolejnych wierszy, kafelki w "Power" i "Czujniki" układają
+się w tylu kolumnach, ile się mieści, a dłuższe listy można przewijać.
+Najmniejszy rozmiar okna to 420 x 420.
+
+## Język
+
+Program ma dwa języki: polski i angielski. Przełącza się je w zakładce OPTIONS
+("Język / Language"); zmiana działa od razu, tylko menu ikony w zasobniku
+zmienia język po ponownym uruchomieniu. Nazwy zakładek są takie same w obu
+językach.
+
+Instalator pyta o język na początku. Wybór trafia do pliku
+`default-language.txt` obok programu i jest językiem domyślnym, dopóki nie
+zmienisz go w OPTIONS (własny wybór jest zapisany w ustawieniach i ma
+pierwszeństwo, także po aktualizacji).
+
+## Czcionka
+
+Przyciski zakładek (GPU, CPU, FAN...) używają czcionki Audiowide wbudowanej w
+program. Cała pozostała treść jest pisana domyślną czcionką interfejsu.
+
+## Aktualizacje
+
+Przycisk "Sprawdź aktualizację" jest w prawym dolnym rogu okna. Program pyta
+GitHub o najnowsze wydanie repozytorium `Atimaniac/tune-center` i porównuje
+jego znacznik z własną wersją. Gdy jest nowsza, w tym samym miejscu pojawia
+się przycisk "Zainstaluj X" i odnośnik "co nowego" do strony wydania.
+
+"Zainstaluj X":
+
+- pobiera załącznik `*Setup.exe` wydania do katalogu tymczasowego Windows
+  (`TuneCenter-Setup-update.exe`),
+- sprawdza, że to plik .exe, uruchamia go w trybie cichym
+  (`/SILENT /SUPPRESSMSGBOXES /NORESTART /LANG=pl|en`, język jak w programie)
+  i zamyka program zwykłą drogą - wentylatory i karta wracają do automatu,
+- instalator podmienia pliki, zostawia ustawienia i profile, a na końcu
+  uruchamia program ponownie.
+
+Pobierane są tylko pliki spod adresu
+`https://github.com/Atimaniac/tune-center/releases/download/...` (także
+przekierowania tylko po HTTPS). Gdy wydanie nie ma takiego instalatora,
+zamiast przycisku jest odnośnik "Dostępna wersja X - pobierz" do strony
+wydania. Gdy pobieranie się nie uda, pojawia się błąd i odnośnik
+"pobierz ręcznie".
+
+Sprawdzanie odbywa się też przy każdym starcie (można to wyłączyć w OPTIONS);
+wtedy informacja pojawia się tylko wtedy, gdy jest nowsza wersja.
+
+Żeby to działało, wydania trzeba publikować na GitHubie:
+
+1. Podnieś wersję w `Cargo.toml` i `installer.iss`, zbuduj instalator.
+2. Na stronie repozytorium: Releases > Draft a new release.
+3. Znacznik (tag) w postaci `v0.17.0` - taki sam numer jak w `Cargo.toml`.
+4. Dołącz `TuneCenter-Setup.exe` (nazwa musi kończyć się na `Setup.exe`)
+   i opublikuj (nie jako pre-release).
+
+Instalator można też uruchomić cicho samodzielnie:
+`TuneCenter-Setup.exe /SILENT /SUPPRESSMSGBOXES /LANG=pl`. Pytania dostają
+wtedy domyślne odpowiedzi: aktualizacja i naprawa przechodzą, zastąpienie
+nowszej wersji starszą jest odrzucane.
+
+Repozytorium musi być publiczne. Zapytanie wykonuje `curl.exe` dołączony do
+Windows 10 i 11. Nazwę repozytorium ustawia stała `REPO` w `src/update.rs`.
+
+## Motyw
+
+Pole "Jasny motyw" w zakładce OPTIONS przełącza białe tło z czarnym tekstem.
+Wybór jest zapamiętywany.
+
+## Ikona i nazwa
+
+- Ikona programu jest w `assets\` (`icon.ico` dla pliku .exe i instalatora,
+  `icon-128.rgba` dla okna, `icon.png` do podglądu).
+- Po zmianie nazwy z PCTune program sam przejmuje stare ustawienia
+  (`pctune-config.json`) i stare zadanie autostartu.
+
+## Skąd pochodzą odczyty
+
+| Odczyt | Źródło | Sterownik PawnIO |
+| --- | --- | --- |
+| Karta Nvidia: temperatura, hotspot, zegary, napięcie, użycie | NVAPI (sterownik Nvidii) | nie |
+| Karta Nvidia: pobór mocy, wysterowanie wentylatora | NVML (sterownik Nvidii) | nie |
+| Karta AMD: temperatura, hotspot, wentylator, moc, zegary | ADL (sterownik AMD) | nie |
+| Temperatura karty w SENSORS | wprost ze sterownika karty | nie |
+| Moc karty w POWER | wprost ze sterownika karty; czujniki są zapasem | nie |
+| Wentylatory karty w FAN (odczyt i sterowanie) | wprost ze sterownika karty (NVAPI / ADL) | nie |
+| Dyski | API dysków Windows; czujniki są zapasem | nie |
+| Temperatura i moc procesora | LibreHardwareMonitor | tak |
+| Wentylatory i temperatury płyty głównej | LibreHardwareMonitor | tak |
+| Zakładka CPU (strojenie) | moduły PawnIO | tak |
+
+PawnIO jest opcjonalny: instalator pozwala go odznaczyć, a program bez niego
+pokazuje wszystko z górnej części tabeli. Licznik energii w POWER działa wtedy
+z samej karty graficznej - także gdy proces czujników w ogóle nie wystartował.
+Gdy okno jest schowane w zasobniku, interfejs nie jest rysowany, ale odczyty
+ze sterownika karty są dalej odświeżane, gdy proces czujników przysyła dane
+(co sekundę). Jeśli odczyt ze sterownika jest starszy niż 3 s, licznik
+przechodzi na czujniki.
+
+### Wentylatory karty graficznej przez sterownik
+
+Program steruje wentylatorami karty sam, w osobnym wątku (działa też przy
+oknie schowanym w zasobniku): Nvidia przez NVAPI (ClientFanCoolers), AMD
+przez ADL (Overdrive 5). Wszystkie wentylatory jednej karty dostają to samo
+wysterowanie i są w zakładce FAN jedną kartą "GPU Fan".
+
+Zabezpieczenia:
+
+- wentylator w trybie Auto nie jest dotykany - steruje nim karta,
+- gdy karta osiągnie 88 °C, program oddaje wentylator automatowi karty,
+  niezależnie od ustawień,
+- krzywa bez odczytu temperatury też oddaje sterowanie karcie,
+- przy zamykaniu programu karta wraca do automatu.
+
+Jeśli program zostanie zabity (np. z Menedżera zadań) w trakcie sterowania
+ręcznego, wentylator zostaje na ostatnim wysterowaniu do ponownego
+uruchomienia programu albo restartu komputera.
+
+Gdy sterownik karty nie udostępnia sterowania, program sam wraca do
+sterowania przez proces czujników (LibreHardwareMonitor). Można to też
+wymusić w OPTIONS, wyłączając "Wentylatory karty graficznej przez sterownik
+karty". Po zmianie sposobu sterowania ustawienia wentylatora karty (tryb,
+krzywa) trzeba wybrać ponownie, bo wentylator ma inny identyfikator.
+
+### Temperatury dysków
+
+Zakładka SENSORS czyta temperatury dysków wprost z Windows
+(`IOCTL_STORAGE_QUERY_PROPERTY`), co 10 sekund. Tą drogą temperaturę podają
+przede wszystkim dyski NVMe; dla dysków, których Windows nie podaje (część
+SATA), zostaje odczyt z procesu czujników.
+
+Starsze wersje LibreHardwareMonitor (do 0.9.4) zamiast PawnIO używały
+sterownika WinRing0. Nie wracamy do niego: Windows Defender blokuje go jako
+podatny na ataki.
+
+Odczyty karty graficznej działają także wtedy, gdy PawnIO nie jest
+zainstalowany albo proces czujników nie wystartował.
+
+Temperatury procesora i wentylatorów płyty głównej nie da się odczytać bez
+sterownika jądra. Intel i AMD nie udostępniają do tego API dla zwykłych
+programów: temperatura procesora jest w rejestrach MSR, a wentylatorami
+steruje układ Super I/O na płycie - do obu Windows dopuszcza tylko sterownik.
+PawnIO jest takim sterownikiem (podpisanym); alternatywą byłby inny sterownik
+tego samego rodzaju, a nie jego brak.
+
+## Informacje o karcie: hotspot, HAGS, Resizable BAR
+
+W zakładce GPU > Informacje:
+
+- **Temperatura hotspot** - najcieplejszy punkt karty, odczytywany wprost ze
+  sterownika (NVAPI / ADL). Nie każda karta go udostępnia; w szczególności karty
+  GeForce RTX serii 50 nie mają już tego czujnika. Wtedy w wierszu jest
+  informacja, że karta go nie udostępnia.
+- **HAGS** (sprzętowo przyspieszane planowanie GPU) - stan ustawienia Windows
+  i przycisk Włącz/Wyłącz. Program zmienia tę samą wartość co przełącznik w
+  Ustawieniach Windows (`HwSchMode` w rejestrze). Zmiana działa po restarcie
+  komputera.
+- **Resizable BAR** - tylko odczyt. Program sprawdza rozmiar okna pamięci
+  przydzielonego karcie: 256 MB oznacza wyłączony, większe okno - włączony.
+  Odczyt wykonuje jednorazowo przy starcie, w tle, wbudowany w Windows
+  PowerShell; gdy się nie powiedzie, w wierszu jest "nieznane".
+  Resizable BAR włącza się w BIOS-ie płyty głównej.
+
+## Znane ograniczenia
+
+- Zakładka POWER pokazuje tylko procesor i kartę graficzną. Dyski i płyta
+  główna nie mają czujników poboru mocy, więc nie ma czego odczytać.
+
+- Podgląd mnożników turbo rdzeni E (rejestr 0x650) wymaga modułu IntelMSR.bin,
+  który pozwala ten rejestr czytać. Wydana wersja modułu może go odrzucać
+  (błąd 0x80070005); program pokazuje wtedy krótką informację zamiast błędu,
+  a pozostałe ustawienia procesora działają normalnie.
+
+## Bezpieczeństwo
+
+Wentylatory:
+
+- Dolna granica wysterowania to 20 % (stała `MIN_PCT` w `src/config.rs`).
+- Po zamknięciu programu wszystkie wentylatory wracają pod sterowanie BIOS-u.
+- Gdy czujnik temperatury krzywej przestanie odpowiadać, wentylator wraca
+  do trybu BIOS-u.
+
+Karta graficzna:
+
+- Ustawienia nie są zapisywane w karcie. Znikają po restarcie systemu lub
+  sterownika, więc zawieszenie po zbyt agresywnym OC naprawia restart.
+- Zmieniaj po 10-25 MHz i testuj stabilność po każdej zmianie.
+
+Nie uruchamiaj równocześnie innych programów sterujących tym samym sprzętem
+(MSI Afterburner, FanControl, oprogramowanie producenta płyty) - będą się
+nadpisywać.
+
+## Stan projektu
+
+- Projekt nie był kompilowany w całości ani uruchamiany na prawdziwym
+  sprzęcie; możliwe drobne błędy kompilacji do poprawienia. Sprawdzona jest
+  składnia wszystkich plików Rust i obliczanie krzywej wentylatorów.
+- Obsługa kart AMD (`src/gpu/amd.rs`) opiera się na oficjalnym ADL SDK
+  (struktury, identyfikatory i kolejność wywołań z przykładu Overdrive8).
+  Typy i rozmiary struktur są sprawdzone kompilatorem, ale kod nie był
+  uruchomiony na karcie Radeon.
+- Funkcje krzywej V/F i zapisu offsetów są nieudokumentowane przez Nvidię.
+  Jeśli sterownik odrzuci strukturę, program pokaże błąd w pasku stanu
+  (np. "niezgodna wersja struktury") i niczego nie zapisze.
+- W BIOS-ie złącza wentylatorów powinny być w trybie PWM lub DC zgodnym
+  z podłączonym wentylatorem; inaczej zmiana wysterowania nic nie da.
+- Nazwy typu "Fan #2" pochodzą z układu Super I/O. Które złącze jest które,
+  najłatwiej sprawdzić, ustawiając po kolei 100 % w trybie ręcznym.

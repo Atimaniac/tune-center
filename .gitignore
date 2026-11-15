@@ -1,0 +1,18 @@
+# Wyniki budowania
+/target/
+/dist/
+/installer-output/
+sensor-bridge/bin/
+sensor-bridge/obj/
+
+# Ustawienia użytkownika zapisywane obok programu
+tunecenter-config.json
+pctune-config.json
+gpu-profile.json
+gpu-profiles.json
+gpu-settings.json
+gpu-autoapply.pending
+
+# Notatki robocze (tylko lokalnie)
+/CLAUDE.md
+/TUNE-CENTER-HANDOFF.md
