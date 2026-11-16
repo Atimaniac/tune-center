@@ -200,6 +200,190 @@ impl Dump {
     }
 }
 
+// --------------------------- metadane DX12 ---------------------------------
+//
+// `dxil::ShaderContainer`: typ (u16 + u16 z flagą stream output), skrót SHA-1
+// (20 B), `VecHolder<u8> data` w 24. Dane to `dxil::Shader` (pojedynczy
+// shader) albo `dxil::VertexShaderPipeline` (shader wierzchołków + wskaźniki
+// na hull, domain, geometry). `dxil::Shader` = `ShaderHeader` (96 B),
+// przesunięcie i rozmiar kodu w rozpakowanym bloku, skompresowane źródło.
+
+/// Etap potoku (`dxil::ShaderStage`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Stage {
+    Vertex,
+    Pixel,
+    Geometry,
+    Domain,
+    Hull,
+    Compute,
+    Mesh,
+    Amplification,
+    Other(u8),
+}
+
+impl Stage {
+    fn from_raw(raw: u8) -> Self {
+        match raw {
+            0 => Stage::Vertex,
+            1 => Stage::Pixel,
+            2 => Stage::Geometry,
+            3 => Stage::Domain,
+            4 => Stage::Hull,
+            5 => Stage::Compute,
+            6 => Stage::Mesh,
+            7 => Stage::Amplification,
+            n => Stage::Other(n),
+        }
+    }
+}
+
+/// `dxil::ShaderResourceUsageTable`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Usage {
+    pub t_mask: u32,
+    pub s_mask: u32,
+    pub bindless_mask: u32,
+    pub b_mask: u16,
+    pub u_mask: u16,
+    pub root_constant_dwords: u8,
+    pub special_constants_mask: u8,
+}
+
+/// `dxil::ShaderHeader` (96 B).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Header {
+    pub implicit_cbuf_reg_count: u32,
+    pub bones_constants_used: u32,
+    pub usage: Usage,
+    pub s_compare_mask: u32,
+    pub in_out_semantic_mask: u32,
+    pub t_types: [u8; 32],
+    pub u_types: [u8; 13],
+    pub stage: Stage,
+    pub input_primitive: u16,
+    pub feature_flags_low: u32,
+    pub feature_flags_high: u32,
+    pub shader_model: u8,
+    pub extension_vendor: u8,
+    pub vendor_extension_mask: u16,
+}
+
+pub const SHADER_HEADER_SIZE: usize = 96;
+const SHADER_SIZE: usize = SHADER_HEADER_SIZE + 4 + 4 + 12;
+const CONTAINER_DATA: usize = 24;
+
+fn u16_at(b: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(b.get(at..at + 2)?.try_into().ok()?))
+}
+
+pub fn parse_shader_header(b: &[u8], at: usize) -> Option<Header> {
+    let h = b.get(at..at + SHADER_HEADER_SIZE)?;
+    Some(Header {
+        implicit_cbuf_reg_count: u32_at(h, 0)?,
+        bones_constants_used: u32_at(h, 4)?,
+        usage: Usage {
+            t_mask: u32_at(h, 8)?,
+            s_mask: u32_at(h, 12)?,
+            bindless_mask: u32_at(h, 16)?,
+            b_mask: u16_at(h, 20)?,
+            u_mask: u16_at(h, 22)?,
+            root_constant_dwords: h[24],
+            special_constants_mask: h[25],
+        },
+        s_compare_mask: u32_at(h, 28)?,
+        in_out_semantic_mask: u32_at(h, 32)?,
+        t_types: h[36..68].try_into().ok()?,
+        u_types: h[68..81].try_into().ok()?,
+        stage: Stage::from_raw(h[81]),
+        input_primitive: u16_at(h, 82)?,
+        feature_flags_low: u32_at(h, 84)?,
+        feature_flags_high: u32_at(h, 88)?,
+        shader_model: h[92],
+        extension_vendor: h[93],
+        vendor_extension_mask: u16_at(h, 94)?,
+    })
+}
+
+/// Jeden etap: nagłówek i położenie kodu DXIL w rozpakowanym bloku shadera.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StageCode {
+    pub header: Header,
+    pub bytecode: std::ops::Range<usize>,
+}
+
+fn parse_stage(b: &[u8], at: usize) -> Option<StageCode> {
+    let header = parse_shader_header(b, at)?;
+    let offset = u32_at(b, at + SHADER_HEADER_SIZE)? as usize;
+    let size = u32_at(b, at + SHADER_HEADER_SIZE + 4)? as usize;
+    Some(StageCode {
+        header,
+        bytecode: offset..offset.checked_add(size)?,
+    })
+}
+
+/// Wskaźnik bindump (i32 względem pola, 0 = brak).
+fn ptr_at(b: &[u8], at: usize) -> Option<Option<usize>> {
+    let offset = i32_at(b, at)?;
+    if offset == 0 {
+        return Some(None);
+    }
+    let target = at as i64 + offset as i64;
+    (target >= 0 && (target as usize) < b.len()).then_some(Some(target as usize))
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)] // krótkotrwałe wartości, tylko do odczytu
+pub enum Container {
+    /// Pojedynczy shader (piksele albo compute).
+    Single(StageCode),
+    /// Shader wierzchołków z opcjonalnymi hull/domain/geometry.
+    Vertex {
+        vertex: StageCode,
+        hull: Option<StageCode>,
+        domain: Option<StageCode>,
+        geometry: Option<StageCode>,
+    },
+    /// Stream output, mesh, biblioteki - nie kompilujemy.
+    Unsupported(u16),
+}
+
+pub fn parse_container(meta: &[u8]) -> Option<Container> {
+    let kind = u16_at(meta, 0)?;
+    let stream_output = u16_at(meta, 2)? & 1 != 0;
+    if stream_output {
+        return Some(Container::Unsupported(kind | 0x8000));
+    }
+    let (data, len) = list_at(meta, CONTAINER_DATA, 1)?;
+    match kind {
+        0 if len >= SHADER_SIZE => Some(Container::Single(parse_stage(meta, data)?)),
+        // VertexShaderPipeline: cztery wskaźniki i32 (wierzchołki, hull,
+        // domain, geometry), 0 = brak etapu.
+        1 if len >= 16 => {
+            let stage = |at: usize| -> Option<Option<StageCode>> {
+                match ptr_at(meta, at)? {
+                    Some(p) => Some(Some(parse_stage(meta, p)?)),
+                    None => Some(None),
+                }
+            };
+            Some(Container::Vertex {
+                vertex: stage(data)??,
+                hull: stage(data + 4)?,
+                domain: stage(data + 8)?,
+                geometry: stage(data + 12)?,
+            })
+        }
+        other => Some(Container::Unsupported(other)),
+    }
+}
+
+impl Dump {
+    /// Metadane shadera `index` rozpoznane jako kontener DX12.
+    pub fn container(&self, index: usize) -> Option<Container> {
+        parse_container(self.metadata(index)?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +481,71 @@ mod hardware {
             println!("  {line}");
         }
         assert_eq!(n, dump.shader_count());
+
+        // Metadane: typy kontenerów, etapy i zakresy kodu DXIL.
+        use std::collections::HashMap;
+        let mut kinds: HashMap<String, usize> = HashMap::new();
+        let mut stages: HashMap<String, usize> = HashMap::new();
+        let mut bad = Vec::new();
+        let mut bindless = 0;
+        let mut root_constants = 0;
+        let mut models: HashMap<u8, usize> = HashMap::new();
+        dump.for_each_shader(|i, data| {
+            let check = |s: &StageCode, bad: &mut Vec<String>| {
+                let ok = s.bytecode.end <= data.len()
+                    && data.get(s.bytecode.start..s.bytecode.start + 4) == Some(b"DXBC".as_slice());
+                if !ok && bad.len() < 5 {
+                    bad.push(format!(
+                        "#{i} {:?} {:?} / {}",
+                        s.header.stage,
+                        s.bytecode,
+                        data.len()
+                    ));
+                }
+            };
+            let mut note = |s: &StageCode| {
+                *stages.entry(format!("{:?}", s.header.stage)).or_default() += 1;
+                *models.entry(s.header.shader_model).or_default() += 1;
+                if s.header.usage.bindless_mask != 0 {
+                    bindless += 1;
+                }
+                if s.header.usage.root_constant_dwords != 0 {
+                    root_constants += 1;
+                }
+            };
+            match dump.container(i) {
+                Some(Container::Single(s)) => {
+                    *kinds.entry("single".into()).or_default() += 1;
+                    check(&s, &mut bad);
+                    note(&s);
+                }
+                Some(Container::Vertex {
+                    vertex,
+                    hull,
+                    domain,
+                    geometry,
+                }) => {
+                    *kinds.entry("vertex".into()).or_default() += 1;
+                    for s in [Some(vertex), hull, domain, geometry].into_iter().flatten() {
+                        check(&s, &mut bad);
+                        note(&s);
+                    }
+                }
+                Some(Container::Unsupported(k)) => {
+                    *kinds.entry(format!("inne {k:#x}")).or_default() += 1
+                }
+                None => *kinds.entry("nieczytelne".into()).or_default() += 1,
+            }
+            true
+        })
+        .unwrap();
+        println!("kontenery: {kinds:?}");
+        println!("etapy: {stages:?}");
+        println!(
+            "shader model: {models:?}, bindless: {bindless}, root constants: {root_constants}"
+        );
+        println!("złe zakresy kodu: {bad:?}");
+        assert!(bad.is_empty());
+        assert_eq!(kinds.get("nieczytelne"), None);
     }
 }

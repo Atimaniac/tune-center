@@ -20,6 +20,14 @@ serde_json = "1"
 rfd = "0.15"
 # Rozpakowywanie zrzutów shaderów Dagor Engine (zstd ze słownikiem).
 zstd = "0.13"
+# Direct3D 12: root signature i potoki przy kompilacji shaderów z góry.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
 
 # Ikona w zasobniku systemowym (tylko Windows).
 [target.'cfg(windows)'.dependencies]

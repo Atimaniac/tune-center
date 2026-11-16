@@ -11,6 +11,7 @@ pub mod engine;
 pub mod games;
 #[cfg(windows)]
 mod registry;
+pub mod rootsig;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
