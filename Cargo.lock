@@ -3528,7 +3528,7 @@ dependencies = [
 
 [[package]]
 name = "tunecenter"
-version = "0.17.2"
+version = "0.17.3"
 dependencies = [
  "eframe",
  "libloading 0.8.9",
