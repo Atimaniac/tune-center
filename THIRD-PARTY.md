@@ -44,3 +44,9 @@ Tune Center korzysta z poniższych składników. Są dołączane bez zmian.
   sterowania wentylatorami karty (ClientFanCoolers) oraz czujnika hotspot.
 - AMD Display Library SDK (https://github.com/GPUOpen-LibrariesAndSDKs/display-library):
   struktury i wywołania Overdrive 8 dla kart Radeon.
+- NVIDIA NVAPI SDK (https://github.com/NVIDIA/nvapi, MIT): identyfikatory
+  funkcji, struktury i wartości ustawień sterownika (`nvapi.h`,
+  `nvapi_interface.h`, `NvApiDriverSettings.h`) oraz przykłady
+  DisplayConfiguration, DisplayColorControl i CustomTiming - podstawa
+  zakładki NVIDIA. Kod SDK nie jest dołączany; program woła sterownik przez
+  `nvapi64.dll`.

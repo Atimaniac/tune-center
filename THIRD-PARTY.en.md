@@ -40,3 +40,8 @@ Tune Center uses the following components. They are included as is.
 - LibreHardwareMonitor (MPL-2.0): NVAPI structure layout for reading and
   controlling graphics card fans (ClientFanCoolers) and the hotspot sensor.
 - AMD Display Library SDK (https://github.com/GPUOpen-LibrariesAndSDKs/display-library): Overdrive 8 structures and calls for Radeon cards.
+- NVIDIA NVAPI SDK (https://github.com/NVIDIA/nvapi, MIT): function IDs,
+  structures and driver setting values (`nvapi.h`, `nvapi_interface.h`,
+  `NvApiDriverSettings.h`) and the DisplayConfiguration, DisplayColorControl
+  and CustomTiming samples - the basis of the NVIDIA tab. No SDK code is
+  shipped; the program calls the driver through `nvapi64.dll`.

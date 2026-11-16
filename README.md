@@ -2,11 +2,14 @@
 
 *English (skrócona wersja): [README.en.md](README.en.md)*
 
-Jedno okno z siedmioma zakładkami (Windows 10/11, 64-bit). Zakładki
+Jedno okno z ośmioma zakładkami (Windows 10/11, 64-bit). Zakładki
 przełącza się przyciskami w nagłówku, obok logo:
 
 - **GPU** - zegary kart Nvidia GTX/RTX i AMD Radeon oraz krzywa zegar
   rdzenia / napięcie dla kart Nvidia (dawny NVCurve).
+- **NVIDIA** - odpowiednik panelu sterowania Nvidia: ustawienia 3D
+  (globalne i dla programów), tryb ekranu, kolor i HDR, G-SYNC,
+  rozdzielczości niestandardowe.
 - **CPU** - Intel: limity mocy, offsety napięcia i Core IccMax;
   AMD Ryzen: Curve Optimizer dla każdego rdzenia i limity PBO.
 - **FAN** - sterowanie wentylatorami płyty głównej: ręcznie lub krzywą
@@ -123,6 +126,52 @@ miejscach: `version` w `Cargo.toml` i `AppVersion` w `installer.iss`.
   karty, a "Zapisz" i numer zachowuje je w programie. Plik pamięta
   producenta karty i nie wczyta się na karcie drugiego producenta.
 - Gdy program nie znajdzie karty Nvidia ani AMD, zakładka działa w trybie demo.
+
+## Panel Nvidia (zakładka NVIDIA)
+
+Zbudowany wyłącznie na oficjalnym, publicznym NVAPI SDK
+(https://github.com/NVIDIA/nvapi, licencja MIT) - bez funkcji
+nieudokumentowanych. Działa niezależnie od trybu `--demo`.
+
+- **Ustawienia 3D** - jak "Zarządzaj ustawieniami 3D": V-Sync (także
+  adaptacyjna i szybka), maks. klatek przygotowanych, limit FPS,
+  technologia monitora, preferowane odświeżanie, tryb zarządzania energią,
+  filtrowanie tekstur i anizotropowe, antyaliasing, okluzja otoczenia,
+  nadpisanie DLSS (model, DLAA, Ray Reconstruction, Frame Generation,
+  liczba generowanych klatek) i ustawienia VR.
+  - "Ustawienia globalne" albo "Ustawienia programu": wybór z listy profili
+    Nvidii (wyszukiwarka) lub "Dodaj program..." (plik .exe). W profilu
+    programu ustawienie dziedziczone z globalnego ma dopisek "(globalne)",
+    a przycisk "globalne" wraca do ustawienia globalnego.
+  - Profile utworzone przez Ciebie (★) można usunąć; profile Nvidii tylko
+    przywrócić do domyślnych.
+  - "Zaawansowane" pokazuje surowe wartości wszystkich ustawień sterownika
+    (ok. 130) z możliwością edycji wartości DWORD.
+  - Zmiany są trwałe (jak w panelu Nvidia). Przed pierwszą zmianą w danym
+    uruchomieniu programu powstaje kopia całej bazy ustawień w katalogu
+    `nvidia-backup` obok programu; "Przywróć z kopii" wczytuje ją z powrotem.
+    Każdy zapis jest sprawdzany ponownym odczytem.
+- **Ekran** - rozdzielczość, częstotliwość odświeżania, obrót i skalowanie.
+  Lista zawiera tryby przyjęte przez sterownik w teście bez zmiany obrazu,
+  ograniczone do natywnej rozdzielczości i maksymalnego odświeżania z EDID
+  monitora.
+- **Kolor i HDR** - "Domyślne ustawienia koloru" albo ustawienia Nvidia:
+  format (RGB / YCbCr444 / 422 / 420), głębia (6-12 bitów), zakres
+  dynamiczny (pełny / ograniczony); niedostępne połączenia są wyszarzone.
+  HDR10 włącz/wyłącz, gdy monitor go obsługuje.
+- **G-SYNC** - tryb G-SYNC (pełny ekran / pełny ekran i okno), wskaźnik na
+  ekranie, G-SYNC Compatible dla monitora i bieżący stan VRR.
+- **Rozdzielczości niestandardowe** - lista, usuwanie i dodawanie (taktowanie
+  CVT z ograniczonym wygaszaniem liczy sterownik).
+
+Zmiany ekranu (tryb, kolor, HDR, nowa rozdzielczość) działają najpierw na
+próbę: przez 15 s można je zachować albo cofnąć, a bez odpowiedzi wracają
+same - także przy oknie schowanym w zasobniku i przy zamknięciu programu.
+
+Czego nie ma, bo publiczne NVAPI tego nie udostępnia: Digital Vibrance,
+jasność/kontrast/gamma pulpitu, ustawienia wideo, konfiguracja PhysX, DSR
+i tryb niskich opóźnień "Ultra" (dostępne jest "maks. klatek przygotowanych
+= 1", czyli "Wł.").
 
 ## Procesor
 

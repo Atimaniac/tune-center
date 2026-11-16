@@ -19,6 +19,7 @@ mod gpu;
 mod gpu_fans;
 mod hags;
 mod i18n;
+mod nvcp;
 mod power;
 mod power_tab;
 mod rebar;
@@ -47,6 +48,7 @@ pub const ANIMATION_FRAME: Duration = Duration::from_millis(33);
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
     Gpu,
+    Nvidia,
     Cpu,
     Fans,
     Sensors,
@@ -56,8 +58,9 @@ enum Tab {
 }
 
 /// Zakładki w kolejności przycisków w nagłówku.
-const TABS: [(Tab, &str); 7] = [
+const TABS: [(Tab, &str); 8] = [
     (Tab::Gpu, "GPU"),
+    (Tab::Nvidia, "NVIDIA"),
     (Tab::Cpu, "CPU"),
     (Tab::Fans, "FAN"),
     (Tab::Sensors, "SENSORS"),
@@ -107,6 +110,8 @@ fn tab_button(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response 
 struct App {
     tab: Tab,
     gpu: GpuTab,
+    /// Panel sterowania Nvidia (publiczne NVAPI).
+    nvcp: nvcp::NvcpTab,
     cpu: cpu_tab::CpuTab,
     fans: FansTab,
     /// Proces pomocniczy czujników i sterowania wentylatorami.
@@ -208,6 +213,7 @@ impl App {
         Self {
             tab: Tab::Gpu,
             gpu: GpuTab::new(demo),
+            nvcp: nvcp::NvcpTab::new(),
             cpu: cpu_tab::CpuTab::new(),
             fans,
             bridge,
@@ -463,6 +469,9 @@ impl eframe::App for App {
         // Opóźniony zapis ustawień wentylatorów działa także przy ukrytym oknie.
         self.fans
             .tick(self.bridge.as_ref().ok(), self.gpu_fans.as_ref());
+        // Niepotwierdzona zmiana ekranu wraca po 15 s, nawet gdy okno jest
+        // schowane w zasobniku.
+        self.nvcp.tick();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -683,6 +692,7 @@ impl eframe::App for App {
             )
             .show(ui, |ui| match self.tab {
                 Tab::Gpu => self.gpu.ui(ui, snap.as_ref()),
+                Tab::Nvidia => self.nvcp.ui(ui),
                 Tab::Cpu => self.cpu.ui(ui),
                 Tab::Fans => {
                     // Lista z wentylatorami kart ze sterownika zamiast tych
