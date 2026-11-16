@@ -1,5 +1,10 @@
-//! Zakładka NVIDIA - odpowiednik panelu sterowania Nvidia, zbudowany
-//! wyłącznie na publicznym NVAPI SDK:
+//! Zakładka NVIDIA - odpowiednik panelu sterowania Nvidia.
+//!
+//! - Overclock: dawna zakładka GPU (`crate::gpu::GpuTab`) - zegary, krzywa
+//!   V/F, profile; ma własne zaplecze (także karty AMD i funkcje NVAPI spoza
+//!   publicznego SDK) i działa nawet wtedy, gdy panel poniżej jest niedostępny.
+//!
+//! Pozostałe podzakładki korzystają wyłącznie z publicznego NVAPI SDK:
 //!
 //! - Ustawienia 3D: profil globalny i profile programów (DRS),
 //! - Ekran: rozdzielczość, odświeżanie, obrót, skalowanie,
@@ -34,6 +39,8 @@ const CONFIRM_TIME: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
+    /// Dawna zakładka GPU.
+    Overclock,
     Settings3d,
     Display,
     Color,
@@ -103,7 +110,7 @@ impl NvcpTab {
             api: None,
             driver: None,
             drs: None,
-            page: Page::Settings3d,
+            page: Page::Overclock,
             status: None,
             target: Target::Global,
             profiles: None,
@@ -173,25 +180,22 @@ impl NvcpTab {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui) {
-        let api = match self.api() {
-            Ok(a) => a,
-            Err(e) => {
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(tr("Panel Nvidia niedostępny", "Nvidia panel unavailable"))
-                        .strong(),
-                );
-                ui.label(RichText::new(e).color(warn()));
-                return;
-            }
-        };
+    /// `gpu` i `snap` służą podzakładce Overclock (dawna zakładka GPU).
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        gpu: &mut crate::gpu::GpuTab,
+        snap: Option<&crate::bridge::Snapshot>,
+    ) {
+        // Brak panelu NVAPI (np. karta AMD) nie blokuje podzakładki Overclock.
+        let api = self.api().ok();
 
         egui::Panel::top("nvcp_header")
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for (page, label) in [
+                        (Page::Overclock, "Overclock"),
                         (Page::Settings3d, tr("Ustawienia 3D", "3D settings")),
                         (Page::Display, tr("Ekran", "Display")),
                         (Page::Color, tr("Kolor i HDR", "Color and HDR")),
@@ -215,31 +219,61 @@ impl NvcpTab {
                     }
                 });
                 ui.separator();
-                self.pending_banner(ui, &api);
-            });
-
-        egui::Panel::bottom("nvcp_status")
-            .frame(egui::Frame::NONE)
-            .show(ui, |ui| {
-                if let Some((text, error)) = &self.status {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(text).color(if *error { warn() } else { accent() }));
+                if let Some(api) = &api {
+                    self.pending_banner(ui, api);
                 }
             });
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| match self.page {
-                        Page::Settings3d => self.settings_ui(ui, &api),
-                        Page::Display => self.display_ui(ui, &api),
-                        Page::Color => self.color_ui(ui, &api),
-                        Page::Gsync => self.gsync_ui(ui, &api),
-                        Page::Custom => self.custom_ui(ui, &api),
-                    });
-            });
+        if self.page == Page::Overclock {
+            // Dawna zakładka GPU ma własne panele i przewijanie.
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| gpu.ui(ui, snap));
+        } else {
+            let api = match api {
+                Some(a) => a,
+                None => {
+                    let error = match &self.api {
+                        Some(Err(e)) => e.clone(),
+                        _ => String::new(),
+                    };
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(tr(
+                            "Panel Nvidia niedostępny (karta Nvidia jest potrzebna do tej części; Overclock działa dalej).",
+                            "Nvidia panel unavailable (this part needs an Nvidia card; Overclock still works).",
+                        ))
+                        .strong(),
+                    );
+                    ui.label(RichText::new(error).color(warn()));
+                    return;
+                }
+            };
+
+            egui::Panel::bottom("nvcp_status")
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
+                    if let Some((text, error)) = &self.status {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(text).color(if *error { warn() } else { accent() }));
+                    }
+                });
+
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match self.page {
+                            Page::Overclock => {}
+                            Page::Settings3d => self.settings_ui(ui, &api),
+                            Page::Display => self.display_ui(ui, &api),
+                            Page::Color => self.color_ui(ui, &api),
+                            Page::Gsync => self.gsync_ui(ui, &api),
+                            Page::Custom => self.custom_ui(ui, &api),
+                        });
+                });
+        }
 
         if self.pending.is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(250));

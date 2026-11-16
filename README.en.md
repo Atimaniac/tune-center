@@ -2,7 +2,9 @@
 
 *Polski (pełna wersja): [README.md](README.md)*
 
-- **GPU** - Nvidia GTX/RTX and AMD Radeon graphics card clocks and core clock/voltage curve for Nvidia cards (formerly NVCurve).
+- **NVIDIA** - graphics card, in sub-tabs:
+  - **Overclock** - Nvidia GTX/RTX and AMD Radeon graphics card clocks and core clock/voltage curve for Nvidia cards (formerly NVCurve, previously the GPU tab),
+  - an NVIDIA Control Panel equivalent built on the official NVAPI SDK: 3D settings (global and per program), display mode, color and HDR, G-SYNC, custom resolutions.
 - **CPU** - Intel: power limits, voltage offsets, and Core IccMax; AMD Ryzen: Curve Optimizer for each core and PBO limits.
 - **FAN** - motherboard fan control: manual or temperature-dependent curve with profiles (formerly FanCtl).
 - **SENSORS** - all temperature readings and fan speeds.

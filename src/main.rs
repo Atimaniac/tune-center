@@ -47,7 +47,6 @@ pub const ANIMATION_FRAME: Duration = Duration::from_millis(33);
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
-    Gpu,
     Nvidia,
     Cpu,
     Fans,
@@ -58,8 +57,7 @@ enum Tab {
 }
 
 /// Zakładki w kolejności przycisków w nagłówku.
-const TABS: [(Tab, &str); 8] = [
-    (Tab::Gpu, "GPU"),
+const TABS: [(Tab, &str); 7] = [
     (Tab::Nvidia, "NVIDIA"),
     (Tab::Cpu, "CPU"),
     (Tab::Fans, "FAN"),
@@ -211,7 +209,7 @@ impl App {
         }
 
         Self {
-            tab: Tab::Gpu,
+            tab: Tab::Nvidia,
             gpu: GpuTab::new(demo),
             nvcp: nvcp::NvcpTab::new(),
             cpu: cpu_tab::CpuTab::new(),
@@ -691,8 +689,7 @@ impl eframe::App for App {
                     .inner_margin(egui::Margin::symmetric(20, 10)),
             )
             .show(ui, |ui| match self.tab {
-                Tab::Gpu => self.gpu.ui(ui, snap.as_ref()),
-                Tab::Nvidia => self.nvcp.ui(ui),
+                Tab::Nvidia => self.nvcp.ui(ui, &mut self.gpu, snap.as_ref()),
                 Tab::Cpu => self.cpu.ui(ui),
                 Tab::Fans => {
                     // Lista z wentylatorami kart ze sterownika zamiast tych

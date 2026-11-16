@@ -2,14 +2,16 @@
 
 *English (skrócona wersja): [README.en.md](README.en.md)*
 
-Jedno okno z ośmioma zakładkami (Windows 10/11, 64-bit). Zakładki
+Jedno okno z siedmioma zakładkami (Windows 10/11, 64-bit). Zakładki
 przełącza się przyciskami w nagłówku, obok logo:
 
-- **GPU** - zegary kart Nvidia GTX/RTX i AMD Radeon oraz krzywa zegar
-  rdzenia / napięcie dla kart Nvidia (dawny NVCurve).
-- **NVIDIA** - odpowiednik panelu sterowania Nvidia: ustawienia 3D
-  (globalne i dla programów), tryb ekranu, kolor i HDR, G-SYNC,
-  rozdzielczości niestandardowe.
+- **NVIDIA** - karta graficzna w podzakładkach:
+  - **Overclock** - zegary kart Nvidia GTX/RTX i AMD Radeon oraz krzywa
+    zegar rdzenia / napięcie dla kart Nvidia (dawny NVCurve, wcześniej
+    zakładka GPU),
+  - odpowiednik panelu sterowania Nvidia: ustawienia 3D (globalne i dla
+    programów), tryb ekranu, kolor i HDR, G-SYNC, rozdzielczości
+    niestandardowe.
 - **CPU** - Intel: limity mocy, offsety napięcia i Core IccMax;
   AMD Ryzen: Curve Optimizer dla każdego rdzenia i limity PBO.
 - **FAN** - sterowanie wentylatorami płyty głównej: ręcznie lub krzywą
@@ -23,7 +25,7 @@ przełącza się przyciskami w nagłówku, obok logo:
 
 Stan połączenia z czujnikami ("Czujniki: połączono") jest na pasku na
 samym dole okna. W dalszej części opisu sekcje noszą polskie nazwy:
-"Karta graficzna" to zakładka GPU, "Procesor" - CPU, "Wentylatory" - FAN,
+"Karta graficzna" to NVIDIA > Overclock, "Procesor" - CPU, "Wentylatory" - FAN,
 "Czujniki" - SENSORS.
 
 Interfejs i logika są w Rust (egui). Czujniki płyty głównej obsługuje mały
@@ -88,7 +90,11 @@ a przy starszej ostrzega przed zastąpieniem nowszej.
 Przed zbudowaniem nowego instalatora trzeba podnieść numer wersji w dwóch
 miejscach: `version` w `Cargo.toml` i `AppVersion` w `installer.iss`.
 
-## Karta graficzna
+## Karta graficzna (NVIDIA > Overclock)
+
+Podzakładka Overclock jest pierwsza w zakładce NVIDIA i działa także na
+kartach AMD oraz wtedy, gdy pozostałe podzakładki (panel Nvidia) są
+niedostępne.
 
 - **Informacje**: temperatura, użycie, zegary, napięcie, aktywne offsety.
 - **Zegary**: offset rdzenia i pamięci; zakresy suwaków podaje sterownik.
@@ -125,11 +131,11 @@ miejscach: `version` w `Cargo.toml` i `AppVersion` w `installer.iss`.
   systemu. Import wstawia ustawienia do edycji: "Zastosuj" wysyła je do
   karty, a "Zapisz" i numer zachowuje je w programie. Plik pamięta
   producenta karty i nie wczyta się na karcie drugiego producenta.
-- Gdy program nie znajdzie karty Nvidia ani AMD, zakładka działa w trybie demo.
+- Gdy program nie znajdzie karty Nvidia ani AMD, podzakładka działa w trybie demo.
 
 ## Panel Nvidia (zakładka NVIDIA)
 
-Zbudowany wyłącznie na oficjalnym, publicznym NVAPI SDK
+Podzakładki poza Overclock są zbudowane wyłącznie na oficjalnym, publicznym NVAPI SDK
 (https://github.com/NVIDIA/nvapi, licencja MIT) - bez funkcji
 nieudokumentowanych. Działa niezależnie od trybu `--demo`.
 
@@ -486,7 +492,7 @@ tego samego rodzaju, a nie jego brak.
 
 ## Informacje o karcie: hotspot, HAGS, Resizable BAR
 
-W zakładce GPU > Informacje:
+W zakładce NVIDIA > Overclock > Informacje:
 
 - **Temperatura hotspot** - najcieplejszy punkt karty, odczytywany wprost ze
   sterownika (NVAPI / ADL). Nie każda karta go udostępnia; w szczególności karty
