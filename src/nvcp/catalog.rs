@@ -37,6 +37,9 @@ pub const NGX_DLSS_FG_OVERRIDE: u32 = 0x10E4_1E03;
 pub const NGX_DLSSG_MULTI_FRAME_COUNT: u32 = 0x104D_6667;
 pub const NGX_DLAA_OVERRIDE: u32 = 0x10E4_1DF4;
 pub const VRPRERENDERLIMIT: u32 = 0x1011_1133;
+/// Maksymalny rozmiar pamięci podręcznej shaderów na dysku, w MiB
+/// (0 = wyłączona, 0xFFFFFFFF = bez limitu; domyślnie 0x4000).
+pub const PS_SHADERDISKCACHE_MAX_SIZE: u32 = 0x00AC_8497;
 
 // Wartości (nazwy jak w NvApiDriverSettings.h).
 const VSYNC_PASSIVE: u32 = 0x6092_5292;
@@ -444,6 +447,23 @@ pub static ITEMS: &[Item] = &[
     },
 ];
 
+/// Pamięć podręczna shaderów (zakładka Shader compilation).
+pub static SHADER_ITEMS: &[Item] = &[Item {
+    section: Section::Performance,
+    pl: "Rozmiar pamięci podręcznej shaderów",
+    en: "Shader cache size",
+    help_pl: "Ile miejsca na dysku sterownik może zająć na skompilowane shadery. Za mały limit wyrzuca skompilowane shadery i gry kompilują je ponownie.",
+    help_en: "How much disk space the driver may use for compiled shaders. Too small a limit evicts compiled shaders and games compile them again.",
+    kind: Kind::Choice(&[
+        o("Domyślny sterownika", "Driver default", &[(PS_SHADERDISKCACHE_MAX_SIZE, 0x4000)]),
+        o("5 GB", "5 GB", &[(PS_SHADERDISKCACHE_MAX_SIZE, 5 * 1024)]),
+        o("10 GB", "10 GB", &[(PS_SHADERDISKCACHE_MAX_SIZE, 10 * 1024)]),
+        o("100 GB", "100 GB", &[(PS_SHADERDISKCACHE_MAX_SIZE, 100 * 1024)]),
+        o("Bez limitu", "Unlimited", &[(PS_SHADERDISKCACHE_MAX_SIZE, 0xFFFF_FFFF)]),
+        o("Wyłączona", "Disabled", &[(PS_SHADERDISKCACHE_MAX_SIZE, 0)]),
+    ]),
+}];
+
 /// Ustawienia G-SYNC profilu globalnego (zakładka G-SYNC).
 pub static GSYNC_ITEMS: &[Item] = &[
     Item {
@@ -482,7 +502,7 @@ mod tests {
 
     #[test]
     fn every_item_has_options_and_texts() {
-        for item in ITEMS.iter().chain(GSYNC_ITEMS) {
+        for item in ITEMS.iter().chain(GSYNC_ITEMS).chain(SHADER_ITEMS) {
             assert!(!item.pl.is_empty() && !item.en.is_empty());
             assert!(!item.ids().is_empty(), "{}", item.pl);
             if let Kind::Choice(opts) = &item.kind {

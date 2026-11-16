@@ -24,6 +24,7 @@ mod power;
 mod power_tab;
 mod rebar;
 mod sensors;
+mod shaders;
 mod theme;
 mod tray;
 mod update;

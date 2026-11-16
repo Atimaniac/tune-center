@@ -179,6 +179,26 @@ jasność/kontrast/gamma pulpitu, ustawienia wideo, konfiguracja PhysX, DSR
 i tryb niskich opóźnień "Ultra" (dostępne jest "maks. klatek przygotowanych
 = 1", czyli "Wł.").
 
+### Shader compilation (w budowie)
+
+Kompilacja shaderów gier z góry, do pamięci podręcznej sterownika, żeby gra
+nie musiała tego robić w trakcie rozgrywki ("shader stutter"). Nvidia nie
+udostępnia pobierania gotowych shaderów; Tune Center czyta je z plików gry.
+
+- **Teraz**: wyszukiwanie zainstalowanych gier (Steam, Epic Games, GOG,
+  Ubisoft Connect, EA app, Xbox), rozpoznanie silnika i jego wersji, API
+  grafiki (z logu Unity / konfiguracji Dagora), anty-cheatu i plików
+  shaderów; rozmiar pamięci podręcznej shaderów sterownika (oficjalne
+  ustawienie DRS) i zajętość folderu `%LOCALAPPDATA%\NVIDIA\DXCache`.
+- **Etap 2**: kompilacja Dagor Engine DirectX 12 z plików gry.
+- **Etap 3**: kompilacja Unity DirectX 11 z plików gry.
+- Gry są tylko czytane: Tune Center niczego w nich nie zmienia, nie
+  uruchamia ich i nie dodaje do nich plików (bezpieczne także przy
+  anty-cheacie). Unity w DirectX 12 buduje potoki dopiero w trakcie gry,
+  więc tego z samych plików zrobić się nie da.
+- Auto Shader Compilation z NVIDIA App nie jest obsługiwane - wymaga
+  niepublicznych funkcji NVAPI.
+
 ## Procesor
 
 Program rozpoznaje producenta procesora i pokazuje tylko jego opcje: na

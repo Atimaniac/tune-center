@@ -46,6 +46,8 @@ enum Page {
     Color,
     Gsync,
     Custom,
+    /// Kompilacja shaderów z góry (crate::shaders).
+    Shaders,
 }
 
 /// Zmiana ekranu czekająca na potwierdzenie.
@@ -102,6 +104,8 @@ pub struct NvcpTab {
     custom_h: u32,
     custom_hz: f32,
     pending: Option<Pending>,
+    /// Podzakładka Shader compilation.
+    shaders: crate::shaders::ShaderTab,
 }
 
 impl NvcpTab {
@@ -142,6 +146,7 @@ impl NvcpTab {
             custom_h: 1080,
             custom_hz: 60.0,
             pending: None,
+            shaders: crate::shaders::ShaderTab::new(),
         }
     }
 
@@ -204,6 +209,7 @@ impl NvcpTab {
                             Page::Custom,
                             tr("Rozdzielczości niestandardowe", "Custom resolutions"),
                         ),
+                        (Page::Shaders, "Shader compilation"),
                     ] {
                         if ui.selectable_label(self.page == page, label).clicked() {
                             self.page = page;
@@ -271,6 +277,7 @@ impl NvcpTab {
                             Page::Color => self.color_ui(ui, &api),
                             Page::Gsync => self.gsync_ui(ui, &api),
                             Page::Custom => self.custom_ui(ui, &api),
+                            Page::Shaders => self.shaders_ui(ui, &api),
                         });
                 });
         }
@@ -1448,39 +1455,92 @@ impl NvcpTab {
 
     // -------------------------------- G-SYNC --------------------------------
 
+    /// Siatka ustawień profilu globalnego (niezależnie od profilu wybranego
+    /// w Ustawieniach 3D).
+    fn global_items(
+        &mut self,
+        ui: &mut egui::Ui,
+        api: &Arc<Api>,
+        items: &'static [Item],
+        grid: &str,
+    ) {
+        if let Err(e) = self.drs(api) {
+            ui.label(RichText::new(e).color(warn()));
+            return;
+        }
+        let saved = std::mem::replace(&mut self.target, Target::Global);
+        if saved != Target::Global {
+            self.invalidate_3d();
+        }
+        let mut actions = Vec::new();
+        egui::Grid::new(grid)
+            .num_columns(2)
+            .min_col_width(360.0)
+            .spacing([16.0, 6.0])
+            .striped(true)
+            .show(ui, |ui| {
+                for item in items {
+                    self.item_row(ui, api, item, true, &mut actions);
+                    ui.end_row();
+                }
+            });
+        for a in actions {
+            self.run(api, a);
+        }
+        if saved != Target::Global {
+            self.target = saved;
+            self.invalidate_3d();
+        }
+    }
+
+    // --------------------------- Shader compilation -------------------------
+
+    fn shaders_ui(&mut self, ui: &mut egui::Ui, api: &Arc<Api>) {
+        ui.label(
+            RichText::new(tr(
+                "Kompilacja shaderów z góry: Tune Center czyta shadery z plików gry i kompiluje je do pamięci podręcznej sterownika, zanim gra musi to zrobić w trakcie rozgrywki (przycięcia \"shader stutter\").",
+                "Shader precompilation: Tune Center reads the shaders from the game files and compiles them into the driver's cache before the game has to do it mid-play (\"shader stutter\").",
+            ))
+            .color(muted()),
+        );
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new(tr("Pamięć podręczna sterownika", "Driver shader cache"))
+                .strong()
+                .color(accent()),
+        );
+        self.global_items(ui, api, catalog::SHADER_ITEMS, "nvcp_shader_cache");
+        ui.horizontal_wrapped(|ui| {
+            if let Some(dir) = crate::shaders::nvidia_cache_dir() {
+                let size = self
+                    .shaders
+                    .cache_bytes()
+                    .map(crate::shaders::engine::human)
+                    .unwrap_or_else(|| "?".into());
+                ui.label(
+                    RichText::new(crate::trf!(
+                        "Folder: {} - zajęte: {size}",
+                        "Folder: {} - used: {size}",
+                        dir.display()
+                    ))
+                    .color(muted()),
+                );
+                if ui.button(tr("Otwórz folder", "Open folder")).clicked() {
+                    let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+                }
+            }
+        });
+        ui.add_space(12.0);
+        self.shaders.games_ui(ui);
+    }
+
     fn gsync_ui(&mut self, ui: &mut egui::Ui, api: &Arc<Api>) {
         ui.label(
             RichText::new(tr("Ustawienia globalne G-SYNC", "Global G-SYNC settings"))
                 .strong()
                 .color(accent()),
         );
-        if let Err(e) = self.drs(api) {
-            ui.label(RichText::new(e).color(warn()));
-        } else {
-            let saved = std::mem::replace(&mut self.target, Target::Global);
-            if saved != Target::Global {
-                self.invalidate_3d();
-            }
-            let mut actions = Vec::new();
-            egui::Grid::new("nvcp_gsync")
-                .num_columns(2)
-                .min_col_width(360.0)
-                .spacing([16.0, 6.0])
-                .striped(true)
-                .show(ui, |ui| {
-                    for item in catalog::GSYNC_ITEMS {
-                        self.item_row(ui, api, item, true, &mut actions);
-                        ui.end_row();
-                    }
-                });
-            for a in actions {
-                self.run(api, a);
-            }
-            if saved != Target::Global {
-                self.target = saved;
-                self.invalidate_3d();
-            }
-        }
+        self.global_items(ui, api, catalog::GSYNC_ITEMS, "nvcp_gsync");
 
         ui.add_space(14.0);
         ui.label(
