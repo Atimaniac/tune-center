@@ -190,7 +190,14 @@ udostępnia pobierania gotowych shaderów; Tune Center czyta je z plików gry.
   grafiki (z logu Unity / konfiguracji Dagora), anty-cheatu i plików
   shaderów; rozmiar pamięci podręcznej shaderów sterownika (oficjalne
   ustawienie DRS) i zajętość folderu `%LOCALAPPDATA%\NVIDIA\DXCache`.
-- **Etap 2**: kompilacja Dagor Engine DirectX 12 z plików gry.
+- **Etap 2 (częściowo gotowy)**: Dagor Engine DirectX 12 - przycisk
+  "Kompiluj shadery" w szczegółach gry kompiluje shadery obliczeniowe
+  (compute); graficzne w kolejnej wersji. Kompiluje sterownik Nvidii przez
+  Direct3D 12, w procesie nazwanym tak jak gra (pamięć podręczna sterownika
+  jest przypisana do nazwy pliku .exe), z gniazdem rozszerzeń shaderów
+  ustawionym jak w grze (`NvAPI_D3D12_SetNvShaderExtnSlotSpace`). Gra musi
+  być zamknięta. Pierwsza kompilacja Active Matter: ok. 5-7 min; kolejna,
+  z pamięci podręcznej, ok. 20 s.
 - **Etap 3**: kompilacja Unity DirectX 11 z plików gry.
 - Gry są tylko czytane: Tune Center niczego w nich nie zmienia, nie
   uruchamia ich i nie dodaje do nich plików (bezpieczne także przy

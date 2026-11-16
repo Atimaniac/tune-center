@@ -738,6 +738,14 @@ fn window_icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result<()> {
+    // Proces kompilujący shadery (uruchamiany z kopii nazwanej jak gra) -
+    // bez okna, kończy się po kompilacji.
+    let args: Vec<String> = std::env::args().collect();
+    #[cfg(windows)]
+    if args.get(1).map(String::as_str) == Some(shaders::warm::HOST_ARG) {
+        std::process::exit(shaders::warm::run_host(&args[2..]));
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(tray::WINDOW_TITLE)
