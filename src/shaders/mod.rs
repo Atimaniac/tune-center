@@ -45,6 +45,9 @@ pub struct ShaderTab {
     warms: std::collections::HashMap<String, warm::Warm>,
     /// Wybrane API kompilacji, po identyfikatorze gry.
     apis: std::collections::HashMap<String, Api>,
+    /// Czyszczenie shaderów gier i gra czekająca na potwierdzenie.
+    cleans: std::collections::HashMap<String, warm::Clean>,
+    confirm_clean: Option<String>,
 }
 
 /// Folder pamięci podręcznej shaderów DirectX sterownika Nvidia.
@@ -133,6 +136,8 @@ impl ShaderTab {
             selected: None,
             warms: Default::default(),
             apis: Default::default(),
+            cleans: Default::default(),
+            confirm_clean: None,
         }
     }
 
@@ -346,7 +351,14 @@ impl ShaderTab {
                         let _ = std::process::Command::new("explorer").arg(&e.game.dir).spawn();
                     }
                 });
-                compile_ui(ui, e, &mut self.warms, &mut self.apis);
+                compile_ui(
+                    ui,
+                    e,
+                    &mut self.warms,
+                    &mut self.apis,
+                    &mut self.cleans,
+                    &mut self.confirm_clean,
+                );
             });
         }
     }
@@ -406,6 +418,8 @@ fn compile_ui(
     e: &Entry,
     warms: &mut std::collections::HashMap<String, warm::Warm>,
     choices: &mut std::collections::HashMap<String, Api>,
+    cleans: &mut std::collections::HashMap<String, warm::Clean>,
+    confirm: &mut Option<String>,
 ) {
     let missing = |ui: &mut egui::Ui, text: &str| {
         ui.label(RichText::new(text).color(warn()));
@@ -554,21 +568,107 @@ fn compile_ui(
     let w = warms.entry(e.game.id.clone()).or_default();
     let p = w.progress.lock().unwrap().clone();
     let running = p.phase == warm::Phase::Running;
+    let c = cleans.entry(e.game.id.clone()).or_default();
+    let clean_state = c.state.lock().unwrap().clone();
+    let cleaning = clean_state == warm::CleanState::Running;
     ui.horizontal(|ui| {
         if ui
             .add_enabled(
-                !running,
+                !running && !cleaning,
                 egui::Button::new(tr("Kompiluj shadery", "Compile shaders")),
             )
             .clicked()
         {
+            *c.state.lock().unwrap() = warm::CleanState::Idle;
             let ctx = ui.ctx().clone();
             w.start(&exe, job, move || ctx.request_repaint());
         }
-        if running {
+        if ui
+            .add_enabled(
+                !running && !cleaning,
+                egui::Button::new(tr("Wyczyść shadery", "Clean shaders")),
+            )
+            .on_hover_text(crate::trf!(
+                "Usuwa skompilowane shadery gry {exe} z pamięci podręcznej sterownika Nvidia (DirectX 11 i 12).",
+                "Removes the compiled shaders of {exe} from the Nvidia driver cache (DirectX 11 and 12)."
+            ))
+            .clicked()
+        {
+            *confirm = Some(e.game.id.clone());
+        }
+        if running || cleaning {
             ui.spinner();
         }
     });
+
+    // Potwierdzenie czyszczenia.
+    if confirm.as_deref() == Some(e.game.id.as_str()) {
+        let mut answer = None;
+        egui::Modal::new(ui.scope_id().with(("clean_confirm", &e.game.id))).show(ui.ctx(), |ui| {
+            ui.set_width(420.0);
+            ui.label(
+                RichText::new(tr(
+                    "Czy jesteś pewny, że chcesz wyczyścić?",
+                    "Are you sure you want to clean?",
+                ))
+                .strong()
+                .size(16.0),
+            );
+            ui.add_space(6.0);
+            ui.label(crate::trf!(
+                "Skompilowane shadery gry {exe} zostaną usunięte z pamięci podręcznej sterownika Nvidia (DirectX 11 i 12). Gra skompiluje je ponownie w trakcie rozgrywki - albo użyj \"Kompiluj shadery\". Gra musi być zamknięta.",
+                "The compiled shaders of {exe} will be removed from the Nvidia driver cache (DirectX 11 and 12). The game will compile them again while playing - or use \"Compile shaders\". The game must be closed."
+            ));
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .button(RichText::new(tr("Tak, wyczyść", "Yes, clean")).color(warn()))
+                    .clicked()
+                {
+                    answer = Some(true);
+                }
+                if ui.button(tr("Anuluj", "Cancel")).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        if let Some(yes) = answer {
+            *confirm = None;
+            if yes {
+                let ctx = ui.ctx().clone();
+                c.start(&exe, move || ctx.request_repaint());
+            }
+        }
+    }
+    match &clean_state {
+        warm::CleanState::Done {
+            files,
+            bytes,
+            locked,
+        } => {
+            let mut text = crate::trf!(
+                "Wyczyszczono: {} plików ({}).",
+                "Cleaned: {} files ({}).",
+                files,
+                engine::human(*bytes)
+            );
+            if *locked > 0 {
+                text.push(' ');
+                text.push_str(&crate::trf!(
+                    "Nie usunięto {} plików - używa ich inny proces.",
+                    "{} files were not removed - another process is using them.",
+                    locked
+                ));
+            }
+            ui.label(RichText::new(text).color(if *locked == 0 { accent() } else { warn() }));
+        }
+        warm::CleanState::Failed(err) => {
+            ui.label(
+                RichText::new(crate::trf!("Czyszczenie: {err}", "Cleaning: {err}")).color(warn()),
+            );
+        }
+        _ => {}
+    }
     // Unity: najpierw przegląd plików gry (znalezione shadery kompilują się
     // równolegle, więc liczba wszystkich rośnie do końca przeglądu).
     if let Some((files_done, files)) = p.scan.filter(|(d, t)| running && d < t) {

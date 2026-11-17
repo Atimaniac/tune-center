@@ -586,6 +586,207 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
     0
 }
 
+// ----------------------- pliki pamięci podręcznej gry ----------------------
+
+/// Argument procesu ustalającego pliki pamięci podręcznej gry.
+pub const HOST_ARG_PROBE: &str = "--shader-cache-probe";
+
+/// Pliki w folderze, których nie da się teraz otworzyć na wyłączność -
+/// trzyma je otwarte jakiś proces (sterownik w jego imieniu).
+#[cfg(windows)]
+fn locked_files(dir: &Path) -> std::collections::BTreeSet<String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let mut out = std::collections::BTreeSet::new();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = e.path();
+        if !path.is_file() {
+            continue;
+        }
+        let open = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path);
+        // 32 = ERROR_SHARING_VIOLATION
+        if matches!(&open, Err(err) if err.raw_os_error() == Some(32)) {
+            out.insert(e.file_name().to_string_lossy().into_owned());
+        }
+    }
+    out
+}
+
+/// Proces pomiaru (uruchamiany pod nazwą pliku .exe gry): tworzy urządzenia
+/// D3D11 i D3D12 na karcie Nvidia i wypisuje `file <nazwa>` dla plików
+/// pamięci podręcznej, które sterownik otworzył dla tej nazwy procesu.
+/// Sterownik wiąże pliki z nazwą .exe (skrót nazwy w nazwie pliku), więc są to
+/// dokładnie pliki tej gry - bez znajomości algorytmu skrótu.
+#[cfg(windows)]
+pub fn run_cache_probe() -> i32 {
+    let out = std::io::stdout();
+    let say = |line: String| {
+        let mut o = out.lock();
+        let _ = writeln!(o, "{line}");
+        let _ = o.flush();
+    };
+    let Some(dir) = super::nvidia_cache_dir() else {
+        say("fatal brak folderu DXCache".into());
+        return 2;
+    };
+    let before = locked_files(&dir);
+    let dx11 = d3d11::nvidia_device();
+    let dx12 = d3d::nvidia_device();
+    if let Err(e) = &dx11 {
+        say(format!("warning D3D11: {e}"));
+    }
+    if let Err(e) = &dx12 {
+        say(format!("warning D3D12: {e}"));
+    }
+    // Sterownik otwiera pliki przy tworzeniu urządzenia; chwila zapasu.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let after = locked_files(&dir);
+    for name in after.difference(&before) {
+        say(format!("file {name}"));
+    }
+    drop((dx11, dx12));
+    0
+}
+
+/// Ile kolejnych numerów pliku traktujemy jako tę samą grę (sterownik
+/// zakłada plik o numerze +1, gdy poprzedni jest pełny albo zajęty).
+const CACHE_FAMILY: u32 = 8;
+
+/// Ostatnie 8 cyfr szesnastkowych nazwy pliku pamięci podręcznej
+/// (`1c68a91ac748b201.nvph` -> 0xC748B201).
+pub fn cache_key(name: &str) -> Option<u32> {
+    let stem = name.split('.').next()?;
+    if stem.len() < 16 || !stem.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(&stem[stem.len() - 8..], 16).ok()
+}
+
+/// Czy plik należy do gry o kluczach `keys` (ten sam skrót lub kolejne numery).
+pub fn in_family(name: &str, keys: &[u32]) -> bool {
+    cache_key(name).is_some_and(|k| keys.iter().any(|&g| k.abs_diff(g) <= CACHE_FAMILY))
+}
+
+/// Wynik czyszczenia pamięci podręcznej gry.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CleanState {
+    Idle,
+    Running,
+    Done {
+        files: usize,
+        bytes: u64,
+        locked: usize,
+    },
+    Failed(String),
+}
+
+/// Czyszczenie shaderów jednej gry w tle.
+#[derive(Clone)]
+pub struct Clean {
+    pub state: Arc<Mutex<CleanState>>,
+}
+
+impl Default for Clean {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(CleanState::Idle)),
+        }
+    }
+}
+
+impl Clean {
+    /// Ustala pliki gry (proces pomiaru pod nazwą `exe_name`) i je usuwa.
+    pub fn start(&self, exe_name: &str, wake: impl Fn() + Send + 'static) {
+        {
+            let mut s = self.state.lock().unwrap();
+            if *s == CleanState::Running {
+                return;
+            }
+            *s = CleanState::Running;
+        }
+        let shared = self.state.clone();
+        let exe = exe_name.to_owned();
+        std::thread::spawn(move || {
+            let result = clean_game(&exe);
+            *shared.lock().unwrap() = match result {
+                Ok((files, bytes, locked)) => CleanState::Done {
+                    files,
+                    bytes,
+                    locked,
+                },
+                Err(e) => CleanState::Failed(e),
+            };
+            wake();
+        });
+    }
+}
+
+/// Pliki pamięci podręcznej gry ustalone pomiarem, potem usunięte.
+/// Zwraca (usunięte pliki, bajty, pliki zajęte przez inny proces).
+fn clean_game(exe: &str) -> Result<(usize, u64, usize), String> {
+    #[cfg(windows)]
+    if process_running(exe) {
+        return Err(crate::trf!(
+            "Gra {exe} jest uruchomiona - zamknij ją przed czyszczeniem.",
+            "The game {exe} is running - close it before cleaning."
+        ));
+    }
+    let dir = super::nvidia_cache_dir().ok_or("brak folderu DXCache")?;
+    let host = staged_host(exe)?;
+    let mut cmd = std::process::Command::new(&host);
+    cmd.arg(HOST_ARG_PROBE)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd.output().map_err(|e| e.to_string());
+    let _ = std::fs::remove_file(&host);
+    let output = output?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let keys: Vec<u32> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("file "))
+        .filter_map(cache_key)
+        .collect();
+    if keys.is_empty() {
+        let detail = text
+            .lines()
+            .find(|l| l.starts_with("fatal") || l.starts_with("warning"));
+        return Err(match detail {
+            Some(d) => d.to_owned(),
+            None => crate::i18n::tr(
+                "nie udało się ustalić plików pamięci podręcznej gry",
+                "could not determine the game's cache files",
+            )
+            .to_string(),
+        });
+    }
+    let (mut files, mut bytes, mut locked) = (0, 0, 0);
+    for e in std::fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !in_family(&name, &keys) {
+            continue;
+        }
+        let len = e.metadata().map(|m| m.len()).unwrap_or(0);
+        match std::fs::remove_file(e.path()) {
+            Ok(()) => {
+                files += 1;
+                bytes += len;
+            }
+            Err(_) => locked += 1,
+        }
+    }
+    Ok((files, bytes, locked))
+}
+
 // --------------------------- strona interfejsu ------------------------------
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -813,6 +1014,18 @@ pub fn dagor_cbv_ranges(dir: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_file_family() {
+        assert_eq!(cache_key("1c68a91ac748b201.nvph"), Some(0xC748_B201));
+        assert_eq!(cache_key("0002a91a62c6cdf9.nvph"), Some(0x62C6_CDF9));
+        assert_eq!(cache_key("index.toc"), None);
+        let keys = [0x62C6_CDFA];
+        assert!(in_family("1c68a91a62c6cdf9.nvph", &keys));
+        assert!(in_family("0002a91a62c6cdfa.nvph", &keys));
+        assert!(!in_family("1c68a91a62c6ce10.nvph", &keys));
+        assert!(!in_family("1c68a91ac748b201.nvph", &keys));
+    }
 
     #[test]
     fn parses_host_output() {
