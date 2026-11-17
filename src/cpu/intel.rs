@@ -233,6 +233,88 @@ pub fn set_voltage_offset(
 }
 
 /// Ustawia limit prądu rdzeni (IccMax). Zwraca wartość odczytaną po zapisie.
+/// Najmniejszy i największy mnożnik turbo przyjmowany do zapisu.
+pub const RATIO_MIN: u8 = 8;
+pub const RATIO_MAX: u8 = 80;
+
+/// Rdzenie, których mnożniki zmieniamy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoreKind {
+    /// Rdzenie P (MSR 0x1AD).
+    Performance,
+    /// Rdzenie E (MSR 0x650).
+    Efficient,
+}
+
+/// Sprawdza mnożniki przed zapisem: zakres i kolejność (przy większej liczbie
+/// aktywnych rdzeni mnożnik nie może być wyższy - tak samo wymaga XTU).
+pub fn check_turbo_ratios(ratios: &[u8; 8]) -> Result<(), String> {
+    // 0 = grupa nieużywana (np. rdzenie E mają często tylko pierwszą grupę);
+    // po zerze mogą być tylko zera.
+    let used = ratios.iter().take_while(|r| **r != 0).count();
+    if used == 0 || ratios[used..].iter().any(|r| *r != 0) {
+        return Err(crate::i18n::tr(
+            "pierwsza grupa musi mieć mnożnik, a po grupie nieużywanej (0) mogą być tylko nieużywane",
+            "the first group needs a ratio, and only unused groups (0) may follow an unused one",
+        )
+        .to_string());
+    }
+    let ratios = &ratios[..used];
+    if let Some(r) = ratios
+        .iter()
+        .find(|r| !(RATIO_MIN..=RATIO_MAX).contains(*r))
+    {
+        return Err(crate::trf!(
+            "mnożnik {r} jest poza zakresem {RATIO_MIN}-{RATIO_MAX}",
+            "ratio {r} is outside the range {RATIO_MIN}-{RATIO_MAX}"
+        ));
+    }
+    if let Some(i) = (1..ratios.len()).find(|&i| ratios[i] > ratios[i - 1]) {
+        return Err(crate::trf!(
+            "mnożnik dla {} aktywnych rdzeni ({}) jest wyższy niż dla {} ({})",
+            "the ratio for {} active cores ({}) is higher than for {} ({})",
+            i + 1,
+            ratios[i],
+            i,
+            ratios[i - 1]
+        ));
+    }
+    Ok(())
+}
+
+/// Zapisuje limity mnożnika turbo (8 grup aktywnych rdzeni) i sprawdza je
+/// odczytem. Gdy procesor nie przyjmie wartości (np. zablokowany mnożnik),
+/// przywraca poprzedni stan rejestru. Działa do restartu komputera.
+pub fn set_turbo_ratios(
+    msr: &mut impl Msr,
+    kind: CoreKind,
+    ratios: [u8; 8],
+) -> Result<[u8; 8], String> {
+    check_turbo_ratios(&ratios)?;
+    let reg = match kind {
+        CoreKind::Performance => MSR_TURBO_RATIO_LIMIT,
+        CoreKind::Efficient => MSR_SECONDARY_TURBO_RATIO_LIMIT,
+    };
+    let before = msr.read(reg)?;
+    let value = u64::from_le_bytes(ratios);
+    if value == before {
+        return Ok(ratios);
+    }
+    msr.write(reg, value)?;
+    let after = msr.read(reg)?;
+    if after != value {
+        // Częściowo przyjęta wartość byłaby nieprzewidywalna - wracamy.
+        let _ = msr.write(reg, before);
+        return Err(crate::trf!(
+            "procesor nie przyjął mnożników (zadano {:?}, odczytano {:?}); przywrócono poprzednie. Mnożnik może być zablokowany (procesor bez K lub BIOS).",
+            "the CPU did not accept the ratios (requested {:?}, read back {:?}); the previous ones were restored. The multiplier may be locked (non-K CPU or BIOS).",
+            ratios,
+            turbo_ratios(after)
+        ));
+    }
+    Ok(turbo_ratios(after))
+}
+
 pub fn set_iccmax(msr: &mut impl Msr, amps: f32) -> Result<f32, String> {
     if !(ICCMAX_MIN_A..=ICCMAX_MAX_A).contains(&amps) {
         return Err(crate::trf!(
@@ -444,6 +526,68 @@ mod tests {
     }
 
     #[test]
+    fn sets_turbo_ratios_and_checks_order() {
+        let mut cpu = Fake::new();
+        let new = [0x31, 0x31, 0x2F, 0x2F, 0x2E, 0x2E, 0x2E, 0x2E];
+        assert_eq!(
+            set_turbo_ratios(&mut cpu, CoreKind::Performance, new).unwrap(),
+            new
+        );
+        assert_eq!(cpu.regs[&MSR_TURBO_RATIO_LIMIT], u64::from_le_bytes(new));
+        let e = [0x25; 8];
+        set_turbo_ratios(&mut cpu, CoreKind::Efficient, e).unwrap();
+        assert_eq!(
+            cpu.regs[&MSR_SECONDARY_TURBO_RATIO_LIMIT],
+            u64::from_le_bytes(e)
+        );
+
+        // Rosnący mnożnik i zakres - odrzucone bez zapisu.
+        let writes = cpu.writes.len();
+        assert!(set_turbo_ratios(
+            &mut cpu,
+            CoreKind::Performance,
+            [40, 41, 40, 40, 40, 40, 40, 40]
+        )
+        .is_err());
+        assert!(set_turbo_ratios(&mut cpu, CoreKind::Performance, [90; 8]).is_err());
+        assert!(set_turbo_ratios(&mut cpu, CoreKind::Performance, [7; 8]).is_err());
+        assert!(
+            set_turbo_ratios(&mut cpu, CoreKind::Performance, [40, 0, 40, 0, 0, 0, 0, 0]).is_err()
+        );
+        assert!(set_turbo_ratios(&mut cpu, CoreKind::Performance, [0; 8]).is_err());
+        assert_eq!(cpu.writes.len(), writes);
+    }
+
+    #[test]
+    fn accepts_unused_groups() {
+        let mut cpu = Fake::new();
+        let e = [36, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(
+            set_turbo_ratios(&mut cpu, CoreKind::Efficient, e).unwrap(),
+            e
+        );
+    }
+
+    #[test]
+    fn restores_ratios_when_cpu_ignores_them() {
+        struct Locked(u64, Vec<u64>);
+        impl Msr for Locked {
+            fn read(&mut self, _msr: u64) -> Result<u64, String> {
+                Ok(self.0)
+            }
+            fn write(&mut self, _msr: u64, value: u64) -> Result<(), String> {
+                // Zablokowany procesor przyjmuje zapis, ale nic nie zmienia.
+                self.1.push(value);
+                Ok(())
+            }
+        }
+        let before = 0x2E2E_2E2E_2E2E_3030;
+        let mut cpu = Locked(before, Vec::new());
+        assert!(set_turbo_ratios(&mut cpu, CoreKind::Performance, [0x32; 8]).is_err());
+        assert_eq!(cpu.1.last(), Some(&before));
+    }
+
+    #[test]
     fn reports_locked_mailbox() {
         let mut cpu = Fake::new();
         cpu.oc_locked = true;
@@ -491,5 +635,38 @@ mod tests {
             }
         }
         assert!(mailbox(&mut Stuck, OC_READ_VF, 0, 0, 0).is_err());
+    }
+}
+
+#[cfg(test)]
+mod hardware {
+    //! Mnożniki turbo na tym komputerze: odczyt, zapis o 1 niżej w ostatniej
+    //! grupie, odczyt kontrolny, przywrócenie (administrator):
+    //! `cargo test intel_ratio_roundtrip -- --ignored --nocapture`.
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn intel_ratio_roundtrip() {
+        let exe = std::env::current_exe().unwrap();
+        let module = exe.parent().unwrap().join("modules").join("IntelMSR.bin");
+        let mut io = crate::cpu::pawnio::PawnIo::open(&module).expect("PawnIO");
+        for (kind, reg) in [
+            (CoreKind::Performance, MSR_TURBO_RATIO_LIMIT),
+            (CoreKind::Efficient, MSR_SECONDARY_TURBO_RATIO_LIMIT),
+        ] {
+            let before = turbo_ratios(io.read(reg).expect("odczyt"));
+            println!("{kind:?}: {before:?}");
+            let mut lower = before;
+            let last = before.iter().rposition(|r| *r != 0).unwrap();
+            lower[last] -= 1;
+            match set_turbo_ratios(&mut io, kind, lower) {
+                Ok(after) => println!("  zapis {lower:?} -> odczyt {after:?}"),
+                Err(e) => println!("  zapis nieudany: {e}"),
+            }
+            let restored = set_turbo_ratios(&mut io, kind, before).expect("przywrócenie");
+            println!("  przywrócono {restored:?}");
+            assert_eq!(restored, before);
+        }
     }
 }

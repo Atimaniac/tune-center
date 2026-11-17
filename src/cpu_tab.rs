@@ -28,6 +28,7 @@ enum Action {
     Limits,
     Voltages,
     IccMax,
+    Ratios,
 }
 
 /// Zakładka dopasowana do producenta procesora.
@@ -65,6 +66,9 @@ pub struct IntelTab {
     /// Offsety w mV, w kolejności `state.voltages`.
     offsets_mv: Vec<i32>,
     iccmax_a: f32,
+    /// Mnożniki turbo w edycji (rdzenie P i E, 8 grup).
+    p_ratios: [u8; 8],
+    e_ratios: [u8; 8],
     armed: bool,
     status: String,
     /// Odczyty jak w XTU (osobny wątek).
@@ -103,6 +107,8 @@ impl IntelTab {
             tau_s: 0.0,
             offsets_mv: Vec::new(),
             iccmax_a: 0.0,
+            p_ratios: [0; 8],
+            e_ratios: [0; 8],
             // Zapis dostępny od razu (bez "odblokuj zapis"), jak w zakładce karty.
             armed: true,
             status: String::new(),
@@ -131,6 +137,12 @@ impl IntelTab {
             .collect();
         if let Some(Ok(amps)) = &state.iccmax_a {
             self.iccmax_a = *amps;
+        }
+        if let Ok(r) = &state.p_turbo {
+            self.p_ratios = *r;
+        }
+        if let Some(Ok(r)) = &state.e_turbo {
+            self.e_ratios = *r;
         }
         self.state = Some(state);
     }
@@ -283,7 +295,9 @@ impl IntelTab {
             });
 
             ui.add_space(18.0);
-            ratio_section(ui, &state);
+            if self.ratio_section(ui, &state) {
+                action = Some(Action::Ratios);
+            }
 
             ui.add_space(12.0);
             ui.label(
@@ -308,6 +322,7 @@ impl IntelTab {
             Some(Action::Limits) => self.apply_limits(),
             Some(Action::Voltages) => self.apply_voltages(),
             Some(Action::IccMax) => self.apply_iccmax(),
+            Some(Action::Ratios) => self.apply_ratios(),
             None => {}
         }
     }
@@ -501,44 +516,6 @@ fn note(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).size(11.5).color(muted()));
 }
 
-/// Podgląd limitów mnożnika turbo w formie kafelków (tylko odczyt).
-fn ratio_section(ui: &mut egui::Ui, state: &State) {
-    ui.label(
-        RichText::new(crate::i18n::tr(
-            "Mnożniki turbo (tylko odczyt)",
-            "Turbo ratios (read-only)",
-        ))
-        .size(17.0)
-        .strong()
-        .color(theme::text()),
-    );
-    ui.add_space(6.0);
-
-    // Podgląd jest dodatkiem: gdy moduł PawnIO nie pozwala odczytać rejestru
-    // (starsze wydania modułu nie znają rejestru rdzeni E, 0x650), pokazujemy
-    // spokojną informację zamiast czerwonego błędu.
-    match &state.p_turbo {
-        Ok(ratios) => ratio_tiles(ui, crate::i18n::tr("Rdzenie P", "P-cores"), ratios, P_CORE),
-        Err(e) => unavailable(ui, crate::i18n::tr("Rdzenie P", "P-cores"), e),
-    }
-    if let Some(e_turbo) = &state.e_turbo {
-        ui.add_space(8.0);
-        match e_turbo {
-            Ok(ratios) => ratio_tiles(ui, crate::i18n::tr("Rdzenie E", "E-cores"), ratios, E_CORE),
-            Err(e) => unavailable(ui, crate::i18n::tr("Rdzenie E", "E-cores"), e),
-        }
-    }
-
-    ui.add_space(6.0);
-    ui.label(
-        RichText::new(
-            crate::i18n::tr("Kafelek pokazuje limit mnożnika, gdy aktywna jest dana grupa rdzeni (od pierwszej do ósmej). Ustawianie mnożnika osobno dla każdego rdzenia nie jest dostępne - powód opisuje README.", "Each tile shows the ratio limit when the given core group is active (first to eighth). Setting the ratio per core is not available - the README explains why."),
-        )
-        .size(11.5)
-        .color(accent()),
-    );
-}
-
 /// Informacja o niedostępnym podglądzie; szczegóły błędu są w podpowiedzi.
 fn unavailable(ui: &mut egui::Ui, label: &str, details: &str) {
     ui.label(RichText::new(label).color(muted()));
@@ -550,39 +527,6 @@ fn unavailable(ui: &mut egui::Ui, label: &str, details: &str) {
         .color(muted()),
     )
     .on_hover_text(details);
-}
-
-fn ratio_tiles(ui: &mut egui::Ui, label: &str, ratios: &[u8; 8], color: Color32) {
-    ui.label(RichText::new(label).color(muted()));
-    ui.add_space(2.0);
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::splat(6.0);
-        for (i, ratio) in ratios.iter().enumerate() {
-            if *ratio == 0 {
-                continue;
-            }
-            egui::Frame::NONE
-                .fill(color)
-                .corner_radius(CornerRadius::same(4))
-                .inner_margin(egui::Margin::symmetric(12, 8))
-                .show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(64.0);
-                        ui.label(
-                            RichText::new(crate::trf!("Grupa {}", "Group {}", i + 1))
-                                .size(11.5)
-                                .color(Color32::WHITE),
-                        );
-                        ui.label(
-                            RichText::new(format!("{ratio}x"))
-                                .size(20.0)
-                                .strong()
-                                .color(Color32::WHITE),
-                        );
-                    });
-                });
-        }
-    });
 }
 
 /// Panel odczytów jak w Intel XTU (wątek `cpu::monitor`).
@@ -706,4 +650,199 @@ fn monitor_section(ui: &mut egui::Ui, readings: Option<&crate::cpu::monitor::Rea
         .size(11.5)
         .color(muted()),
     );
+}
+
+impl IntelTab {
+    fn ratios_changed(&self, state: &State) -> bool {
+        matches!(&state.p_turbo, Ok(r) if *r != self.p_ratios)
+            || matches!(&state.e_turbo, Some(Ok(r)) if *r != self.e_ratios)
+    }
+
+    /// Zapisuje zmienione mnożniki turbo (rdzenie P, potem E) z weryfikacją.
+    fn apply_ratios(&mut self) {
+        let Ok(driver) = &mut self.driver else { return };
+        let Some(state) = &self.state else { return };
+        let mut done = Vec::new();
+        let mut error = None;
+        let jobs = [
+            (
+                intel::CoreKind::Performance,
+                state.p_turbo.as_ref().ok().copied(),
+                self.p_ratios,
+                crate::i18n::tr("rdzenie P", "P-cores"),
+            ),
+            (
+                intel::CoreKind::Efficient,
+                state
+                    .e_turbo
+                    .as_ref()
+                    .and_then(|r| r.as_ref().ok())
+                    .copied(),
+                self.e_ratios,
+                crate::i18n::tr("rdzenie E", "E-cores"),
+            ),
+        ];
+        for (kind, current, new, name) in jobs {
+            if current.is_none_or(|c| c == new) {
+                continue;
+            }
+            match intel::set_turbo_ratios(driver, kind, new) {
+                Ok(r) => done.push(format!(
+                    "{name} {:?}",
+                    r.iter().filter(|x| **x != 0).collect::<Vec<_>>()
+                )),
+                Err(e) => {
+                    error = Some(format!("{name}: {e}"));
+                    break;
+                }
+            }
+        }
+        self.status = match (done.is_empty(), error) {
+            (_, Some(e)) => crate::trf!("Mnożniki: {e}.", "Ratios: {e}."),
+            (true, None) => {
+                crate::i18n::tr("Brak zmian mnożników.", "No ratio changes.").to_string()
+            }
+            (false, None) => crate::trf!(
+                "Zastosowano mnożniki: {} (odczyt po zapisie).",
+                "Ratios applied: {} (read back after writing).",
+                done.join("; ")
+            ),
+        };
+        self.reload();
+    }
+
+    /// Mnożniki turbo dla grup aktywnych rdzeni, edytowalne jak w Intel XTU.
+    /// Zwraca true po kliknięciu "Zastosuj mnożniki".
+    fn ratio_section(&mut self, ui: &mut egui::Ui, state: &State) -> bool {
+        use crate::i18n::tr;
+        let mut apply = false;
+        ui.label(
+            RichText::new(tr("Mnożniki turbo", "Turbo ratios"))
+                .size(17.0)
+                .strong()
+                .color(theme::text()),
+        );
+        ui.add_space(6.0);
+        match &state.p_turbo {
+            Ok(current) => ratio_editor(
+                ui,
+                "p",
+                tr("Rdzenie P", "P-cores"),
+                current,
+                &mut self.p_ratios,
+                P_CORE,
+            ),
+            Err(e) => unavailable(ui, tr("Rdzenie P", "P-cores"), e),
+        }
+        if let Some(e_turbo) = &state.e_turbo {
+            ui.add_space(8.0);
+            match e_turbo {
+                Ok(current) => ratio_editor(
+                    ui,
+                    "e",
+                    tr("Rdzenie E", "E-cores"),
+                    current,
+                    &mut self.e_ratios,
+                    E_CORE,
+                ),
+                Err(e) => unavailable(ui, tr("Rdzenie E", "E-cores"), e),
+            }
+        }
+        ui.add_space(8.0);
+        let changed = self.ratios_changed(state);
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    self.armed && changed,
+                    egui::Button::new(tr("Zastosuj mnożniki", "Apply ratios")),
+                )
+                .clicked()
+            {
+                apply = true;
+            }
+            if ui
+                .add_enabled(
+                    changed,
+                    egui::Button::new(tr("Cofnij zmiany", "Undo changes")),
+                )
+                .clicked()
+            {
+                if let Ok(r) = &state.p_turbo {
+                    self.p_ratios = *r;
+                }
+                if let Some(Ok(r)) = &state.e_turbo {
+                    self.e_ratios = *r;
+                }
+            }
+            if let Err(e) =
+                intel::check_turbo_ratios(&self.p_ratios).and_then(|_| match &state.e_turbo {
+                    Some(Ok(_)) => intel::check_turbo_ratios(&self.e_ratios),
+                    _ => Ok(()),
+                })
+            {
+                ui.label(RichText::new(e).size(11.5).color(warn()));
+            }
+        });
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(tr(
+                "Jak \"Active Core Ratio\" w Intel XTU: limit mnożnika (x100 MHz), gdy aktywnych jest tyle rdzeni, ile obejmuje grupa (grupa 1 = 1-2 rdzenie itd. - podział ustala procesor). Przy większej liczbie aktywnych rdzeni mnożnik nie może być wyższy. Działa do restartu; zablokowany procesor (bez K) nie przyjmie zmian - program przywróci wtedy poprzednie wartości. Podnoś po 1 i sprawdzaj stabilność.",
+                "Like \"Active Core Ratio\" in Intel XTU: the ratio limit (x100 MHz) when as many cores are active as the group covers (group 1 = 1-2 cores etc. - the split is set by the CPU). With more active cores the ratio may not be higher. Lasts until restart; a locked CPU (non-K) will not accept changes - the program then restores the previous values. Raise by 1 and test stability.",
+            ))
+            .size(11.5)
+            .color(muted()),
+        );
+        apply && changed
+    }
+}
+
+/// Kafelki mnożników jednej grupy rdzeni z polem edycji (0 = grupa nieużywana).
+fn ratio_editor(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    current: &[u8; 8],
+    edit: &mut [u8; 8],
+    color: Color32,
+) {
+    ui.label(RichText::new(label).color(muted()));
+    ui.add_space(2.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::splat(6.0);
+        for i in 0..8 {
+            if current[i] == 0 {
+                continue;
+            }
+            let changed = edit[i] != current[i];
+            egui::Frame::NONE
+                .fill(color)
+                .corner_radius(CornerRadius::same(4))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(74.0);
+                        ui.label(
+                            RichText::new(crate::trf!("Grupa {}", "Group {}", i + 1))
+                                .size(11.5)
+                                .color(Color32::WHITE),
+                        );
+                        ui.push_id((id, i), |ui| {
+                            ui.add(
+                                egui::DragValue::new(&mut edit[i])
+                                    .range(intel::RATIO_MIN..=intel::RATIO_MAX)
+                                    .suffix("x")
+                                    .speed(0.1),
+                            );
+                        });
+                        let ghz =
+                            RichText::new(format!("{:.1} GHz", edit[i] as f32 / 10.0)).size(11.5);
+                        ui.label(if changed {
+                            ghz.color(Color32::YELLOW).strong()
+                        } else {
+                            ghz.color(Color32::WHITE)
+                        });
+                    });
+                });
+        }
+    });
 }

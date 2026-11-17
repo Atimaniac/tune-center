@@ -305,11 +305,18 @@ Co można zmieniać:
 - **Offset napięcia** osobno dla rdzeni P, rdzeni E i cache (Ring),
   w zakresie -250..+50 mV.
 - **Core IccMax** - limit prądu rdzeni (procesory 12., 13. i 14. generacji).
+- **Mnożniki turbo** (jak "Active Core Ratio" / "Per-Core Tuning" w XTU):
+  limit mnożnika rdzeni P (rejestr 0x1AD) i rdzeni E (0x650) dla każdej z
+  8 grup aktywnych rdzeni. Zakres 8-80, przy większej liczbie aktywnych
+  rdzeni mnożnik nie może być wyższy; grupy nieużywane (0) zostają bez zmian.
+  Wymaga modułu IntelMSR.bin z PawnIO.Modules 0.2.12 lub nowszego oraz
+  odblokowanego procesora (K) - zablokowany nie przyjmie zmian, a program
+  przywróci poprzednie wartości.
 
 Jak to działa:
 
-- Każda sekcja ma własny przycisk "Zastosuj"; wcześniej trzeba zaznaczyć
-  "Rozumiem ryzyko, odblokuj zapis".
+- Pola są wypełnione wartościami odczytanymi z procesora; każda sekcja ma
+  własny przycisk "Zastosuj".
 - Przy każdym zapisie program odczytuje bieżącą wartość, podmienia tylko
   zmieniane pole, zapisuje i odczytuje ponownie. Jeśli procesor nie przyjął
   wartości, pojawia się błąd z tym, co zadano i co odczytano.
@@ -319,11 +326,9 @@ Jak to działa:
 
 Czego nie ma i dlaczego:
 
-- **Mnożnik osobno dla każdego rdzenia P i E** (jak w panelu "Per-Core
-  Tuning" w XTU). Zakładka pokazuje limity mnożnika tylko do odczytu.
-  Moduł PawnIO nie pozwala zapisywać rejestrów mnożników turbo (0x1AD,
-  0x650), a polecenia, którymi XTU ustawia mnożnik pojedynczego rdzenia,
-  nie są publicznie opisane; XTU używa do tego własnego sterownika Intela.
+- **Mnożnik przypisany do konkretnego rdzenia** (np. "rdzeń 3 = 55x" w
+  XTU) - polecenia XTU dla pojedynczego rdzenia nie są publicznie opisane;
+  Tune Center ustawia mnożniki według liczby aktywnych rdzeni (jak wyżej).
 - **Voltage Override** (stałe napięcie) i tryb napięcia - tylko odczyt.
 - Profile i automatyczne stosowanie ustawień procesora.
 
@@ -610,10 +615,9 @@ W zakładce NVIDIA > Overclock > Informacje:
 - Zakładka POWER pokazuje tylko procesor i kartę graficzną. Dyski i płyta
   główna nie mają czujników poboru mocy, więc nie ma czego odczytać.
 
-- Podgląd mnożników turbo rdzeni E (rejestr 0x650) wymaga modułu IntelMSR.bin,
-  który pozwala ten rejestr czytać. Wydana wersja modułu może go odrzucać
-  (błąd 0x80070005); program pokazuje wtedy krótką informację zamiast błędu,
-  a pozostałe ustawienia procesora działają normalnie.
+- Mnożniki rdzeni E (rejestr 0x650) wymagają modułu IntelMSR.bin z
+  PawnIO.Modules 0.2.12 lub nowszego; starszy moduł odrzuca ten rejestr
+  (błąd 0x80070005) - program pokazuje wtedy krótką informację zamiast błędu.
 
 ## Bezpieczeństwo
 
