@@ -380,6 +380,24 @@ rozmiaru okna. Obroty wentylatorów są w zakładce FAN.
   zasilacza nie są wliczone.
 - Moc procesora wymaga uprawnień administratora i sterownika PawnIO.
 
+## Podświetlenie LED (OPTIONS)
+
+Opcja "Wyłącz podświetlenie LED (pamięć RAM)" wyłącza podświetlenie modułów
+RAM z kontrolerem ENE (np. G.Skill Trident Z RGB DDR4 - sprawdzone, kontroler
+"DIMM_LED-0103"). Dostęp do magistrali SMBus daje oficjalny moduł PawnIO
+`SmbusI801.bin` (chipsety Intel), pod tą samą blokadą co LibreHardwareMonitor,
+HWiNFO i OpenRGB. Wymaga uprawnień administratora i sterownika PawnIO.
+
+- Kontroler jest rozpoznawany wyłącznie odczytem (podpis w rejestrach
+  0xA0-0xAF); zapis idzie tylko pod adresy 0x70-0x77, nigdy do pamięci SPD
+  modułów (0x50-0x57). Adresy nie są przemapowywane - po włączeniu komputera
+  wszystkie moduły odpowiadają razem pod 0x77.
+- Program ustawia tryb "wyłączone" i sprawdza go odczytem. Niczego nie
+  zapisuje na stałe w kontrolerze, więc po restarcie moduły wracają do
+  swojego efektu, a program wyłącza je ponownie przy starcie.
+- Poprzedni efekt jest zapamiętany; odznaczenie opcji go przywraca.
+- Podświetlenie płyty głównej i karty graficznej nie jest obsługiwane.
+
 ## Minimalizowanie do zasobnika
 
 Domyślnie przycisk minimalizacji chowa okno do zasobnika systemowego (ikona
@@ -488,6 +506,7 @@ Wybór jest zapamiętywany.
 | Temperatura i moc procesora | LibreHardwareMonitor | tak |
 | Wentylatory i temperatury płyty głównej | LibreHardwareMonitor | tak |
 | Zakładka CPU (strojenie) | moduły PawnIO | tak |
+| Wyłączanie podświetlenia RAM | moduł PawnIO SmbusI801 | tak |
 
 PawnIO jest opcjonalny: instalator pozwala go odznaczyć, a program bez niego
 pokazuje wszystko z górnej części tabeli. Licznik energii w POWER działa wtedy

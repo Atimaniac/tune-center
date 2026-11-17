@@ -16,11 +16,12 @@ Copy-Item target\release\tunecenter.exe dist\ -Force
 Copy-Item THIRD-PARTY.md dist\ -Force
 
 # Zakladka "Procesor" potrzebuje oficjalnych, podpisanych modulow PawnIO:
-# IntelMSR.bin (Intel) oraz RyzenSMU.bin i AMDFamily17.bin (AMD Ryzen).
+# IntelMSR.bin (Intel) oraz RyzenSMU.bin i AMDFamily17.bin (AMD Ryzen);
+# SmbusI801.bin (SMBus chipsetow Intel) - wylaczanie podswietlenia RAM.
 # Pobieramy je z wydania projektu PawnIO.Modules i kopiujemy bez zmian.
 # Bez nich program dziala, tylko zakladka "Procesor" jest nieaktywna.
 Write-Host "== Krok 3/3: moduly PawnIO =="
-$modules = @("IntelMSR.bin", "RyzenSMU.bin", "AMDFamily17.bin")
+$modules = @("IntelMSR.bin", "RyzenSMU.bin", "AMDFamily17.bin", "SmbusI801.bin")
 $missing = $modules | Where-Object { -not (Test-Path "dist\modules\$_") }
 if (-not $missing) {
     Write-Host "Moduly juz sa w dist\modules."
@@ -54,4 +55,4 @@ if (-not $missing) {
 }
 
 Write-Host ""
-Write-Host "Gotowe. Uruchom dist\tunecenter.exe jako administrator."
+Write-Host "Gotowe. Uruchom dist\tunecenter.exe (CPU, czujniki procesora i LED wymagaja administratora)."

@@ -190,6 +190,52 @@ impl Drop for PawnIo {
 /// w drogę przy dostępie do SMU. Moduły PawnIO wymagają jej przed wywołaniem.
 struct PciLock(#[allow(dead_code)] isize);
 
+/// Blokada nazwana Windows na czas dostępu do sprzętu (np. "Global\Access_SMBUS.HTP.Method"
+/// dla magistrali SMBus - tę samą biorą LibreHardwareMonitor, HWiNFO, OpenRGB).
+pub struct NamedLock(isize);
+
+impl NamedLock {
+    #[cfg(windows)]
+    pub fn acquire(name: &str, timeout_ms: u32) -> Result<Self, String> {
+        let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+        // SAFETY: nazwa zakończona zerem; uchwyt zamyka Drop.
+        unsafe {
+            let handle = pci_mutex::CreateMutexW(std::ptr::null(), 0, wide.as_ptr());
+            if handle == 0 {
+                return Err(crate::trf!(
+                    "nie udało się otworzyć blokady {name}",
+                    "could not open the {name} lock"
+                ));
+            }
+            let wait = pci_mutex::WaitForSingleObject(handle, timeout_ms);
+            if wait != 0 && wait != 0x80 {
+                pci_mutex::CloseHandle(handle);
+                return Err(crate::trf!(
+                    "inny program trzyma blokadę {name}",
+                    "another program is holding the {name} lock"
+                ));
+            }
+            Ok(Self(handle))
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn acquire(_name: &str, _timeout_ms: u32) -> Result<Self, String> {
+        Ok(Self(0))
+    }
+}
+
+impl Drop for NamedLock {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        // SAFETY: uchwyt z CreateMutexW, zdobyty w acquire.
+        unsafe {
+            pci_mutex::ReleaseMutex(self.0);
+            pci_mutex::CloseHandle(self.0);
+        }
+    }
+}
+
 #[cfg(windows)]
 mod pci_mutex {
     #[link(name = "kernel32")]

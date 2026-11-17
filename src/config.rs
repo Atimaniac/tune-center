@@ -69,6 +69,12 @@ pub struct Config {
     /// Sprawdzanie przy starcie, czy jest nowsza wersja programu.
     #[serde(default = "yes")]
     pub check_updates: bool,
+    /// Wyłączone podświetlenie LED (pamięć RAM) - stosowane przy każdym starcie.
+    #[serde(default)]
+    pub leds_off: bool,
+    /// Tryby LED sprzed wyłączenia: (adres SMBus, tryb bezpośredni, tryb).
+    #[serde(default)]
+    pub leds_saved: Vec<(u8, u8, u8)>,
     #[serde(default)]
     pub active: String,
     #[serde(default)]
@@ -87,6 +93,8 @@ impl Default for Config {
             tray: true,
             check_updates: true,
             gpu_fans_direct: true,
+            leds_off: false,
+            leds_saved: Vec::new(),
             active: String::new(),
             profiles: BTreeMap::new(),
         };

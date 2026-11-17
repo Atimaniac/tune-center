@@ -20,6 +20,7 @@ mod gpu;
 mod gpu_fans;
 mod hags;
 mod i18n;
+mod leds;
 mod nvcp;
 mod power;
 mod power_tab;
@@ -130,6 +131,10 @@ struct App {
     /// Wentylatory kart graficznych sterowane wprost przez sterownik karty;
     /// `None`, gdy opcja jest wyłączona albo sterownik tego nie udostępnia.
     gpu_fans: Option<gpu_fans::GpuFans>,
+    /// Wyłączanie podświetlenia LED (RAM) i wynik ostatniej operacji.
+    leds: leds::Control,
+    leds_status: Option<(String, bool)>,
+    leds_started: bool,
     /// Temperatury dysków odczytywane przez API Windows.
     disks: disks::Disks,
     /// Licznik energii zakładki POWER.
@@ -227,12 +232,85 @@ impl App {
             logo,
             gpu_fans,
             disks: disks::Disks::start(),
+            leds: leds::Control::default(),
+            leds_status: None,
+            leds_started: false,
             meter,
             gpu_power,
             meter_tick: Instant::now(),
             updates,
             update_asked: false,
         }
+    }
+
+    /// Podświetlenie LED: wyłączenie przy starcie i wyniki operacji w tle.
+    fn leds_logic(&mut self, ctx: &egui::Context) {
+        if !self.leds_started {
+            self.leds_started = true;
+            if self.fans.config.leds_off && self.elevated {
+                let ctx = ctx.clone();
+                self.leds.turn_off(move || ctx.request_repaint());
+            }
+        }
+        let Some(outcome) = self.leds.take() else {
+            return;
+        };
+        let errors = |r: &leds::Report| {
+            if r.errors.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", r.errors.join("; "))
+            }
+        };
+        self.leds_status = Some(match outcome {
+            leds::Outcome::Off(r) if r.devices.is_empty() => (
+                crate::i18n::tr(
+                    "Nie znaleziono sterowalnego podświetlenia pamięci RAM.",
+                    "No controllable RAM lighting found.",
+                )
+                .to_string(),
+                true,
+            ),
+            leds::Outcome::Off(r) => {
+                // Zapamiętujemy tryby sprzed pierwszego wyłączenia.
+                if self.fans.config.leds_saved.is_empty() {
+                    self.fans.config.leds_saved = r
+                        .devices
+                        .iter()
+                        .filter(|d| d.mode != 0 || d.direct != 0)
+                        .map(|d| (d.addr, d.direct, d.mode))
+                        .collect();
+                    self.fans.config.save();
+                }
+                let names: Vec<String> = r
+                    .devices
+                    .iter()
+                    .map(|d| format!("{} (0x{:02X})", d.name, d.addr))
+                    .collect();
+                (
+                    crate::trf!(
+                        "Podświetlenie RAM wyłączone: {}{}",
+                        "RAM lighting turned off: {}{}",
+                        names.join(", "),
+                        errors(&r)
+                    ),
+                    !r.errors.is_empty(),
+                )
+            }
+            leds::Outcome::Restored(r) => {
+                self.fans.config.leds_saved.clear();
+                self.fans.config.save();
+                (
+                    crate::trf!(
+                        "Podświetlenie RAM przywrócone{}",
+                        "RAM lighting restored{}",
+                        errors(&r)
+                    ),
+                    !r.errors.is_empty(),
+                )
+            }
+            leds::Outcome::Failed(e) => (crate::trf!("LED: {e}", "LED: {e}"), true),
+        });
     }
 
     /// Zakładka OPTIONS: ustawienia całego programu.
@@ -324,6 +402,41 @@ impl App {
                     "The program controls the card's fans directly through the Nvidia or AMD driver. When turned off, the sensor process (LibreHardwareMonitor) does it. The change takes effect after restarting the program; the card fan settings must then be chosen again.",
                 ),
             );
+
+            let mut off = self.fans.config.leds_off;
+            let changed = ui
+                .add_enabled(
+                    self.elevated && !self.leds.busy(),
+                    egui::Checkbox::new(&mut off, crate::i18n::tr("Wyłącz podświetlenie LED (pamięć RAM)", "Turn off LED lighting (RAM)")),
+                )
+                .on_disabled_hover_text(crate::i18n::tr(
+                    "Wymaga uprawnień administratora (przycisk w pasku stanu) i sterownika PawnIO.",
+                    "Requires administrator rights (button in the status bar) and the PawnIO driver.",
+                ))
+                .changed();
+            if changed {
+                self.fans.config.leds_off = off;
+                self.fans.config.save();
+                let ctx = ctx.clone();
+                if off {
+                    self.leds.turn_off(move || ctx.request_repaint());
+                } else {
+                    let saved = self.fans.config.leds_saved.clone();
+                    self.leds.restore(saved, move || ctx.request_repaint());
+                }
+            }
+            option_note(
+                ui,
+                crate::i18n::tr(
+                    "Wyłącza podświetlenie modułów RAM z kontrolerem ENE (np. G.Skill Trident Z RGB) przez magistralę SMBus (moduł PawnIO SmbusI801). Moduły pamiętają swój efekt, więc program wyłącza je przy każdym starcie; odznaczenie przywraca poprzedni efekt. Płyta główna i karta graficzna nie są obsługiwane.",
+                    "Turns off the lighting of RAM modules with an ENE controller (e.g. G.Skill Trident Z RGB) over the SMBus (PawnIO SmbusI801 module). The modules keep their own effect, so the program turns them off at every start; unticking restores the previous effect. The motherboard and graphics card are not supported.",
+                ),
+            );
+            if self.leds.busy() {
+                ui.label(RichText::new(crate::i18n::tr("Trwa...", "Working...")).size(12.0).color(muted()));
+            } else if let Some((text, error)) = &self.leds_status {
+                ui.label(RichText::new(text).size(12.0).color(if *error { warn() } else { accent() }));
+            }
 
             let mut check = self.fans.config.check_updates;
             if ui
@@ -446,6 +559,7 @@ impl eframe::App for App {
     /// a gdy okno jest ukryte w zasobniku - zamiast `ui`, po każdym
     /// `request_repaint` (proces czujników budzi okno co sekundę).
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.leds_logic(ctx);
         if self.minimize {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             self.minimize = false;
