@@ -284,8 +284,8 @@ pub fn run_host(args: &[String]) -> i32 {
 
 // ------------------------- Unity, Direct3D 11 -------------------------------
 
-/// Argument procesu kompilującego shadery Unity (DirectX 11).
-pub const HOST_ARG_UNITY: &str = "--shader-warm-unity";
+/// Argument procesu kompilującego shadery DirectX 11 (Unity albo Dagor DX11).
+pub const HOST_ARG_D3D11: &str = "--shader-warm-d3d11";
 
 #[cfg(windows)]
 mod d3d11 {
@@ -425,7 +425,7 @@ mod d3d11 {
 /// utworzenie `BATCH` shaderów, czekanie na bezczynność wątków sterownika,
 /// zwolnienie partii.
 #[cfg(windows)]
-pub fn run_host_unity(args: &[String]) -> i32 {
+pub fn run_host_d3d11(args: &[String]) -> i32 {
     use super::unity;
     use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
     const BATCH: usize = 4096;
@@ -436,9 +436,26 @@ pub fn run_host_unity(args: &[String]) -> i32 {
         let _ = writeln!(o, "{line}");
         let _ = o.flush();
     };
-    let Some(data_dir) = args.first() else {
-        say("fatal użycie: --shader-warm-unity <folder _Data>".into());
-        return 2;
+    // Źródło: "unity <folder _Data>" albo "dagor <zrzut .shdump.bin DX11>".
+    let (kind, source) = match (args.first().map(String::as_str), args.get(1)) {
+        (Some(k @ ("unity" | "dagor")), Some(p)) => (k, p.clone()),
+        (Some(p), None) => ("unity", p.to_owned()),
+        _ => {
+            say("fatal użycie: --shader-warm-d3d11 <unity|dagor> <ścieżka>".into());
+            return 2;
+        }
+    };
+    let data_dir = &source;
+    let dagor_dump = if kind == "dagor" {
+        match super::dagor::Dump::open(Path::new(&source)) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                say(format!("fatal {e}"));
+                return 3;
+            }
+        }
+    } else {
+        None
     };
     let device = match d3d11::nvidia_device() {
         Ok(d) => d,
@@ -450,8 +467,15 @@ pub fn run_host_unity(args: &[String]) -> i32 {
     say(format!("adapter {}", device.adapter));
     let mut device = Some(device);
 
-    let files = unity::candidate_files(Path::new(data_dir));
-    say(format!("scan 0 {}", files.len()));
+    let files = if dagor_dump.is_some() {
+        Vec::new()
+    } else {
+        unity::candidate_files(Path::new(data_dir))
+    };
+    let scan_total = dagor_dump
+        .as_ref()
+        .map_or(files.len(), |d| d.shader_count());
+    say(format!("scan 0 {scan_total}"));
     let next_file = AtomicUsize::new(0);
     let files_done = AtomicUsize::new(0);
     let found = AtomicUsize::new(0);
@@ -465,7 +489,30 @@ pub fn run_host_unity(args: &[String]) -> i32 {
     let (mut done, mut ok) = (0usize, 0usize);
 
     std::thread::scope(|scope| {
-        for _ in 0..scanners {
+        // Dagor DX11: jeden zrzut, shadery rozpakowywane po kolei.
+        if let Some(dump) = &dagor_dump {
+            let tx = tx.clone();
+            let (seen, found, errors, say) = (&seen, &found, &errors, &say);
+            scope.spawn(move || {
+                let result = dump.for_each_shader(|i, data| {
+                    unity::carve_dxbc(data, |d| {
+                        if seen.lock().unwrap().insert(d.digest()) {
+                            found.fetch_add(1, Relaxed);
+                            let _ = tx.send((d.stage, d.code.to_vec()));
+                        }
+                    });
+                    if (i + 1) % 200 == 0 || i + 1 == scan_total {
+                        say(format!("scan {} {scan_total}", i + 1));
+                    }
+                    true
+                });
+                if let Err(e) = result {
+                    errors.lock().unwrap().push(e);
+                }
+                say(format!("scan {scan_total} {scan_total}"));
+            });
+        }
+        for _ in 0..scanners.min(files.len()) {
             let tx = tx.clone();
             let (files, next_file, files_done, seen, found, errors, say) = (
                 &files,
@@ -573,6 +620,8 @@ pub enum Job {
     Dagor { dump: PathBuf, cbv_ranges: bool },
     /// Folder `*_Data` gry Unity (DirectX 11).
     Unity { data_dir: PathBuf },
+    /// Zrzut shaderów Dagor DirectX 11 (kontenery DXBC).
+    DagorDx11 { dump: PathBuf },
 }
 
 /// Uruchomiona kompilacja jednej gry.
@@ -660,7 +709,10 @@ impl Warm {
                         .arg(if *cbv_ranges { "1" } else { "0" });
                 }
                 Job::Unity { data_dir } => {
-                    cmd.arg(HOST_ARG_UNITY).arg(data_dir);
+                    cmd.arg(HOST_ARG_D3D11).arg("unity").arg(data_dir);
+                }
+                Job::DagorDx11 { dump } => {
+                    cmd.arg(HOST_ARG_D3D11).arg("dagor").arg(dump);
                 }
             }
             cmd.stdout(std::process::Stdio::piped())

@@ -549,3 +549,48 @@ mod hardware {
         assert_eq!(kinds.get("nieczytelne"), None);
     }
 }
+
+#[cfg(test)]
+mod dx11_probe {
+    //! Zrzut Dagor DX11: ile shaderów i kontenerów DXBC (tylko odczyt):
+    //! `TC_DAGOR_DUMP=<game.ps50.shdump.bin> cargo test dagor_dx11_probe -- --ignored --nocapture`.
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn dagor_dx11_probe() {
+        let path = std::env::var("TC_DAGOR_DUMP").expect("TC_DAGOR_DUMP");
+        let dump = Dump::open(Path::new(&path)).unwrap();
+        let mut stages = std::collections::HashMap::new();
+        let mut unique = std::collections::HashSet::new();
+        let (mut shaders, mut containers) = (0, 0);
+        let mut first = Vec::new();
+        dump.for_each_shader(|_, data| {
+            shaders += 1;
+            if first.len() < 3 {
+                first.push(
+                    data.iter()
+                        .take(16)
+                        .map(|b| format!("{b:02X}"))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+            }
+            crate::shaders::unity::carve_dxbc(data, |d| {
+                containers += 1;
+                if unique.insert(d.digest()) {
+                    *stages.entry(format!("{:?}", d.stage)).or_insert(0) += 1;
+                }
+            });
+            true
+        })
+        .unwrap();
+        println!(
+            "shaderów {shaders}, DXBC {containers}, unikalne {} {stages:?}",
+            unique.len()
+        );
+        for f in first {
+            println!("  {f}");
+        }
+    }
+}

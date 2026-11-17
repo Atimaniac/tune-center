@@ -225,6 +225,14 @@ udostępnia pobierania gotowych shaderów; Tune Center czyta je z plików gry.
   w procesie nazwanym jak gra, partiami (każda na nowym urządzeniu, z
   czekaniem na zakończenie kompilacji w sterowniku). Pillars of Eternity:
   2640 shaderów; Last Epoch: ok. 196 tys. shaderów, ok. 17 min.
+- **Dagor Engine DirectX 11**: wszystkie shadery ze zrzutu
+  `compiledShaders\game.ps50.shdump.bin` (kontenery DXBC) tą samą drogą co
+  Unity. Active Matter: 8632 shadery, ok. 90 s.
+- **Wybór API (AUTO / DX11 / DX12)** w szczegółach gry. AUTO wybiera API, którego
+  używa gra (konfiguracja gry albo jej log); DX11 i DX12 wymuszają dane API,
+  o ile gra ma do niego shadery - pamięć podręczna sterownika jest osobna dla
+  każdego API, więc kompilacja dla innego API niż gra pokazuje ostrzeżenie.
+  Unity w DX12 jest niedostępne (potoki powstają dopiero w trakcie gry).
 - Gry są tylko czytane: Tune Center niczego w nich nie zmienia, nie
   uruchamia ich i nie dodaje do nich plików (bezpieczne także przy
   anty-cheacie). Unity w DirectX 12 buduje potoki dopiero w trakcie gry,

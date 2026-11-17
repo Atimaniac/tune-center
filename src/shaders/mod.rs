@@ -43,6 +43,8 @@ pub struct ShaderTab {
     selected: Option<String>,
     /// Kompilacje w toku albo zakończone, po identyfikatorze gry.
     warms: std::collections::HashMap<String, warm::Warm>,
+    /// Wybrane API kompilacji, po identyfikatorze gry.
+    apis: std::collections::HashMap<String, Api>,
 }
 
 /// Folder pamięci podręcznej shaderów DirectX sterownika Nvidia.
@@ -71,6 +73,13 @@ fn dir_size(dir: &std::path::Path) -> u64 {
 pub fn plan(info: &Info) -> (&'static str, bool) {
     let has = |k: ShaderKind| info.shaders.iter().any(|s| s.kind == k);
     match info.engine {
+        Engine::Dagor if has(ShaderKind::DagorDx11) && has(ShaderKind::DagorDx12) => (
+            tr(
+                "DX11: wszystkie shadery; DX12: compute (graficzne w przygotowaniu)",
+                "DX11: every shader; DX12: compute (graphics in progress)",
+            ),
+            true,
+        ),
         Engine::Dagor if has(ShaderKind::DagorDx12) => (
             tr(
                 "DirectX 12: compute gotowe, graficzne w przygotowaniu",
@@ -79,7 +88,10 @@ pub fn plan(info: &Info) -> (&'static str, bool) {
             true,
         ),
         Engine::Dagor if has(ShaderKind::DagorDx11) => (
-            tr("DirectX 11 - w przygotowaniu", "DirectX 11 - in progress"),
+            tr(
+                "DirectX 11: wszystkie shadery ze zrzutu gry",
+                "DirectX 11: every shader from the game dump",
+            ),
             true,
         ),
         Engine::Unity if info.api.as_deref() == Some("DirectX 12") => (
@@ -120,6 +132,7 @@ impl ShaderTab {
             filter: String::new(),
             selected: None,
             warms: Default::default(),
+            apis: Default::default(),
         }
     }
 
@@ -333,29 +346,167 @@ impl ShaderTab {
                         let _ = std::process::Command::new("explorer").arg(&e.game.dir).spawn();
                     }
                 });
-                compile_ui(ui, e, &mut self.warms);
+                compile_ui(ui, e, &mut self.warms, &mut self.apis);
             });
         }
     }
 }
 
-/// Kompilacja z góry dla wybranej gry: Dagor DirectX 12 (compute) albo
-/// Unity DirectX 11 (wszystkie shadery z plików gry).
+/// Wybór API kompilacji shaderów.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum Api {
+    /// API, którego używa gra (z konfiguracji gry albo jej logu).
+    #[default]
+    Auto,
+    Dx11,
+    Dx12,
+}
+
+/// Co da się skompilować dla gry i co wybiera AUTO.
+struct ApiOptions {
+    dx11: Result<(), &'static str>,
+    dx12: Result<(), &'static str>,
+    /// Wynik AUTO, z opisem dlaczego.
+    auto: Result<Api, &'static str>,
+}
+
+fn api_options(info: &Info) -> ApiOptions {
+    let has = |k: ShaderKind| info.shaders.iter().any(|s| s.kind == k);
+    let (dx11, dx12) = match info.engine {
+        Engine::Dagor => (
+            if has(ShaderKind::DagorDx11) { Ok(()) } else { Err(tr("gra nie ma zrzutu shaderów DirectX 11", "the game has no DirectX 11 shader dump")) },
+            if has(ShaderKind::DagorDx12) { Ok(()) } else { Err(tr("gra nie ma zrzutu shaderów DirectX 12", "the game has no DirectX 12 shader dump")) },
+        ),
+        Engine::Unity => (
+            Ok(()),
+            Err(tr(
+                "Unity w DirectX 12 buduje potoki dopiero w trakcie gry - z samych plików nie da się ich skompilować",
+                "Unity on DirectX 12 builds pipelines at run time - they cannot be compiled from the files alone",
+            )),
+        ),
+        _ => {
+            let no = tr("ten silnik nie jest obsługiwany", "this engine is not supported");
+            (Err(no), Err(no))
+        }
+    };
+    let game = info.api.as_deref();
+    let auto = match game {
+        Some("DirectX 12") => dx12.map(|_| Api::Dx12),
+        Some("DirectX 11") => dx11.map(|_| Api::Dx11),
+        // API nieznane: najpierw DX12, potem DX11.
+        _ => dx12.map(|_| Api::Dx12).or(dx11.map(|_| Api::Dx11)),
+    };
+    ApiOptions { dx11, dx12, auto }
+}
+
+/// Kompilacja z góry dla wybranej gry: DirectX 11 (Unity, Dagor) albo
+/// DirectX 12 (Dagor, compute), według wyboru API.
 fn compile_ui(
     ui: &mut egui::Ui,
     e: &Entry,
     warms: &mut std::collections::HashMap<String, warm::Warm>,
+    choices: &mut std::collections::HashMap<String, Api>,
 ) {
     let missing = |ui: &mut egui::Ui, text: &str| {
         ui.label(RichText::new(text).color(warn()));
     };
-    let unity = e.info.engine == Engine::Unity && e.info.api.as_deref() != Some("DirectX 12");
-    let dagor = e
-        .info
-        .shaders
-        .iter()
-        .find(|s| s.kind == ShaderKind::DagorDx12);
-    let (exe, job, about) = if let Some(dump) = dagor {
+    let options = api_options(&e.info);
+    if options.dx11.is_err() && options.dx12.is_err() {
+        return;
+    }
+    ui.add_space(6.0);
+    let choice = choices.entry(e.game.id.clone()).or_default();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(tr("API kompilacji:", "Compile for:")).color(muted()));
+        for (api, label, available) in [
+            (Api::Auto, "AUTO", Ok(())),
+            (Api::Dx11, "DX11", options.dx11),
+            (Api::Dx12, "DX12", options.dx12),
+        ] {
+            let button = ui.add_enabled(available.is_ok(), egui::Button::selectable(*choice == api, label));
+            let button = match available {
+                Err(why) => button.on_disabled_hover_text(why),
+                Ok(()) => button,
+            };
+            if button.clicked() {
+                *choice = api;
+            }
+        }
+        let game_api = e.info.api.as_deref().unwrap_or(tr("nieznane", "unknown"));
+        match (*choice, options.auto) {
+            (Api::Auto, Ok(a)) => ui.label(
+                RichText::new(crate::trf!(
+                    "AUTO = {} (gra: {game_api})",
+                    "AUTO = {} (game: {game_api})",
+                    if a == Api::Dx12 { "DX12" } else { "DX11" }
+                ))
+                .small()
+                .color(muted()),
+            ),
+            (Api::Auto, Err(_)) => ui.label(
+                RichText::new(crate::trf!("gra: {game_api}", "game: {game_api}")).small().color(muted()),
+            ),
+            (api, _) => {
+                let mismatch = match api {
+                    Api::Dx11 => game_api == "DirectX 12",
+                    _ => game_api == "DirectX 11",
+                };
+                if mismatch {
+                    ui.label(
+                        RichText::new(crate::trf!(
+                            "gra używa {game_api} - pamięć podręczna innego API nie przyspieszy gry",
+                            "the game uses {game_api} - another API's cache will not speed the game up"
+                        ))
+                        .small()
+                        .color(warn()),
+                    )
+                } else {
+                    ui.label("")
+                }
+            }
+        };
+    });
+    let api = match *choice {
+        Api::Auto => match options.auto {
+            Ok(a) => a,
+            Err(why) => {
+                missing(ui, why);
+                return;
+            }
+        },
+        a => a,
+    };
+    let d3d11 = api == Api::Dx11;
+    let dump_of = |k: ShaderKind| e.info.shaders.iter().find(|s| s.kind == k);
+    let dagor_dx12 = (api == Api::Dx12)
+        .then(|| dump_of(ShaderKind::DagorDx12))
+        .flatten();
+    let dagor_dx11 = (d3d11 && e.info.engine == Engine::Dagor)
+        .then(|| dump_of(ShaderKind::DagorDx11))
+        .flatten();
+    let (exe, job, about) = if let Some(dump) = dagor_dx11 {
+        let Some(exe) = warm::dagor_game_exe(&e.game.dir) else {
+            missing(
+                ui,
+                tr(
+                    "Nie znaleziono pliku .exe gry w win64.",
+                    "Game .exe not found in win64.",
+                ),
+            );
+            return;
+        };
+        let about = crate::trf!(
+            "Sterownik Nvidia kompiluje wszystkie shadery DirectX 11 ze zrzutu gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
+            "The Nvidia driver compiles every DirectX 11 shader from the game's dump into its cache under the name {exe}, as the game would. The game must be closed."
+        );
+        (
+            exe,
+            warm::Job::DagorDx11 {
+                dump: dump.path.clone(),
+            },
+            about,
+        )
+    } else if let Some(dump) = dagor_dx12 {
         let Some(exe) = warm::dagor_game_exe(&e.game.dir) else {
             missing(
                 ui,
@@ -375,7 +526,7 @@ fn compile_ui(
             cbv_ranges: warm::dagor_cbv_ranges(&e.game.dir),
         };
         (exe, job, about)
-    } else if unity {
+    } else if d3d11 && e.info.engine == Engine::Unity {
         let Some((data_dir, exe)) = unity::game_layout(&e.game.dir) else {
             missing(
                 ui,
@@ -394,7 +545,6 @@ fn compile_ui(
     } else {
         return;
     };
-    ui.add_space(6.0);
     ui.label(
         RichText::new(tr("Kompilacja shaderów", "Shader compilation"))
             .strong()
@@ -452,7 +602,7 @@ fn compile_ui(
         );
     }
     match &p.phase {
-        warm::Phase::Done if unity => {
+        warm::Phase::Done if d3d11 => {
             let text = crate::trf!(
                 "Gotowe: sterownik skompilował {} shaderów (shadery, które już były w pamięci podręcznej, pomija), odrzucone: {} ({}).",
                 "Done: the driver compiled {} shaders (shaders already in its cache are skipped), rejected: {} ({}).",
