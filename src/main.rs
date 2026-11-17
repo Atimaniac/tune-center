@@ -14,6 +14,7 @@ mod cpu;
 mod cpu_tab;
 mod curve;
 mod disks;
+mod elevation;
 mod fans;
 mod gpu;
 mod gpu_fans;
@@ -115,6 +116,8 @@ struct App {
     fans: FansTab,
     /// Proces pomocniczy czujników i sterowania wentylatorami.
     bridge: Result<Backend, String>,
+    /// Czy program działa jako administrator.
+    elevated: bool,
     minimize: bool,
     /// Czy istnieje zadanie uruchamiające program przy logowaniu do Windows.
     autostart: bool,
@@ -217,6 +220,7 @@ impl App {
             fans,
             bridge,
             minimize: args.iter().any(|a| a == "--minimized"),
+            elevated: elevation::is_elevated(),
             autostart: autostart::is_enabled(),
             notice,
             tray,
@@ -546,6 +550,32 @@ impl eframe::App for App {
                                 .size(12.0)
                                 .color(warn()),
                         );
+                    }
+
+                    // Bez administratora część funkcji jest niedostępna -
+                    // przycisk uruchamia program ponownie z pytaniem UAC.
+                    if !self.elevated {
+                        ui.separator();
+                        let button = egui::Button::new(
+                            RichText::new(crate::i18n::tr(
+                                "Uruchom jako administrator",
+                                "Run as administrator",
+                            ))
+                            .size(12.0),
+                        );
+                        if ui
+                            .add(button)
+                            .on_hover_text(crate::i18n::tr(
+                                "Program działa bez uprawnień administratora. Karta graficzna, panel Nvidia, kompilacja shaderów, dyski i moc karty działają normalnie. Administrator jest potrzebny do: zakładki CPU, temperatury i mocy procesora, wentylatorów płyty głównej, zmiany HAGS i autostartu.",
+                                "The program runs without administrator rights. The graphics card, Nvidia panel, shader compilation, disks and card power work normally. Administrator rights are needed for: the CPU tab, CPU temperature and power, motherboard fans, changing HAGS and autostart.",
+                            ))
+                            .clicked()
+                        {
+                            match elevation::relaunch_as_admin() {
+                                Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                                Err(e) => self.notice = Some(e),
+                            }
+                        }
                     }
 
                     // Prawy dolny róg: przycisk i wynik sprawdzania aktualizacji.

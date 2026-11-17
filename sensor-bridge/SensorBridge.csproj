@@ -8,6 +8,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <Company>Atimaniac</Company>
+    <Authors>Atimaniac</Authors>
+    <Product>Tune Center</Product>
+    <Copyright>Copyright (C) 2026 Atimaniac</Copyright>
   </PropertyGroup>
 
   <ItemGroup>

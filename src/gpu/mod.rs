@@ -6,15 +6,17 @@ pub mod backend;
 mod curve_editor;
 mod nvapi;
 mod nvml;
+mod sampler;
+mod sensors_view;
 
-use crate::bridge::{Snapshot, Temp};
+use crate::bridge::Snapshot;
 use crate::theme;
 use backend::{Backend, Demo, Domain, Monitor, Multi, Offsets, Vendor};
 use curve_editor::CurveEditor;
 use eframe::egui::{self, RichText};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Ładuje sterowniki kart obecnych w komputerze (Nvidia i AMD); `None`,
 /// gdy nie ma żadnej. Każdy wątek korzystający ze sterownika ładuje własny
@@ -75,7 +77,9 @@ pub struct GpuTab {
     gpu: usize,
     tab: Tab,
     monitor: Monitor,
-    last_poll: Option<Instant>,
+    /// Odczyt czujników w osobnym wątku (z historią do wykresów).
+    sampler: sampler::Sampler,
+    sensors: sensors_view::SensorsView,
     offsets: Offsets,
     offsets_err: Option<String>,
     core_new_mhz: i32,
@@ -101,22 +105,6 @@ pub struct GpuTab {
 
 /// Okno pamięci większe niż 256 MB oznacza włączony Resizable BAR.
 const REBAR_OFF_MB: u64 = 256;
-
-/// Temperatura hotspot karty z czujników LibreHardwareMonitor. Gdy kart jest
-/// kilka, wybiera czujnik karty o nazwie pasującej do `model`.
-fn hotspot(temps: &[Temp], model: &str) -> Option<f32> {
-    let model = model.to_lowercase();
-    let mut found = temps.iter().filter(|t| {
-        let name = t.name.to_lowercase();
-        t.kind.starts_with("Gpu") && (name.contains("hot spot") || name.contains("hotspot"))
-    });
-    let first = found.next()?;
-    let matching = std::iter::once(first).chain(found).find(|t| {
-        let hw = t.hw.to_lowercase();
-        !hw.is_empty() && (model.contains(&hw) || hw.contains(&model))
-    });
-    matching.unwrap_or(first).value
-}
 
 /// Ustawienia zakładki pamiętane między uruchomieniami (`gpu-settings.json`).
 #[derive(Serialize, Deserialize, Default, Clone, Copy)]
@@ -254,7 +242,8 @@ impl GpuTab {
             gpu: 0,
             tab: Tab::Info,
             monitor: Monitor::default(),
-            last_poll: None,
+            sampler: sampler::Sampler::start(demo),
+            sensors: Default::default(),
             offsets: Offsets::default(),
             offsets_err: None,
             core_new_mhz: 0,
@@ -417,7 +406,7 @@ impl GpuTab {
         if self.vendor() == Vendor::Amd && self.tab == Tab::Curve {
             self.tab = Tab::Info;
         }
-        self.last_poll = None;
+        self.sampler.set_gpu(self.gpu);
     }
 
     fn core_dirty(&self) -> bool {
@@ -815,14 +804,10 @@ impl GpuTab {
         })
     }
 
-    /// Odświeża odczyty karty najwyżej raz na sekundę.
+    /// Najnowszy odczyt karty z wątku czujników.
     pub fn poll(&mut self) {
-        let due = self
-            .last_poll
-            .is_none_or(|t| t.elapsed() >= Duration::from_millis(1000));
-        if due {
-            self.monitor = self.backend.monitor(self.gpu);
-            self.last_poll = Some(Instant::now());
+        if let Some(m) = self.sampler.latest() {
+            self.monitor = m;
         }
     }
 
@@ -944,69 +929,13 @@ impl GpuTab {
     }
 
     fn tab_info(&mut self, ui: &mut egui::Ui, snap: Option<&Snapshot>) {
-        ui.heading(crate::i18n::tr("Karta", "Card"));
+        ui.heading(self.gpus.get(self.gpu).cloned().unwrap_or_default());
         ui.add_space(4.0);
-        egui::Grid::new("info")
-            .num_columns(2)
-            .spacing([40.0, 8.0])
-            .striped(true)
-            .show(ui, |ui| {
-                ui.label("Model");
-                ui.label(self.gpus.get(self.gpu).cloned().unwrap_or_default());
-                ui.end_row();
-                ui.label(crate::i18n::tr("Temperatura", "Temperature"));
-                ui.label(fmt(self.monitor.temp_c, "°C"));
-                ui.end_row();
-                ui.label(crate::i18n::tr(
-                    "Temperatura hotspot",
-                    "Hotspot temperature",
-                ));
-                let model = self.gpus.get(self.gpu).map(String::as_str).unwrap_or("");
-                // Najpierw odczyt wprost ze sterownika karty (NVAPI / ADL); czujniki
-                // LibreHardwareMonitor są tylko zapasem.
-                let from_driver = self.monitor.hotspot_c;
-                match from_driver.or_else(|| snap.and_then(|s| hotspot(&s.temps, model))) {
-                    Some(v) => {
-                        ui.label(format!("{v:.0} °C"));
-                    }
-                    None => {
-                        ui.label(
-                            RichText::new(crate::i18n::tr(
-                                "karta nie udostępnia tego czujnika",
-                                "the card does not expose this sensor",
-                            ))
-                            .color(theme::muted()),
-                        );
-                    }
-                }
-                ui.end_row();
-                ui.label(crate::i18n::tr("Wentylator", "Fan"));
-                ui.label(match (self.monitor.fan_rpm, self.monitor.fan_pct) {
-                    (Some(rpm), Some(pct)) => format!("{rpm} RPM ({pct} %)"),
-                    (Some(rpm), None) => format!("{rpm} RPM"),
-                    (None, Some(pct)) => format!("{pct} %"),
-                    (None, None) => fmt(None::<u32>, ""),
-                });
-                ui.end_row();
-                ui.label(crate::i18n::tr("Pobór mocy", "Power draw"));
-                ui.label(match self.monitor.power_w {
-                    Some(w) => format!("{w:.0} W"),
-                    None => fmt(None::<u32>, ""),
-                });
-                ui.end_row();
-                ui.label(crate::i18n::tr("Użycie GPU", "GPU usage"));
-                ui.label(fmt(self.monitor.usage_pct, "%"));
-                ui.end_row();
-                ui.label(crate::i18n::tr("Zegar rdzenia", "Core clock"));
-                ui.label(fmt(self.monitor.core_mhz, "MHz"));
-                ui.end_row();
-                ui.label(crate::i18n::tr("Zegar pamięci", "Memory clock"));
-                ui.label(fmt(self.monitor.mem_mhz, "MHz"));
-                ui.end_row();
-                ui.label(crate::i18n::tr("Napięcie rdzenia", "Core voltage"));
-                ui.label(fmt(self.monitor.voltage_mv, "mV"));
-                ui.end_row();
-            });
+        {
+            let samples = self.sampler.samples.lock().unwrap();
+            self.sensors.ui(ui, &samples, snap);
+        }
+        ui.ctx().request_repaint_after(Duration::from_millis(1000));
 
         ui.add_space(16.0);
         ui.heading(crate::i18n::tr("Aktywne ustawienia", "Active settings"));

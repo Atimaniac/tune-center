@@ -6,6 +6,8 @@ fn main() {
         res.set_icon("assets/icon.ico");
         res.set("ProductName", "Tune Center");
         res.set("FileDescription", "Tune Center");
+        res.set("CompanyName", "Atimaniac");
+        res.set("LegalCopyright", "Copyright (C) 2026 Atimaniac");
         if let Err(e) = res.compile() {
             // Bez ikony program nadal działa; ikonę okna ustawia main.rs.
             println!("cargo:warning=Nie udało się wbudować ikony w plik .exe: {e}");

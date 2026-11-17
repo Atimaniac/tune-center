@@ -37,6 +37,7 @@ const ID_GET_CLOCK_BOOST_MASK: u32 = 0x507B_4B59;
 const ID_GET_CLOCK_BOOST_TABLE: u32 = 0x23F1_B133;
 const ID_SET_CLOCK_BOOST_TABLE: u32 = 0x0733_E009;
 const ID_GET_VFP_CURVE: u32 = 0x2153_7AD4;
+const ID_POWER_TOPOLOGY_GET_STATUS: u32 = 0xEDCF_624E;
 
 const CLOCK_DOMAIN_GRAPHICS: u32 = 0;
 const CLOCK_DOMAIN_MEMORY: u32 = 4;
@@ -118,6 +119,31 @@ const _: () = assert!(size_of::<ThermalSensors>() == 168);
 
 /// Bit maski i indeks czujnika hotspot.
 const SENSOR_HOTSPOT: usize = 1;
+/// Indeks czujnika temperatury pamięci (memory junction), jak w LibreHardwareMonitor.
+const SENSOR_MEMORY: usize = 9;
+/// Temperatura pamięci na kartach RTX 50 (indeks 0 pusty).
+const SENSOR_MEMORY_BLACKWELL: usize = 2;
+
+/// Jeden kanał topologii mocy (NvAPI_GPU_ClientPowerTopologyGetStatus,
+/// nieudokumentowane - układ z LibreHardwareMonitor). `power` to udział w
+/// limicie mocy w tysięcznych procenta; domena 0 = układ GPU, 1 = cała karta.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct PowerTopologyEntry {
+    domain: u32,
+    reserved: u32,
+    power: u32,
+    reserved2: u32,
+}
+
+#[repr(C)]
+struct PowerTopology {
+    version: u32,
+    count: u32,
+    entries: [PowerTopologyEntry; 4],
+}
+
+const _: () = assert!(size_of::<PowerTopology>() == 72);
 
 #[repr(C)]
 struct Thermal {
@@ -288,6 +314,9 @@ pub struct NvApi {
     get_table: Option<FnStruct<ClockTable>>,
     set_table: Option<FnStruct<ClockTable>>,
     get_vfp: Option<FnStruct<VfpCurve>>,
+    get_topology: Option<FnStruct<PowerTopology>>,
+    /// Maska czujników ThermalGetSensors obsługiwanych przez kartę (ustalana raz).
+    sensor_mask: Option<u32>,
 }
 
 unsafe fn q<T: Copy>(query: QueryFn, id: u32) -> Option<T> {
@@ -427,6 +456,8 @@ impl NvApi {
                 get_table: q(query, ID_GET_CLOCK_BOOST_TABLE),
                 set_table: q(query, ID_SET_CLOCK_BOOST_TABLE),
                 get_vfp: q(query, ID_GET_VFP_CURVE),
+                get_topology: q(query, ID_POWER_TOPOLOGY_GET_STATUS),
+                sensor_mask: None,
                 _lib: lib,
             })
         }
@@ -530,22 +561,80 @@ impl Backend for NvApi {
         // Hotspot: karta bez tego czujnika (np. seria RTX 50) odrzuca zapytanie
         // albo zwraca zero - wtedy wartości po prostu nie ma.
         if let Some(f) = self.get_sensors {
-            let mut s: ThermalSensors = unsafe { zeroed() };
-            s.version = ver::<ThermalSensors>(2);
-            s.mask = 1 << SENSOR_HOTSPOT;
-            if unsafe { f(h, &mut s) } == 0 {
-                let raw = s.temperatures[SENSOR_HOTSPOT];
-                if raw > 0 {
-                    m.hotspot_c = Some(raw as f32 / 256.0);
+            let read = |mask: u32| {
+                let mut s: ThermalSensors = unsafe { zeroed() };
+                s.version = ver::<ThermalSensors>(2);
+                s.mask = mask;
+                (unsafe { f(h, &mut s) } == 0).then_some(s)
+            };
+            // Maska obsługiwanych czujników: najdłuższa ciągła, którą karta
+            // przyjmuje (tak samo robi LibreHardwareMonitor).
+            let mask = *self.sensor_mask.get_or_insert_with(|| {
+                let mut best = 1 << SENSOR_HOTSPOT;
+                for bits in 2..32 {
+                    let mask = (1u32 << bits) - 1;
+                    if read(mask).is_none() {
+                        break;
+                    }
+                    best = mask;
+                }
+                best
+            });
+            if let Some(s) = read(mask) {
+                // 255 °C (0xFF00) oznacza czujnik bez odczytu.
+                let temp = |i: usize| {
+                    let raw = s.temperatures[i];
+                    (mask >> i & 1 == 1 && raw > 0 && raw < 255 * 256).then(|| raw as f32 / 256.0)
+                };
+                if temp(0).is_some() {
+                    // Ampere/Ada: 0 = rdzeń, 1 = hotspot, 9 = pamięć.
+                    m.hotspot_c = temp(SENSOR_HOTSPOT);
+                    m.details.mem_temp_c = temp(SENSOR_MEMORY);
+                } else {
+                    // Blackwell (RTX 50, zmierzone na RTX 5070): 0 i 9 puste,
+                    // 1 = rdzeń (bez hotspotu), 2 = pamięć - jak w GPU-Z.
+                    m.details.mem_temp_c = temp(SENSOR_MEMORY_BLACKWELL);
                 }
             }
         }
 
         if let Some(nvml) = &self.nvml {
             let name = self.names.get(gpu).map(String::as_str).unwrap_or("");
-            let reading = nvml.read(gpu, name);
-            m.power_w = reading.power_w;
-            m.fan_pct = reading.fan_pct;
+            let r = nvml.read(gpu, name);
+            m.power_w = r.power_w;
+            m.fan_pct = r.fan_pct;
+            let d = &mut m.details;
+            d.mem_temp_c = r.mem_temp_c.or(d.mem_temp_c);
+            d.mem_used_mb = r.mem_used_mb;
+            d.mem_total_mb = r.mem_total_mb;
+            d.pcie_tx_mbs = r.pcie_tx_mbs;
+            d.pcie_rx_mbs = r.pcie_rx_mbs;
+            d.pcie_gen = r.pcie_gen;
+            d.pcie_width = r.pcie_width;
+            d.mem_ctrl_pct = r.mem_ctrl_pct;
+            d.encoder_pct = r.encoder_pct;
+            d.decoder_pct = r.decoder_pct;
+            d.video_mhz = r.video_mhz;
+            d.pstate = r.pstate;
+            d.tdp_w = r.tdp_w;
+            d.limit = r.limit_reasons.map(super::nvml::limit_text);
+            if let (Some(w), Some(tdp)) = (r.power_w, r.tdp_w.filter(|&t| t > 0.0)) {
+                d.power_pct_tdp = Some(w / tdp * 100.0);
+            }
+        }
+
+        // Moc samego układu GPU: udział domeny GPU względem całej karty z
+        // topologii mocy, przeliczony na waty poboru całej karty.
+        if let (Some(f), Some(board_w)) = (self.get_topology, m.power_w) {
+            let mut t: PowerTopology = unsafe { zeroed() };
+            t.version = ver::<PowerTopology>(1);
+            if unsafe { f(h, &mut t) } == 0 {
+                let entries = &t.entries[..(t.count as usize).min(4)];
+                let share = |d: u32| entries.iter().find(|e| e.domain == d).map(|e| e.power);
+                if let (Some(chip), Some(board)) = (share(0), share(1).filter(|&b| b > 0)) {
+                    m.details.chip_power_w = Some(board_w * chip as f32 / board as f32);
+                }
+            }
         }
         if let Some(fan) = self.fan(gpu) {
             m.fan_rpm = fan.rpm;
@@ -571,8 +660,16 @@ impl Backend for NvApi {
 
         let mut u: Usages = unsafe { zeroed() };
         u.version = ver::<Usages>(1);
-        if call("usages", self.get_usages, h, &mut u).is_ok() && u.utilization[0].present & 1 == 1 {
-            m.usage_pct = Some(u.utilization[0].percent);
+        if call("usages", self.get_usages, h, &mut u).is_ok() {
+            // Domeny: 0 = GPU, 1 = pamięć (FB), 2 = wideo, 3 = magistrala.
+            let usage = |i: usize| {
+                let e = u.utilization[i];
+                (e.present & 1 == 1).then_some(e.percent)
+            };
+            m.usage_pct = usage(0);
+            m.details.mem_ctrl_pct = m.details.mem_ctrl_pct.or(usage(1));
+            m.details.video_pct = usage(2);
+            m.details.bus_pct = usage(3);
         }
 
         m
@@ -737,5 +834,61 @@ impl Backend for NvApi {
             h,
             &mut *table,
         )
+    }
+}
+
+#[cfg(test)]
+mod hardware {
+    //! Odczyt wszystkich czujników karty (tylko odczyt):
+    //! `cargo test nvapi_monitor -- --ignored --nocapture`.
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn nvapi_monitor() {
+        let mut api = NvApi::load().expect("NVAPI");
+        if let (Some(f), Ok(h)) = (api.get_sensors, api.handle(0)) {
+            let mut s: ThermalSensors = unsafe { zeroed() };
+            s.version = ver::<ThermalSensors>(2);
+            s.mask = 0x1ffff;
+            let st = unsafe { f(h, &mut s) };
+            let t: Vec<String> = s.temperatures[..17]
+                .iter()
+                .map(|r| format!("{:.1}", *r as f32 / 256.0))
+                .collect();
+            println!("sensors {st}: {}", t.join(" "));
+        }
+        for _ in 0..2 {
+            let t = std::time::Instant::now();
+            let m = api.monitor(0);
+            println!("czas odczytu {:?}", t.elapsed());
+            if let Some(n) = &api.nvml {
+                let t = std::time::Instant::now();
+                n.read(0, "");
+                println!("  w tym NVML {:?}", t.elapsed());
+            }
+            let d = &m.details;
+            println!(
+                "temp {:?} hotspot {:?} mem {:?} | core {:?} mem {:?} video {:?} MHz | {:?} mV",
+                m.temp_c,
+                m.hotspot_c,
+                d.mem_temp_c,
+                m.core_mhz,
+                m.mem_mhz,
+                d.video_mhz,
+                m.voltage_mv
+            );
+            println!(
+                "fan {:?} RPM {:?} % | VRAM {:?}/{:?} MB | PCIe TX {:?} RX {:?} MB/s gen {:?} x{:?}",
+                m.fan_rpm, m.fan_pct, d.mem_used_mb, d.mem_total_mb, d.pcie_tx_mbs, d.pcie_rx_mbs,
+                d.pcie_gen, d.pcie_width
+            );
+            println!(
+                "load GPU {:?} MC {:?} VE {:?} BUS {:?} ENC {:?} DEC {:?} | power {:?} W chip {:?} W {:?} % TDP {:?} W | P{:?} limit {:?} | maska {:#x}",
+                m.usage_pct, d.mem_ctrl_pct, d.video_pct, d.bus_pct, d.encoder_pct, d.decoder_pct,
+                m.power_w, d.chip_power_w, d.power_pct_tdp, d.tdp_w, d.pstate, d.limit,
+                api.sensor_mask.unwrap_or(0)
+            );
+        }
     }
 }

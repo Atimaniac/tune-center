@@ -17,6 +17,35 @@ pub struct Monitor {
     pub fan_pct: Option<u32>,
     /// Pobór mocy karty w watach.
     pub power_w: Option<f32>,
+    /// Dodatkowe odczyty (karty Nvidia: NVML i NVAPI).
+    pub details: Details,
+}
+
+/// Szczegółowe odczyty karty do widoku czujników (jak w GPU-Z).
+#[derive(Default, Clone)]
+pub struct Details {
+    pub mem_temp_c: Option<f32>,
+    pub mem_used_mb: Option<u32>,
+    pub mem_total_mb: Option<u32>,
+    pub pcie_tx_mbs: Option<f32>,
+    pub pcie_rx_mbs: Option<f32>,
+    pub pcie_gen: Option<u32>,
+    pub pcie_width: Option<u32>,
+    /// Obciążenie kontrolera pamięci, silnika wideo i magistrali (%).
+    pub mem_ctrl_pct: Option<u32>,
+    pub video_pct: Option<u32>,
+    pub bus_pct: Option<u32>,
+    pub encoder_pct: Option<u32>,
+    pub decoder_pct: Option<u32>,
+    pub video_mhz: Option<u32>,
+    /// Moc samego układu GPU (W).
+    pub chip_power_w: Option<f32>,
+    /// Pobór mocy w % domyślnego limitu (TDP) i sam limit.
+    pub power_pct_tdp: Option<f32>,
+    pub tdp_w: Option<f32>,
+    pub pstate: Option<u32>,
+    /// Przyczyny ograniczania zegarów (tekst, np. "Idle", "Pwr").
+    pub limit: Option<String>,
 }
 
 /// Stan wentylatora karty odczytany ze sterownika.
@@ -151,6 +180,26 @@ impl Backend for Demo {
             fan_rpm: Some(1180),
             fan_pct: Some(38),
             power_w: Some(142.0),
+            details: Details {
+                mem_temp_c: Some(62.0),
+                mem_used_mb: Some(3412),
+                mem_total_mb: Some(12227),
+                pcie_tx_mbs: Some(210.0),
+                pcie_rx_mbs: Some(1450.0),
+                pcie_gen: Some(5),
+                pcie_width: Some(16),
+                mem_ctrl_pct: Some(31),
+                video_pct: Some(0),
+                bus_pct: Some(6),
+                encoder_pct: Some(0),
+                decoder_pct: Some(0),
+                video_mhz: Some(1800),
+                chip_power_w: Some(98.0),
+                power_pct_tdp: Some(56.8),
+                tdp_w: Some(250.0),
+                pstate: Some(0),
+                limit: Some("Pwr".into()),
+            },
         }
     }
 

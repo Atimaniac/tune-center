@@ -18,7 +18,7 @@
 ; aktualizacji program jest uruchamiany ponownie.
 
 #define AppName "Tune Center"
-#define AppVersion "0.17.5"
+#define AppVersion "0.17.6"
 #define AppGuid "2F9C1B7A-4D3E-4E8B-B1C6-7A5D0E9F3C42"
 #define AppExe "tunecenter.exe"
 
@@ -26,6 +26,14 @@
 AppId={{{#AppGuid}}
 AppName={#AppName}
 AppVersion={#AppVersion}
+AppPublisher=Atimaniac
+AppPublisherURL=https://github.com/Atimaniac/tune-center
+AppSupportURL=https://github.com/Atimaniac/tune-center/issues
+AppUpdatesURL=https://github.com/Atimaniac/tune-center/releases
+AppCopyright=Copyright (C) 2026 Atimaniac
+VersionInfoCompany=Atimaniac
+VersionInfoProductName={#AppName}
+VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -105,9 +113,9 @@ Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Registry]
-; Program zawsze startuje z uprawnieniami administratora (pytanie UAC),
-; bez klikania "Uruchom jako administrator".
-Root: HKLM; Subkey: "SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers"; ValueType: string; ValueName: "{app}\{#AppExe}"; ValueData: "~ RUNASADMIN"; Flags: uninsdeletevalue
+; Program startuje bez uprawnien administratora (od 0.17.6). Usuwa wpis
+; "zawsze jako administrator" dodawany przez starsze wersje instalatora.
+Root: HKLM; Subkey: "SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers"; ValueType: none; ValueName: "{app}\{#AppExe}"; Flags: deletevalue uninsdeletevalue
 
 [Run]
 Filename: "{cmd}"; Parameters: "/C winget install --id Microsoft.DotNet.Runtime.8 --exact --silent --accept-package-agreements --accept-source-agreements"; StatusMsg: "{cm:StatusDotNet}"; Tasks: dotnet; Flags: waituntilterminated

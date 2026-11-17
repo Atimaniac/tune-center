@@ -49,8 +49,11 @@ W PowerShell, w katalogu projektu:
     .\build.ps1
 
 Gotowy program trafia do `dist\`. Pliki `tunecenter.exe` i `sensor-bridge.exe`
-muszą leżeć w tym samym katalogu. Uruchom `dist\tunecenter.exe` jako
-administrator (prawy przycisk -> "Uruchom jako administrator").
+muszą leżeć w tym samym katalogu. Uruchom `dist\tunecenter.exe`. Program działa bez uprawnień
+administratora (karta graficzna, panel Nvidia, kompilacja shaderów, dyski);
+administrator jest potrzebny do zakładki CPU, temperatury i mocy procesora,
+wentylatorów płyty głównej, zmiany HAGS i autostartu - przycisk "Uruchom
+jako administrator" w pasku stanu uruchamia program ponownie z pytaniem UAC.
 
 Parametry:
 
@@ -68,7 +71,8 @@ Powstanie `installer-output\TuneCenter-Setup.exe`. Instalator:
 - kopiuje program do `C:\Program Files\Tune Center` i tworzy skrót w menu Start,
 - sprawdza, czy są .NET 8 Runtime i sterownik PawnIO; brakujące proponuje
   zainstalować (pola wyboru), pobierając je przez `winget`,
-- ustawia program tak, by zawsze startował jako administrator,
+- podaje wydawcę "Atimaniac" (Programy i funkcje, właściwości pliku),
+- usuwa wpis "zawsze jako administrator" ze starszych wersji,
 - przy odinstalowaniu usuwa zadanie autostartu i pliki ustawień.
 
 Sterownika Nvidia instalator nie instaluje.
@@ -96,7 +100,15 @@ Podzakładka Overclock jest pierwsza w zakładce NVIDIA i działa także na
 kartach AMD oraz wtedy, gdy pozostałe podzakładki (panel Nvidia) są
 niedostępne.
 
-- **Informacje**: temperatura, użycie, zegary, napięcie, aktywne offsety.
+- **Informacje**: czujniki karty jak w GPU-Z - nazwa, wartość (bieżąca,
+  najmniejsza, największa albo średnia) i wykres z 2 minut: zegary GPU,
+  pamięci i wideo, temperatury GPU, hotspot i pamięci, wentylator (% i RPM),
+  zajęta pamięć, przepływ PCIe TX/RX, obciążenie GPU, kontrolera pamięci,
+  silnika wideo, magistrali, enkodera i dekodera, pobór mocy karty i układu
+  GPU, % TDP, napięcie, przyczyna ograniczenia zegarów, stan P, łącze PCIe,
+  temperatura CPU i zajęta pamięć systemu; poniżej aktywne offsety. Źródła:
+  NVML (oficjalne), NVAPI, Windows. Moc na złączu 16-pin i w slocie PCIe
+  oraz ich napięcia nie są dostępne w publicznym API Nvidii.
 - **Zegary**: offset rdzenia i pamięci; zakresy suwaków podaje sterownik.
 - **Krzywa V/F**:
   - przeciągnij punkt w pionie, aby zmienić zegar przy danym napięciu,
