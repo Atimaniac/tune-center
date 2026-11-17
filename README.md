@@ -548,8 +548,10 @@ W zakładce NVIDIA > Overclock > Informacje:
   komputera.
 - **Resizable BAR** - tylko odczyt. Program sprawdza rozmiar okna pamięci
   przydzielonego karcie: 256 MB oznacza wyłączony, większe okno - włączony.
-  Odczyt wykonuje jednorazowo przy starcie, w tle, wbudowany w Windows
-  PowerShell; gdy się nie powiedzie, w wierszu jest "nieznane".
+  Rozmiar pochodzi z zasobów przydzielonych karcie przez Windows (CfgMgr32,
+  jak karta "Zasoby" w Menedżerze urządzeń, z dużymi oknami 64-bitowymi),
+  odczytywanych raz przy starcie, w tle; gdy się nie uda, w wierszu jest
+  "nieznane".
   Resizable BAR włącza się w BIOS-ie płyty głównej.
 
 ## Znane ograniczenia
