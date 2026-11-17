@@ -532,13 +532,6 @@ fn unavailable(ui: &mut egui::Ui, label: &str, details: &str) {
 /// Panel odczytów jak w Intel XTU (wątek `cpu::monitor`).
 fn monitor_section(ui: &mut egui::Ui, readings: Option<&crate::cpu::monitor::Readings>) {
     use crate::i18n::tr;
-    ui.label(
-        RichText::new(tr("Monitor (jak w Intel XTU)", "Monitor (like Intel XTU)"))
-            .size(17.0)
-            .strong()
-            .color(theme::text()),
-    );
-    ui.add_space(6.0);
     let Some(r) = readings else {
         ui.label(
             RichText::new(tr("Uruchamianie odczytów...", "Starting readings...")).color(muted()),
