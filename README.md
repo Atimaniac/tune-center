@@ -230,11 +230,15 @@ udostępnia pobierania gotowych shaderów; Tune Center czyta je z plików gry.
   Unity. Active Matter: 8632 shadery, ok. 90 s.
 - **"Wyczyść shadery"** (obok "Kompiluj shadery", z potwierdzeniem "Czy jesteś
   pewny, że chcesz wyczyścić?") usuwa skompilowane shadery gry z pamięci
-  podręcznej sterownika Nvidia (DX11 i DX12). Nazwy plików w `DXCache`
+  podręcznej sterownika Nvidia (`DXCache`) i Windows (`D3DSCache`, m.in.
+  shadery DX12 skompilowane przez SCSKiller), dla DX11 i DX12. Nazwy plików w `DXCache`
   zawierają skrót nazwy .exe, którego algorytmu Nvidia nie publikuje, więc
   program ustala je pomiarem: kopia programu nazwana jak gra tworzy
   urządzenia D3D11 i D3D12, a pliki, które sterownik wtedy otworzył (i
   kolejne numery tego samego skrótu), należą do gry. Gra musi być zamknięta.
+  Foldery `D3DSCache` (bazy SQLite, osobna dla każdej ścieżki .exe) są
+  rozpoznawane po zapisanej w nich ścieżce programu - usuwane są wszystkie
+  z nazwą exe gry: sama gra, kopie robocze SCSKiller i kompilacje Tune Center.
 - **Wybór API (AUTO / DX11 / DX12)** w szczegółach gry. AUTO wybiera API, którego
   używa gra (konfiguracja gry albo jej log); DX11 i DX12 wymuszają dane API,
   o ile gra ma do niego shadery - pamięć podręczna sterownika jest osobna dla

@@ -589,8 +589,8 @@ fn compile_ui(
                 egui::Button::new(tr("Wyczyść shadery", "Clean shaders")),
             )
             .on_hover_text(crate::trf!(
-                "Usuwa skompilowane shadery gry {exe} z pamięci podręcznej sterownika Nvidia (DirectX 11 i 12).",
-                "Removes the compiled shaders of {exe} from the Nvidia driver cache (DirectX 11 and 12)."
+                "Usuwa skompilowane shadery gry {exe} z pamięci podręcznej sterownika Nvidia i Windows (DXCache i D3DSCache, DirectX 11 i 12).",
+                "Removes the compiled shaders of {exe} from the Nvidia driver and Windows caches (DXCache and D3DSCache, DirectX 11 and 12)."
             ))
             .clicked()
         {
@@ -616,8 +616,8 @@ fn compile_ui(
             );
             ui.add_space(6.0);
             ui.label(crate::trf!(
-                "Skompilowane shadery gry {exe} zostaną usunięte z pamięci podręcznej sterownika Nvidia (DirectX 11 i 12). Gra skompiluje je ponownie w trakcie rozgrywki - albo użyj \"Kompiluj shadery\". Gra musi być zamknięta.",
-                "The compiled shaders of {exe} will be removed from the Nvidia driver cache (DirectX 11 and 12). The game will compile them again while playing - or use \"Compile shaders\". The game must be closed."
+                "Skompilowane shadery gry {exe} zostaną usunięte z pamięci podręcznej sterownika Nvidia i Windows (DXCache i D3DSCache, DirectX 11 i 12). Gra skompiluje je ponownie w trakcie rozgrywki - albo użyj \"Kompiluj shadery\". Gra musi być zamknięta.",
+                "The compiled shaders of {exe} will be removed from the Nvidia driver and Windows caches (DXCache and D3DSCache, DirectX 11 and 12). The game will compile them again while playing - or use \"Compile shaders\". The game must be closed."
             ));
             ui.add_space(10.0);
             ui.horizontal(|ui| {

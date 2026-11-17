@@ -723,6 +723,85 @@ impl Clean {
     }
 }
 
+/// Ścieżki .exe zapisane w bazie pamięci podręcznej shaderów Windows
+/// (`D3DSCache\<skrót>\*.dxcache` = SQLite; tabela `app_id(exe_path, ...)`
+/// leży w pierwszych stronach pliku, tekst ASCII).
+pub fn dxcache_exe_paths(bytes: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 3 < bytes.len() {
+        if bytes[i].is_ascii_alphabetic() && bytes[i + 1] == b':' && bytes[i + 2] == b'\\' {
+            let mut end = i + 3;
+            while end < bytes.len() && (0x20..0x7F).contains(&bytes[end]) && end - i < 520 {
+                end += 1;
+            }
+            let text = String::from_utf8_lossy(&bytes[i..end]);
+            let lower = text.to_ascii_lowercase();
+            if let Some(pos) = lower.find(".exe") {
+                out.push(text[..pos + 4].to_string());
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Foldery `D3DSCache` należące do programu o nazwie pliku `exe` (z dowolnej
+/// ścieżki: gra, kopie robocze SCSKiller, kompilacja Tune Center).
+fn d3dscache_folders(exe: &str) -> Vec<PathBuf> {
+    use std::io::Read;
+    let Some(local) = std::env::var_os("LOCALAPPDATA") else {
+        return Vec::new();
+    };
+    let root = PathBuf::from(local).join("D3DSCache");
+    let wanted = exe.to_lowercase();
+    let mut out = Vec::new();
+    for dir in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+        let dir = dir.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let matches = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|f| {
+                let path = f.path();
+                if path.extension().is_none_or(|e| e != "dxcache") {
+                    return false;
+                }
+                let mut buf = Vec::new();
+                let read = std::fs::File::open(&path)
+                    .and_then(|file| file.take(256 * 1024).read_to_end(&mut buf));
+                read.is_ok()
+                    && dxcache_exe_paths(&buf).iter().any(|p| {
+                        p.rsplit('\\')
+                            .next()
+                            .is_some_and(|name| name.to_lowercase() == wanted)
+                    })
+            });
+        if matches {
+            out.push(dir);
+        }
+    }
+    out
+}
+
+fn dir_size(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.metadata().ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .sum()
+}
+
 /// Pliki pamięci podręcznej gry ustalone pomiarem, potem usunięte.
 /// Zwraca (usunięte pliki, bajty, pliki zajęte przez inny proces).
 fn clean_game(exe: &str) -> Result<(usize, u64, usize), String> {
@@ -782,6 +861,19 @@ fn clean_game(exe: &str) -> Result<(usize, u64, usize), String> {
                 bytes += len;
             }
             Err(_) => locked += 1,
+        }
+    }
+    // Pamięć podręczna shaderów Windows (D3DSCache): DirectX 12 gry, kopie
+    // robocze SCSKiller i nasze kompilacje - folder na każdą ścieżkę .exe.
+    for dir in d3dscache_folders(exe) {
+        let size = dir_size(&dir);
+        let count = std::fs::read_dir(&dir).map(|r| r.count()).unwrap_or(0);
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => {
+                files += count;
+                bytes += size;
+            }
+            Err(_) => locked += count.max(1),
         }
     }
     Ok((files, bytes, locked))
@@ -856,6 +948,9 @@ pub fn process_running(exe_name: &str) -> bool {
 /// Kopia Tune Center nazwana jak gra, w osobnym katalogu tymczasowym.
 fn staged_host(exe_name: &str) -> Result<PathBuf, String> {
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
+    // Testy sprzętowe: plik testowy nie jest programem - wskazujemy tunecenter.exe.
+    #[cfg(test)]
+    let me = std::env::var_os("TC_HOST_EXE").map_or(me, PathBuf::from);
     let dir = std::env::temp_dir().join("TuneCenter").join("warm");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let target = dir.join(exe_name);
@@ -1016,6 +1111,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn finds_exe_paths_in_d3dscache_db() {
+        let mut db = vec![0u8, 7, 21];
+        db.extend_from_slice(br#"D:\Steam\steamapps\common\Last Epoch\Last Epoch.exe"#);
+        db.extend_from_slice(&[0, 1, b'x']);
+        db.extend_from_slice(br#"C:\nope\file.txt"#);
+        db.push(0);
+        assert_eq!(
+            dxcache_exe_paths(&db),
+            vec![r#"D:\Steam\steamapps\common\Last Epoch\Last Epoch.exe"#.to_string()]
+        );
+    }
+
+    #[test]
     fn cache_file_family() {
         assert_eq!(cache_key("1c68a91ac748b201.nvph"), Some(0xC748_B201));
         assert_eq!(cache_key("0002a91a62c6cdf9.nvph"), Some(0x62C6_CDF9));
@@ -1053,5 +1161,32 @@ mod tests {
             shared.lock().unwrap().phase,
             Phase::Failed("brak karty".into())
         );
+    }
+}
+
+#[cfg(test)]
+mod clean_hardware {
+    //! Czyszczenie pamięci podręcznej gry (USUWA pliki!):
+    //! `TC_CLEAN_EXE=PillarsOfEternity.exe cargo test clean_game_cache -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn clean_game_cache() {
+        let exe = std::env::var("TC_CLEAN_EXE").expect("TC_CLEAN_EXE");
+        println!("foldery D3DSCache: {:?}", super::d3dscache_folders(&exe));
+        println!("wynik: {:?}", super::clean_game(&exe));
+    }
+}
+
+#[cfg(test)]
+mod clean_list {
+    //! Bez usuwania: foldery D3DSCache gry.
+    //! `TC_CLEAN_EXE=<exe> cargo test d3dscache_list -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn d3dscache_list() {
+        let exe = std::env::var("TC_CLEAN_EXE").expect("TC_CLEAN_EXE");
+        for d in super::d3dscache_folders(&exe) {
+            println!("{} {} MB", d.display(), super::dir_size(&d) >> 20);
+        }
     }
 }
