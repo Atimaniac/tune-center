@@ -442,6 +442,32 @@ impl SensorsView {
             );
             p.rect_filled(bar, 0.0, color);
         }
+        // Wartość w miejscu wskazanym kursorem: pionowa linia i dymek.
+        let graph = ui.interact(
+            graph_rect,
+            ui.scope_id().with((name, "graph")),
+            Sense::hover(),
+        );
+        if let Some(pos) = graph.hover_pos() {
+            let back = ((inner.right() - pos.x) / step).floor() as usize;
+            if back < n {
+                let i = n - 1 - back;
+                let x = inner.right() - (back as f32 + 0.5) * step;
+                p.line_segment(
+                    [Pos2::new(x, inner.top()), Pos2::new(x, inner.bottom())],
+                    Stroke::new(1.0, theme::text()),
+                );
+                let text = match series[i] {
+                    Some(v) => fmt(v),
+                    None => "—".into(),
+                };
+                let ago = crate::trf!("{} s temu", "{} s ago", back);
+                graph.on_hover_ui_at_pointer(|ui| {
+                    ui.label(RichText::new(text).strong());
+                    ui.label(RichText::new(ago).small().color(theme::muted()));
+                });
+            }
+        }
         ui.interact(label_rect, ui.scope_id().with(name), Sense::hover())
             .on_hover_text(crate::trf!("Źródło: {source}", "Source: {source}"));
     }

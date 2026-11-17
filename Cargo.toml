@@ -1,6 +1,6 @@
 [package]
 name = "tunecenter"
-version = "0.17.9"
+version = "0.18.0"
 edition = "2021"
 description = "Tune Center: karta graficzna (Nvidia, AMD), wentylatory, czujniki i pobor mocy w jednym oknie (Windows)"
 
@@ -47,3 +47,6 @@ winresource = "0.1"
 opt-level = 3
 lto = true
 strip = true
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["webp", "png", "ico", "bmp"] }

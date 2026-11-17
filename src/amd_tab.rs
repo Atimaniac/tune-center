@@ -86,7 +86,8 @@ impl AmdTab {
             layout: None,
             confirmed: [false; 3],
             limits_loaded: false,
-            armed: false,
+            // Zapis dostępny od razu (bez "odblokuj zapis"), jak w zakładce karty.
+            armed: true,
             status: String::new(),
         };
         tab.reload();
@@ -277,15 +278,6 @@ impl AmdTab {
                 .clicked()
             {
                 action = Some(Action::Reload);
-            }
-            if self.driver.is_ok() {
-                ui.checkbox(
-                    &mut self.armed,
-                    crate::i18n::tr(
-                        "Rozumiem ryzyko, odblokuj zapis",
-                        "I understand the risk, unlock writing",
-                    ),
-                );
             }
         });
         ui.add_space(6.0);

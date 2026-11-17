@@ -1739,10 +1739,21 @@ checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
+ "image-webp",
  "moxcms",
  "num-traits",
  "png 0.18.1",
  "tiff",
+]
+
+[[package]]
+name = "image-webp"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
+dependencies = [
+ "byteorder-lite",
+ "quick-error",
 ]
 
 [[package]]
@@ -3537,9 +3548,10 @@ dependencies = [
 
 [[package]]
 name = "tunecenter"
-version = "0.17.9"
+version = "0.18.0"
 dependencies = [
  "eframe",
+ "image",
  "libloading 0.8.9",
  "lz4_flex",
  "rfd",

@@ -237,7 +237,28 @@ udostępnia pobierania gotowych shaderów; Tune Center czyta je z plików gry.
 Program rozpoznaje producenta procesora i pokazuje tylko jego opcje: na
 Ryzenie nie ma ustawień Intela i odwrotnie. Ustawienia trafiają do procesora
 przez sterownik PawnIO i jego oficjalne moduły (pobierane przez `build.ps1`
-do `dist\modules\`).
+do `dist\modules\`; przy nowszym wydaniu PawnIO.Modules moduły są pobierane
+ponownie). Pola ustawień są od razu wypełnione wartościami odczytanymi z
+procesora i można je zmieniać bez dodatkowego odblokowania.
+
+### Monitor (jak w Intel XTU)
+
+Na górze zakładki CPU (procesory Intel) są odczyty co sekundę - te same, które
+pokazuje Intel XTU. XTU czyta je własnym sterownikiem (`iocbios2.sys`, lista
+czujników w `IntelOverclockingSDK`), z rejestrów MSR opisanych w Intel SDM;
+Tune Center czyta te same rejestry przez moduł PawnIO `IntelMSR.bin`:
+
+| Odczyt | Rejestr |
+| --- | --- |
+| Temperatura pakietu, TjMax | 0x1B1, 0x1A2 |
+| Temperatura każdego rdzenia | 0x19C (na danym rdzeniu) |
+| Moc pakietu / rdzeni / grafiki | liczniki energii RAPL 0x611 / 0x639 / 0x641, jednostki 0x606 |
+| Napięcie rdzenia (VID) | 0x198 |
+| Zegar każdego rdzenia, maks. P i E | APERF/MPERF (0xE8/0xE7), zegar bazowy 0xCE |
+| Zegar cache (ring) | 0x621 |
+| Aktywne ograniczenia (temperatura, PL1, PL2, prąd/EDP, VR...) | 0x64F |
+
+Wymaga administratora i PawnIO.
 
 ### AMD Ryzen
 

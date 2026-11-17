@@ -18,7 +18,7 @@
 ; aktualizacji program jest uruchamiany ponownie.
 
 #define AppName "Tune Center"
-#define AppVersion "0.17.9"
+#define AppVersion "0.18.0"
 #define AppGuid "2F9C1B7A-4D3E-4E8B-B1C6-7A5D0E9F3C42"
 #define AppExe "tunecenter.exe"
 
@@ -41,6 +41,8 @@ UninstallDisplayIcon={app}\{#AppExe}
 OutputDir=installer-output
 OutputBaseFilename=TuneCenter-Setup
 SetupIconFile=assets\icon.ico
+WizardImageFile=assets\wizard-large.bmp
+WizardSmallImageFile=assets\wizard-small.bmp
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

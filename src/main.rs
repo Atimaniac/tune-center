@@ -21,6 +21,8 @@ mod gpu_fans;
 mod hags;
 mod i18n;
 mod leds;
+#[cfg(test)]
+mod logo_tool;
 mod nvcp;
 mod power;
 mod power_tab;
@@ -149,6 +151,8 @@ struct App {
     /// Ostatnie sprawdzenie uruchomił użytkownik przyciskiem - pokazujemy
     /// wtedy także wynik "masz najnowszą wersję" i błędy.
     update_asked: bool,
+    /// Ostatnie sprawdzenie aktualizacji (automatycznie co 15 minut).
+    update_checked: Instant,
 }
 
 impl App {
@@ -240,7 +244,30 @@ impl App {
             meter_tick: Instant::now(),
             updates,
             update_asked: false,
+            update_checked: Instant::now(),
         }
+    }
+
+    /// Sprawdzanie aktualizacji co 15 minut (gdy włączone w OPTIONS), także
+    /// przy oknie w zasobniku. Wynik pokazuje pasek stanu.
+    fn update_logic(&mut self, ctx: &egui::Context) {
+        const EVERY: Duration = Duration::from_secs(15 * 60);
+        if !self.fans.config.check_updates {
+            return;
+        }
+        let elapsed = self.update_checked.elapsed();
+        if elapsed >= EVERY {
+            let idle = matches!(
+                self.updates.state(),
+                update::State::Idle | update::State::UpToDate | update::State::Failed(_)
+            );
+            if idle {
+                let ctx = ctx.clone();
+                self.updates.start(move || ctx.request_repaint());
+            }
+            self.update_checked = Instant::now();
+        }
+        ctx.request_repaint_after(EVERY.saturating_sub(self.update_checked.elapsed()));
     }
 
     /// Podświetlenie LED: wyłączenie przy starcie i wyniki operacji w tle.
@@ -440,7 +467,7 @@ impl App {
 
             let mut check = self.fans.config.check_updates;
             if ui
-                .checkbox(&mut check, crate::i18n::tr("Sprawdzaj aktualizacje przy starcie", "Check for updates at startup"))
+                .checkbox(&mut check, crate::i18n::tr("Sprawdzaj aktualizacje (przy starcie i co 15 minut)", "Check for updates (at startup and every 15 minutes)"))
                 .changed()
             {
                 self.fans.config.check_updates = check;
@@ -449,8 +476,8 @@ impl App {
             option_note(
                 ui,
                 crate::i18n::tr(
-                    "Przy starcie program pyta GitHub o najnowsze wydanie i pokazuje informację na dole okna, gdy jest nowsza wersja. Niczego nie pobiera sam.",
-                    "At startup the program asks GitHub for the latest release and shows a note at the bottom of the window when a newer version exists. It downloads nothing on its own.",
+                    "Przy starcie i potem co 15 minut program pyta GitHub o najnowsze wydanie i pokazuje na dole okna informację, że nowsza wersja jest gotowa do zainstalowania. Niczego nie pobiera sam.",
+                    "At startup and then every 15 minutes the program asks GitHub for the latest release and shows a note at the bottom of the window that a newer version is ready to install. It downloads nothing on its own.",
                 ),
             );
         });
@@ -469,8 +496,7 @@ impl App {
                     ui.add_space(14.0);
                     ui.label(
                         RichText::new("TUNE CENTER")
-                            .size(26.0)
-                            .strong()
+                            .font(theme::tab_font(26.0))
                             .color(theme::wordmark()),
                     );
                     ui.label(
@@ -560,6 +586,7 @@ impl eframe::App for App {
     /// `request_repaint` (proces czujników budzi okno co sekundę).
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.leds_logic(ctx);
+        self.update_logic(ctx);
         if self.minimize {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             self.minimize = false;
@@ -618,8 +645,7 @@ impl eframe::App for App {
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new("TUNE CENTER")
-                            .size(26.0)
-                            .strong()
+                            .font(theme::tab_font(26.0))
                             .color(theme::wordmark()),
                     );
                     ui.add_space(14.0);
@@ -752,6 +778,14 @@ impl eframe::App for App {
                                     RichText::new(crate::i18n::tr("co nowego", "what's new"))
                                         .size(12.0),
                                     url,
+                                );
+                                ui.label(
+                                    RichText::new(crate::trf!(
+                                        "Wersja {version} jest gotowa do zainstalowania.",
+                                        "Version {version} is ready to install."
+                                    ))
+                                    .size(12.0)
+                                    .color(accent()),
                                 );
                             }
                             update::State::Available {

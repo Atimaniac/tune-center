@@ -9,6 +9,7 @@
 pub mod amd;
 pub mod codec;
 pub mod intel;
+pub mod monitor;
 pub mod pawnio;
 
 /// Podstawowe informacje o procesorze z CPUID.

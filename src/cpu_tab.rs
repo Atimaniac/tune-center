@@ -67,6 +67,8 @@ pub struct IntelTab {
     iccmax_a: f32,
     armed: bool,
     status: String,
+    /// Odczyty jak w XTU (osobny wątek).
+    monitor: Option<crate::cpu::monitor::Monitor>,
 }
 
 fn module_path() -> Option<std::path::PathBuf> {
@@ -101,9 +103,14 @@ impl IntelTab {
             tau_s: 0.0,
             offsets_mv: Vec::new(),
             iccmax_a: 0.0,
-            armed: false,
+            // Zapis dostępny od razu (bez "odblokuj zapis"), jak w zakładce karty.
+            armed: true,
             status: String::new(),
+            monitor: None,
         };
+        if tab.driver.is_ok() {
+            tab.monitor = module_path().map(crate::cpu::monitor::Monitor::start);
+        }
         tab.reload();
         tab
     }
@@ -237,15 +244,6 @@ impl IntelTab {
             {
                 action = Some(Action::Reload);
             }
-            if self.driver.is_ok() {
-                ui.checkbox(
-                    &mut self.armed,
-                    crate::i18n::tr(
-                        "Rozumiem ryzyko, odblokuj zapis",
-                        "I understand the risk, unlock writing",
-                    ),
-                );
-            }
         });
         ui.add_space(6.0);
 
@@ -262,9 +260,14 @@ impl IntelTab {
             ui.add_space(6.0);
         }
 
+        let readings = self.monitor.as_ref().and_then(|m| m.get());
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(1000));
         egui::ScrollArea::vertical().show(ui, |ui| {
             let avail = ui.available_width();
             let card_w = theme::grid_card_width(avail, 340.0, GAP, 3, MARGIN);
+            monitor_section(ui, readings.as_ref());
+            ui.add_space(18.0);
 
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = Vec2::splat(GAP);
@@ -580,4 +583,127 @@ fn ratio_tiles(ui: &mut egui::Ui, label: &str, ratios: &[u8; 8], color: Color32)
                 });
         }
     });
+}
+
+/// Panel odczytów jak w Intel XTU (wątek `cpu::monitor`).
+fn monitor_section(ui: &mut egui::Ui, readings: Option<&crate::cpu::monitor::Readings>) {
+    use crate::i18n::tr;
+    ui.label(
+        RichText::new(tr("Monitor (jak w Intel XTU)", "Monitor (like Intel XTU)"))
+            .size(17.0)
+            .strong()
+            .color(theme::text()),
+    );
+    ui.add_space(6.0);
+    let Some(r) = readings else {
+        ui.label(
+            RichText::new(tr("Uruchamianie odczytów...", "Starting readings...")).color(muted()),
+        );
+        return;
+    };
+    if let Some(e) = &r.error {
+        error(ui, e);
+        return;
+    }
+    let fmt = |v: Option<f32>, unit: &str, dec: usize| match v {
+        Some(v) => format!("{v:.dec$} {unit}"),
+        None => "—".to_owned(),
+    };
+    let tiles: Vec<(&str, String)> = vec![
+        (
+            tr("Temperatura pakietu", "Package temperature"),
+            fmt(r.package_c, "°C", 0),
+        ),
+        (tr("Moc pakietu", "Package power"), fmt(r.package_w, "W", 1)),
+        (tr("Moc rdzeni", "Core power"), fmt(r.cores_w, "W", 1)),
+        (
+            tr("Moc grafiki", "Graphics power"),
+            fmt(r.graphics_w, "W", 1),
+        ),
+        (
+            tr("Napięcie rdzenia (VID)", "Core voltage (VID)"),
+            fmt(r.vid_v, "V", 3),
+        ),
+        (
+            tr("Zegar cache (ring)", "Cache (ring) clock"),
+            fmt(r.ring_ghz, "GHz", 1),
+        ),
+        (
+            tr("Maks. zegar rdzeni P", "Max P-core clock"),
+            fmt(r.max_core(false).map(|m| m / 1000.0), "GHz", 2),
+        ),
+        (
+            tr("Maks. zegar rdzeni E", "Max E-core clock"),
+            fmt(r.max_core(true).map(|m| m / 1000.0), "GHz", 2),
+        ),
+        ("TjMax", fmt(r.tjmax_c, "°C", 0)),
+        (
+            tr("Ograniczenia teraz", "Limits now"),
+            if r.limits.is_empty() {
+                tr("brak", "none").to_owned()
+            } else {
+                r.limits.join(", ")
+            },
+        ),
+    ];
+    // Kafelki w wierszach - liczba kolumn z szerokości okna.
+    let cols = ((ui.available_width() + 8.0) / (150.0 + 20.0 + 8.0))
+        .floor()
+        .max(1.0) as usize;
+    for row in tiles.chunks(cols) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::splat(8.0);
+            for (name, value) in row {
+                theme::card(10, 10).show(ui, |ui| {
+                    ui.set_width(150.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(*name).size(11.5).color(muted()));
+                        ui.label(
+                            RichText::new(value.as_str())
+                                .size(17.0)
+                                .strong()
+                                .color(accent()),
+                        );
+                    });
+                });
+            }
+        });
+        ui.add_space(8.0);
+    }
+    ui.add_space(8.0);
+    egui::Grid::new("cpu_cores")
+        .num_columns(4)
+        .spacing([28.0, 4.0])
+        .striped(true)
+        .show(ui, |ui| {
+            for h in [
+                tr("Rdzeń", "Core"),
+                tr("Temperatura", "Temperature"),
+                tr("Zegar", "Clock"),
+                "VID",
+            ] {
+                ui.label(RichText::new(h).size(11.5).color(muted()));
+            }
+            ui.end_row();
+            for c in &r.cores {
+                let color = if c.efficient { E_CORE } else { P_CORE };
+                ui.label(RichText::new(&c.label).strong().color(color));
+                let t = RichText::new(fmt(c.temp_c, "°C", 0));
+                ui.label(match c.temp_c {
+                    Some(v) => t.color(theme::temp_color(v)),
+                    None => t,
+                });
+                ui.label(fmt(c.mhz, "MHz", 0));
+                ui.label(fmt(c.vid_v, "V", 3));
+                ui.end_row();
+            }
+        });
+    ui.label(
+        RichText::new(tr(
+            "Te same rejestry procesora co Intel XTU (temperatury 0x19C/0x1B1, liczniki energii RAPL, VID 0x198, zegary APERF/MPERF, ograniczenia 0x64F), czytane co sekundę przez moduł PawnIO IntelMSR.",
+            "The same CPU registers as Intel XTU (temperatures 0x19C/0x1B1, RAPL energy counters, VID 0x198, APERF/MPERF clocks, limits 0x64F), read every second through the PawnIO IntelMSR module.",
+        ))
+        .size(11.5)
+        .color(muted()),
+    );
 }
