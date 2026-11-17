@@ -591,9 +591,14 @@ impl Backend for NvApi {
                     m.hotspot_c = temp(SENSOR_HOTSPOT);
                     m.details.mem_temp_c = temp(SENSOR_MEMORY);
                 } else {
-                    // Blackwell (RTX 50, zmierzone na RTX 5070): 0 i 9 puste,
-                    // 1 = rdzeń (bez hotspotu), 2 = pamięć - jak w GPU-Z.
+                    // Blackwell (RTX 50, zmierzone na RTX 5070 pod obciążeniem):
+                    // 0 i 9 puste, 1 = dokładna temperatura rdzenia (podąża za
+                    // rdzeniem także pod obciążeniem - to nie hotspot), 2 = pamięć
+                    // (całe stopnie, rośnie z opóźnieniem). Hotspotu sterownik RTX 50
+                    // nie udostępnia ani w NVAPI, ani w NVML.
+                    m.details.core_precise_c = temp(SENSOR_HOTSPOT);
                     m.details.mem_temp_c = temp(SENSOR_MEMORY_BLACKWELL);
+                    m.details.hotspot_hidden = true;
                 }
             }
         }
@@ -889,6 +894,187 @@ mod hardware {
                 m.power_w, d.chip_power_w, d.power_pct_tdp, d.tdp_w, d.pstate, d.limit,
                 api.sensor_mask.unwrap_or(0)
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod hotspot_load {
+    //! Który czujnik ThermalGetSensors to hotspot, a który pamięć - pomiar
+    //! pod obciążeniem obliczeniowym (hotspot rośnie razem z rdzeniem):
+    //! `TC_BURN_CSO=<burn.cso> cargo test nvapi_hotspot_load -- --ignored --nocapture`.
+    use super::*;
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::Graphics::Direct3D::*;
+    use windows::Win32::Graphics::Direct3D11::*;
+
+    #[test]
+    #[ignore]
+    fn nvapi_hotspot_load() {
+        let cso = std::fs::read(std::env::var("TC_BURN_CSO").expect("TC_BURN_CSO")).unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s2 = stop.clone();
+        let burner = std::thread::spawn(move || unsafe {
+            let mut dev = None;
+            let mut ctx = None;
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_HARDWARE,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_FLAG(0),
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut dev),
+                None,
+                Some(&mut ctx),
+            )
+            .unwrap();
+            let (dev, ctx) = (dev.unwrap(), ctx.unwrap());
+            let mut cs = None;
+            dev.CreateComputeShader(&cso, None, Some(&mut cs)).unwrap();
+            let desc = D3D11_BUFFER_DESC {
+                ByteWidth: 4096,
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_UNORDERED_ACCESS.0 as u32,
+                MiscFlags: D3D11_RESOURCE_MISC_BUFFER_STRUCTURED.0 as u32,
+                StructureByteStride: 4,
+                ..Default::default()
+            };
+            let mut buf = None;
+            dev.CreateBuffer(&desc, None, Some(&mut buf)).unwrap();
+            let mut uav = None;
+            dev.CreateUnorderedAccessView(&buf.unwrap(), None, Some(&mut uav))
+                .unwrap();
+            ctx.CSSetShader(cs.as_ref(), None);
+            ctx.CSSetUnorderedAccessViews(0, 1, Some(&Some(uav.unwrap())), None);
+            let qd = D3D11_QUERY_DESC {
+                Query: D3D11_QUERY_EVENT,
+                MiscFlags: 0,
+            };
+            let mut q = None;
+            dev.CreateQuery(&qd, Some(&mut q)).unwrap();
+            let q = q.unwrap();
+            while !s2.load(std::sync::atomic::Ordering::Relaxed) {
+                ctx.Dispatch(2048, 1, 1);
+                ctx.End(&q);
+                let mut done = 0u32;
+                while ctx
+                    .GetData(&q, Some(&mut done as *mut u32 as *mut _), 4, 0)
+                    .is_err()
+                    || done == 0
+                {
+                    std::thread::yield_now();
+                }
+            }
+        });
+        let mut api = NvApi::load().unwrap();
+        let h = api.handle(0).unwrap();
+        for step in 0..30 {
+            let mut s: ThermalSensors = unsafe { zeroed() };
+            s.version = ver::<ThermalSensors>(2);
+            s.mask = 0x1ffff;
+            unsafe { api.get_sensors.unwrap()(h, &mut s) };
+            let m = api.monitor(0);
+            println!(
+                "{:>3} s  core {:?}  [1] {:.2}  [2] {:.2}  f308 {:.2}  moc {:?} W  load {:?} %",
+                step * 2,
+                m.temp_c,
+                s.temperatures[1] as f32 / 256.0,
+                s.temperatures[2] as f32 / 256.0,
+                api.nvml
+                    .as_ref()
+                    .and_then(|n| n.field_f64(0, "", 308))
+                    .unwrap_or(-1.0),
+                m.power_w.map(|w| w.round()),
+                m.usage_pct
+            );
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        burner.join().unwrap();
+        for step in 0..5 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let mut s: ThermalSensors = unsafe { zeroed() };
+            s.version = ver::<ThermalSensors>(2);
+            s.mask = 0x1ffff;
+            unsafe { api.get_sensors.unwrap()(h, &mut s) };
+            let m = api.monitor(0);
+            println!(
+                "po {:>2} s  core {:?}  [1] {:.2}  [2] {:.2}",
+                (step + 1) * 2,
+                m.temp_c,
+                s.temperatures[1] as f32 / 256.0,
+                s.temperatures[2] as f32 / 256.0
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod thermal_probe {
+    //! Sprawdza, jakie wersje/rozmiary ThermalGetSensors przyjmuje karta
+    //! (tylko odczyt, bufor większy niż deklarowany rozmiar):
+    //! `cargo test nvapi_thermal_probe -- --ignored --nocapture`.
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn nvapi_thermal_probe() {
+        let api = NvApi::load().unwrap();
+        let h = api.handle(0).unwrap();
+        let f: unsafe extern "C" fn(Handle, *mut u32) -> Status =
+            unsafe { std::mem::transmute(api.get_sensors.unwrap()) };
+        for v in 1..=4u32 {
+            for temps in [32usize, 64, 128] {
+                let size = 8 + 32 + temps * 4;
+                let mut buf = vec![0u32; 2048];
+                buf[0] = size as u32 | (v << 16);
+                buf[1] = u32::MAX;
+                let st = unsafe { f(h, buf.as_mut_ptr()) };
+                if st == 0 {
+                    let vals: Vec<String> = buf[10..10 + temps]
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, &r)| r != 0 && r != 0xFF00)
+                        .map(|(i, &r)| format!("[{i}] {:.2}", r as i32 as f32 / 256.0))
+                        .collect();
+                    println!(
+                        "v{v} rozmiar {size}: maska {:#x} {}",
+                        buf[1],
+                        vals.join(" ")
+                    );
+                } else {
+                    println!("v{v} rozmiar {size}: status {st}");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod thermal_settings_probe {
+    //! Wszystkie czujniki z publicznego NvAPI_GPU_GetThermalSettings:
+    //! `cargo test nvapi_thermal_settings -- --ignored --nocapture`.
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn nvapi_thermal_settings() {
+        let api = NvApi::load().unwrap();
+        let h = api.handle(0).unwrap();
+        let f = api.get_thermal.unwrap();
+        for index in [THERMAL_TARGET_ALL, 0, 1, 2] {
+            let mut t: Thermal = unsafe { zeroed() };
+            t.version = ver::<Thermal>(2);
+            let st = unsafe { f(h, index, &mut t) };
+            print!("indeks {index}: status {st}, liczba {}:", t.count);
+            for s in &t.sensors[..(t.count as usize).min(3)] {
+                print!(
+                    "  [kontroler {} cel {} {} °C]",
+                    s.controller, s.target, s.current
+                );
+            }
+            println!();
         }
     }
 }

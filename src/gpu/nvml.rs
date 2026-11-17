@@ -193,6 +193,20 @@ impl Nvml {
         pick(&names, index, name).map(|i| self.devices[i].0)
     }
 
+    #[cfg(test)]
+    /// Pole NVML typu double (`nvmlDeviceGetFieldValues`, typ wartości 0).
+    pub fn field_f64(&self, index: usize, name: &str, id: u32) -> Option<f64> {
+        let dev = self.device(index, name)?;
+        let f = self.fields?;
+        let mut v = FieldValue {
+            field_id: id,
+            ..Default::default()
+        };
+        // SAFETY: uchwyt z NVML, jedna struktura wyniku.
+        (unsafe { f(dev, 1, &mut v) } == 0 && v.status == 0 && v.value_type == 0)
+            .then(|| f64::from_bits(v.value))
+    }
+
     pub fn read(&self, index: usize, name: &str) -> Reading {
         let Some(dev) = self.device(index, name) else {
             return Reading::default();
@@ -302,5 +316,34 @@ mod tests {
         assert_eq!(pick(&same, 1, "NVIDIA GeForce RTX 5070"), Some(1));
         assert_eq!(pick(&two, 5, "inna"), None);
         assert_eq!(pick(&[], 0, "x"), None);
+    }
+}
+
+#[cfg(test)]
+mod field_probe {
+    //! Przegląd pól NVML (tylko odczyt):
+    //! `cargo test nvml_field_probe -- --ignored --nocapture`.
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn nvml_field_probe() {
+        let n = Nvml::load().expect("NVML");
+        let (dev, _) = n.devices[0];
+        let f = n.fields.expect("nvmlDeviceGetFieldValues");
+        for id in 1..400u32 {
+            let mut v = FieldValue {
+                field_id: id,
+                ..Default::default()
+            };
+            if unsafe { f(dev, 1, &mut v) } == 0 && v.status == 0 {
+                let raw = v.value;
+                let as_f = f64::from_bits(raw);
+                println!(
+                    "pole {id}: typ {} wartość {} (f64 {:.2})",
+                    v.value_type, raw as i64, as_f
+                );
+            }
+        }
     }
 }

@@ -84,7 +84,7 @@ fn rows() -> Vec<Row> {
             "°C",
             1,
             None,
-            |m| m.temp_c.map(|v| v as f32)
+            |m| m.details.core_precise_c.or(m.temp_c.map(|v| v as f32))
         ),
         row!("Hot Spot", "NVAPI", "°C", 1, None, |m| m.hotspot_c),
         row!(
@@ -284,6 +284,19 @@ impl SensorsView {
             let series: Vec<Option<f32>> = history.iter().map(row.value).collect();
             // Wiersze, których karta nie udostępnia (np. hotspot w RTX 50), pomijamy.
             if series.iter().all(Option::is_none) {
+                // Hotspot RTX 50: wiersz zostaje, z wyjaśnieniem braku wartości.
+                let hidden = history.back().is_some_and(|m| m.details.hotspot_hidden);
+                if row.name == "Hot Spot" && hidden {
+                    text_row(
+                        ui,
+                        row.name,
+                        tr(
+                            "NVAPI / NVML. Sterownik kart RTX 50 nie udostępnia hotspotu w swoim API; GPU-Z odczytuje go własnym sterownikiem jądra.",
+                            "NVAPI / NVML. The RTX 50 driver does not expose the hotspot through its API; GPU-Z reads it with its own kernel driver.",
+                        ),
+                        tr("niedostępny na RTX 50 (najedź na nazwę)", "unavailable on RTX 50 (hover the name)"),
+                    );
+                }
                 continue;
             }
             let fmt = |v: f32| format(v, row.decimals, row.unit);

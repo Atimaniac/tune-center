@@ -77,17 +77,29 @@ pub enum Section {
     Sync,
     Performance,
     Quality,
-    Dlss,
     Vr,
+    // Podzakładka DLSS.
+    DlssSr,
+    DlssRr,
+    DlssFg,
+    DlssOther,
 }
 
 impl Section {
-    pub const ALL: [Section; 5] = [
+    /// Sekcje strony "Ustawienia 3D".
+    pub const ALL: [Section; 4] = [
         Section::Sync,
         Section::Performance,
         Section::Quality,
-        Section::Dlss,
         Section::Vr,
+    ];
+
+    /// Sekcje podzakładki DLSS.
+    pub const DLSS: [Section; 4] = [
+        Section::DlssSr,
+        Section::DlssRr,
+        Section::DlssFg,
+        Section::DlssOther,
     ];
 
     pub fn title(self) -> &'static str {
@@ -96,10 +108,13 @@ impl Section {
             Section::Sync => tr("Synchronizacja i opóźnienia", "Sync and latency"),
             Section::Performance => tr("Wydajność", "Performance"),
             Section::Quality => tr("Jakość obrazu", "Image quality"),
-            Section::Dlss => tr(
-                "DLSS (nadpisanie przez sterownik)",
-                "DLSS (driver override)",
+            Section::DlssSr => "DLSS Super Resolution",
+            Section::DlssRr => "DLSS Ray Reconstruction",
+            Section::DlssFg => tr(
+                "DLSS Frame Generation (generowanie klatek)",
+                "DLSS Frame Generation",
             ),
+            Section::DlssOther => tr("Pozostałe", "Other"),
             Section::Vr => tr("Rzeczywistość wirtualna", "Virtual reality"),
         }
     }
@@ -366,76 +381,6 @@ pub static ITEMS: &[Item] = &[
             o("Wysoka", "High", &[(AO_MODE, 3)]),
         ]),
     },
-    // ------------------------------- DLSS ------------------------------
-    Item {
-        section: Section::Dlss,
-        pl: "DLSS Super Resolution - nadpisanie",
-        en: "DLSS Super Resolution - override",
-        help_pl: "Pozwala sterownikowi zmienić model DLSS w grach.",
-        help_en: "Lets the driver change the DLSS model in games.",
-        kind: Kind::Choice(&[
-            o("Wyłączone", "Off", &[(NGX_DLSS_SR_OVERRIDE, 0)]),
-            o("Włączone", "On", &[(NGX_DLSS_SR_OVERRIDE, 1)]),
-        ]),
-    },
-    Item {
-        section: Section::Dlss,
-        pl: "DLSS Super Resolution - model (preset)",
-        en: "DLSS Super Resolution - model (preset)",
-        help_pl: "Działa przy włączonym nadpisaniu. \"Najnowszy\" = zawsze najnowszy model sterownika.",
-        help_en: "Works with the override on. \"Latest\" = always the driver's newest model.",
-        kind: Kind::Choice(&[
-            o("Domyślny gry", "Game default", &[(NGX_DLSS_SR_PRESET, 0)]),
-            o("Najnowszy", "Latest", &[(NGX_DLSS_SR_PRESET, 0x00FF_FFFF)]),
-            o("Preset J", "Preset J", &[(NGX_DLSS_SR_PRESET, 10)]),
-            o("Preset K", "Preset K", &[(NGX_DLSS_SR_PRESET, 11)]),
-            o("Preset L", "Preset L", &[(NGX_DLSS_SR_PRESET, 12)]),
-            o("Preset M", "Preset M", &[(NGX_DLSS_SR_PRESET, 13)]),
-            o("Preset E", "Preset E", &[(NGX_DLSS_SR_PRESET, 5)]),
-            o("Preset F", "Preset F", &[(NGX_DLSS_SR_PRESET, 6)]),
-        ]),
-    },
-    Item {
-        section: Section::Dlss,
-        pl: "DLAA zamiast DLSS",
-        en: "DLAA instead of DLSS",
-        help_pl: "Renderowanie w natywnej rozdzielczości z antyaliasingiem DLSS.",
-        help_en: "Native-resolution rendering with DLSS antialiasing.",
-        kind: Kind::Choice(&[
-            o("Domyślne", "Default", &[(NGX_DLAA_OVERRIDE, 0)]),
-            o("Włączone", "On", &[(NGX_DLAA_OVERRIDE, 1)]),
-        ]),
-    },
-    Item {
-        section: Section::Dlss,
-        pl: "DLSS Ray Reconstruction - nadpisanie",
-        en: "DLSS Ray Reconstruction - override",
-        help_pl: "Pozwala sterownikowi zmienić model Ray Reconstruction.",
-        help_en: "Lets the driver change the Ray Reconstruction model.",
-        kind: Kind::Choice(&[
-            o("Wyłączone", "Off", &[(NGX_DLSS_RR_OVERRIDE, 0)]),
-            o("Włączone", "On", &[(NGX_DLSS_RR_OVERRIDE, 1)]),
-        ]),
-    },
-    Item {
-        section: Section::Dlss,
-        pl: "DLSS Frame Generation - nadpisanie",
-        en: "DLSS Frame Generation - override",
-        help_pl: "Pozwala sterownikowi zmienić generowanie klatek w grach.",
-        help_en: "Lets the driver change frame generation in games.",
-        kind: Kind::Choice(&[
-            o("Wyłączone", "Off", &[(NGX_DLSS_FG_OVERRIDE, 0)]),
-            o("Włączone", "On", &[(NGX_DLSS_FG_OVERRIDE, 1)]),
-        ]),
-    },
-    Item {
-        section: Section::Dlss,
-        pl: "Generowanie wielu klatek - liczba klatek",
-        en: "Multi frame generation - frame count",
-        help_pl: "Ile klatek generować na każdą wyrenderowaną (karty RTX 50). 0 = wyłączone nadpisanie.",
-        help_en: "Generated frames per rendered frame (RTX 50 cards). 0 = override off.",
-        kind: Kind::Number { id: NGX_DLSSG_MULTI_FRAME_COUNT, min: 0, max: 15, zero_pl: "bez nadpisania", zero_en: "no override", unit: "" },
-    },
     // -------------------------------- VR -------------------------------
     Item {
         section: Section::Vr,
@@ -568,3 +513,246 @@ mod tests {
         });
     }
 }
+
+// ------------------------------ DLSS --------------------------------------
+//
+// Nadpisania DLSS takie jak w NVIDIA App. Identyfikatory i wartości z
+// oficjalnego NvApiDriverSettings.h (NVAPI SDK R620, MIT).
+
+pub const NGX_DLSS_SR_MODE: u32 = 0x10AF_B768;
+pub const NGX_DLSS_SR_SCALING_RATIO: u32 = 0x10E4_1DF5;
+pub const NGX_DLSS_RR_PRESET: u32 = 0x10E4_1DF7;
+pub const NGX_DLSS_RR_MODE: u32 = 0x10BD_9423;
+pub const NGX_DLSS_RR_SCALING_RATIO: u32 = 0x10C7_D4A2;
+pub const NGX_DLSS_FG_PRESET: u32 = 0x10E4_1DF1;
+pub const NGX_DLSSG_MODE: u32 = 0x1030_8298;
+pub const NGX_DLSSG_DYNAMIC_TARGET_FPS: u32 = 0x10CF_4125;
+pub const NGX_DLSSG_DYNAMIC_MULTI_FRAME_COUNT_MAX: u32 = 0x1056_2D0F;
+pub const NGX_DLSS_OPTIMAL_SETTINGS: u32 = 0x10AF_B76C;
+pub const SL_DLSS_OVERRIDE: u32 = 0x10E4_1E06;
+
+/// Podzakładka DLSS.
+pub const DLSS_ITEMS: &[Item] = &[
+    Item {
+        section: Section::DlssSr,
+        pl: "Nadpisanie przez sterownik",
+        en: "Driver override",
+        help_pl: "Włącza nadpisywanie ustawień DLSS Super Resolution poniżej (jak nadpisanie DLSS w NVIDIA App). Wyłączone = gra decyduje sama.",
+        help_en: "Turns on the DLSS Super Resolution overrides below (like the DLSS override in NVIDIA App). Off = the game decides.",
+        kind: Kind::Choice(&[
+            o("Wyłączone", "Off", &[(NGX_DLSS_SR_OVERRIDE, 0)]),
+            o("Włączone", "On", &[(NGX_DLSS_SR_OVERRIDE, 1)]),
+        ]),
+    },
+    Item {
+        section: Section::DlssSr,
+        pl: "Model (preset)",
+        en: "Model (preset)",
+        help_pl: "Model sieci DLSS. Najnowszy = zawsze najnowszy model ze sterownika (np. transformer). Działa przy włączonym nadpisaniu.",
+        help_en: "DLSS network model. Latest = always the newest model in the driver (e.g. transformer). Works with the override on.",
+        kind: Kind::Choice(&[
+            o("Ustawienie gry", "Game setting", &[(NGX_DLSS_SR_PRESET, 0)]),
+            o("Najnowszy", "Latest", &[(NGX_DLSS_SR_PRESET, 0x00FF_FFFF)]),
+            o("Preset A", "Preset A", &[(NGX_DLSS_SR_PRESET, 1)]),
+            o("Preset B", "Preset B", &[(NGX_DLSS_SR_PRESET, 2)]),
+            o("Preset C", "Preset C", &[(NGX_DLSS_SR_PRESET, 3)]),
+            o("Preset D", "Preset D", &[(NGX_DLSS_SR_PRESET, 4)]),
+            o("Preset E", "Preset E", &[(NGX_DLSS_SR_PRESET, 5)]),
+            o("Preset F", "Preset F", &[(NGX_DLSS_SR_PRESET, 6)]),
+            o("Preset G", "Preset G", &[(NGX_DLSS_SR_PRESET, 7)]),
+            o("Preset H", "Preset H", &[(NGX_DLSS_SR_PRESET, 8)]),
+            o("Preset I", "Preset I", &[(NGX_DLSS_SR_PRESET, 9)]),
+            o("Preset J", "Preset J", &[(NGX_DLSS_SR_PRESET, 10)]),
+            o("Preset K", "Preset K", &[(NGX_DLSS_SR_PRESET, 11)]),
+            o("Preset L", "Preset L", &[(NGX_DLSS_SR_PRESET, 12)]),
+            o("Preset M", "Preset M", &[(NGX_DLSS_SR_PRESET, 13)]),
+            o("Preset N", "Preset N", &[(NGX_DLSS_SR_PRESET, 14)]),
+            o("Preset O", "Preset O", &[(NGX_DLSS_SR_PRESET, 15)]),
+        ]),
+    },
+    Item {
+        section: Section::DlssSr,
+        pl: "Tryb (jakość / wydajność)",
+        en: "Mode (quality / performance)",
+        help_pl: "Rozdzielczość renderowania wymuszona przez sterownik. DLAA = pełna rozdzielczość. Własna skala używa ustawienia poniżej.",
+        help_en: "Render resolution forced by the driver. DLAA = full resolution. Custom scale uses the setting below.",
+        kind: Kind::Choice(&[
+            o("Ustawienie gry", "Game setting", &[(NGX_DLSS_SR_MODE, 3)]),
+            o("DLAA", "DLAA", &[(NGX_DLSS_SR_MODE, 4)]),
+            o("Jakość", "Quality", &[(NGX_DLSS_SR_MODE, 2)]),
+            o("Zrównoważony", "Balanced", &[(NGX_DLSS_SR_MODE, 1)]),
+            o("Wydajność", "Performance", &[(NGX_DLSS_SR_MODE, 0)]),
+            o("Ultra wydajność", "Ultra Performance", &[(NGX_DLSS_SR_MODE, 5)]),
+            o("Własna skala", "Custom scale", &[(NGX_DLSS_SR_MODE, 6)]),
+        ]),
+    },
+    Item {
+        section: Section::DlssSr,
+        pl: "Własna skala renderowania",
+        en: "Custom render scale",
+        help_pl: "Procent rozdzielczości wyjściowej (33-100) dla trybu Własna skala.",
+        help_en: "Percent of output resolution (33-100) for the Custom scale mode.",
+        kind: Kind::Number { id: NGX_DLSS_SR_SCALING_RATIO, min: 0, max: 100, zero_pl: "domyślna", zero_en: "default", unit: "%" },
+    },
+    Item {
+        section: Section::DlssRr,
+        pl: "Nadpisanie przez sterownik",
+        en: "Driver override",
+        help_pl: "Włącza nadpisywanie ustawień Ray Reconstruction poniżej.",
+        help_en: "Turns on the Ray Reconstruction overrides below.",
+        kind: Kind::Choice(&[
+            o("Wyłączone", "Off", &[(NGX_DLSS_RR_OVERRIDE, 0)]),
+            o("Włączone", "On", &[(NGX_DLSS_RR_OVERRIDE, 1)]),
+        ]),
+    },
+    Item {
+        section: Section::DlssRr,
+        pl: "Model (preset)",
+        en: "Model (preset)",
+        help_pl: "Model sieci Ray Reconstruction. Działa przy włączonym nadpisaniu.",
+        help_en: "Ray Reconstruction network model. Works with the override on.",
+        kind: Kind::Choice(&[
+            o("Ustawienie gry", "Game setting", &[(NGX_DLSS_RR_PRESET, 0)]),
+            o("Najnowszy", "Latest", &[(NGX_DLSS_RR_PRESET, 0x00FF_FFFF)]),
+            o("Preset A", "Preset A", &[(NGX_DLSS_RR_PRESET, 1)]),
+            o("Preset B", "Preset B", &[(NGX_DLSS_RR_PRESET, 2)]),
+            o("Preset C", "Preset C", &[(NGX_DLSS_RR_PRESET, 3)]),
+            o("Preset D", "Preset D", &[(NGX_DLSS_RR_PRESET, 4)]),
+            o("Preset E", "Preset E", &[(NGX_DLSS_RR_PRESET, 5)]),
+            o("Preset F", "Preset F", &[(NGX_DLSS_RR_PRESET, 6)]),
+            o("Preset G", "Preset G", &[(NGX_DLSS_RR_PRESET, 7)]),
+            o("Preset H", "Preset H", &[(NGX_DLSS_RR_PRESET, 8)]),
+            o("Preset I", "Preset I", &[(NGX_DLSS_RR_PRESET, 9)]),
+            o("Preset J", "Preset J", &[(NGX_DLSS_RR_PRESET, 10)]),
+            o("Preset K", "Preset K", &[(NGX_DLSS_RR_PRESET, 11)]),
+            o("Preset L", "Preset L", &[(NGX_DLSS_RR_PRESET, 12)]),
+            o("Preset M", "Preset M", &[(NGX_DLSS_RR_PRESET, 13)]),
+            o("Preset N", "Preset N", &[(NGX_DLSS_RR_PRESET, 14)]),
+            o("Preset O", "Preset O", &[(NGX_DLSS_RR_PRESET, 15)]),
+        ]),
+    },
+    Item {
+        section: Section::DlssRr,
+        pl: "Tryb (jakość / wydajność)",
+        en: "Mode (quality / performance)",
+        help_pl: "Rozdzielczość renderowania dla Ray Reconstruction.",
+        help_en: "Render resolution for Ray Reconstruction.",
+        kind: Kind::Choice(&[
+            o("Ustawienie gry", "Game setting", &[(NGX_DLSS_RR_MODE, 3)]),
+            o("DLAA", "DLAA", &[(NGX_DLSS_RR_MODE, 4)]),
+            o("Jakość", "Quality", &[(NGX_DLSS_RR_MODE, 2)]),
+            o("Zrównoważony", "Balanced", &[(NGX_DLSS_RR_MODE, 1)]),
+            o("Wydajność", "Performance", &[(NGX_DLSS_RR_MODE, 0)]),
+            o("Ultra wydajność", "Ultra Performance", &[(NGX_DLSS_RR_MODE, 5)]),
+            o("Własna skala", "Custom scale", &[(NGX_DLSS_RR_MODE, 6)]),
+        ]),
+    },
+    Item {
+        section: Section::DlssRr,
+        pl: "Własna skala renderowania",
+        en: "Custom render scale",
+        help_pl: "Procent rozdzielczości wyjściowej (33-100) dla trybu Własna skala.",
+        help_en: "Percent of output resolution (33-100) for the Custom scale mode.",
+        kind: Kind::Number { id: NGX_DLSS_RR_SCALING_RATIO, min: 0, max: 100, zero_pl: "domyślna", zero_en: "default", unit: "%" },
+    },
+    Item {
+        section: Section::DlssFg,
+        pl: "Nadpisanie przez sterownik",
+        en: "Driver override",
+        help_pl: "Włącza nadpisywanie generowania klatek poniżej (np. wiele generowanych klatek na kartach RTX 50).",
+        help_en: "Turns on the frame generation overrides below (e.g. multi frame generation on RTX 50 cards).",
+        kind: Kind::Choice(&[
+            o("Wyłączone", "Off", &[(NGX_DLSS_FG_OVERRIDE, 0)]),
+            o("Włączone", "On", &[(NGX_DLSS_FG_OVERRIDE, 1)]),
+        ]),
+    },
+    Item {
+        section: Section::DlssFg,
+        pl: "Model (preset)",
+        en: "Model (preset)",
+        help_pl: "Model generowania klatek.",
+        help_en: "Frame generation model.",
+        kind: Kind::Choice(&[
+            o("Ustawienie gry", "Game setting", &[(NGX_DLSS_FG_PRESET, 0)]),
+            o("Domyślny sterownika", "Driver default", &[(NGX_DLSS_FG_PRESET, 0x00FF_FFFE)]),
+            o("Najnowszy", "Latest", &[(NGX_DLSS_FG_PRESET, 0x00FF_FFFF)]),
+            o("Preset A", "Preset A", &[(NGX_DLSS_FG_PRESET, 1)]),
+            o("Preset B", "Preset B", &[(NGX_DLSS_FG_PRESET, 2)]),
+            o("Preset C", "Preset C", &[(NGX_DLSS_FG_PRESET, 3)]),
+            o("Preset D", "Preset D", &[(NGX_DLSS_FG_PRESET, 4)]),
+            o("Preset E", "Preset E", &[(NGX_DLSS_FG_PRESET, 5)]),
+            o("Preset F", "Preset F", &[(NGX_DLSS_FG_PRESET, 6)]),
+        ]),
+    },
+    Item {
+        section: Section::DlssFg,
+        pl: "Tryb generowania klatek",
+        en: "Frame generation mode",
+        help_pl: "Wymusza tryb generowania klatek. Dynamiczne dobiera liczbę klatek do docelowego FPS.",
+        help_en: "Forces the frame generation mode. Dynamic picks the frame count for the target FPS.",
+        kind: Kind::Choice(&[
+            o("Ustawienie gry", "Game setting", &[(NGX_DLSSG_MODE, 0)]),
+            o("Wyłączone", "Off", &[(NGX_DLSSG_MODE, 1)]),
+            o("Włączone", "On", &[(NGX_DLSSG_MODE, 2)]),
+            o("Automatyczne", "Auto", &[(NGX_DLSSG_MODE, 3)]),
+            o("Dynamiczne", "Dynamic", &[(NGX_DLSSG_MODE, 4)]),
+        ]),
+    },
+    Item {
+        section: Section::DlssFg,
+        pl: "Generowane klatki (mnożnik)",
+        en: "Generated frames (multiplier)",
+        help_pl: "Ile klatek generować na każdą wyrenderowaną: 1 = 2x, 2 = 3x, 3 = 4x (więcej niż 1 tylko karty RTX 50). 0 = ustawienie gry.",
+        help_en: "Generated frames per rendered frame: 1 = 2x, 2 = 3x, 3 = 4x (more than 1 only on RTX 50 cards). 0 = game setting.",
+        kind: Kind::Number { id: NGX_DLSSG_MULTI_FRAME_COUNT, min: 0, max: 15, zero_pl: "ustawienie gry", zero_en: "game setting", unit: "" },
+    },
+    Item {
+        section: Section::DlssFg,
+        pl: "Docelowy FPS (tryb dynamiczny)",
+        en: "Target FPS (dynamic mode)",
+        help_pl: "Liczba klatek na sekundę, do której tryb dynamiczny dobiera generowanie. 0 = wyłączone.",
+        help_en: "Frame rate the dynamic mode aims for. 0 = off.",
+        kind: Kind::Number { id: NGX_DLSSG_DYNAMIC_TARGET_FPS, min: 0, max: 1000, zero_pl: "wyłączony", zero_en: "off", unit: "FPS" },
+    },
+    Item {
+        section: Section::DlssFg,
+        pl: "Maks. generowanych klatek (tryb dynamiczny)",
+        en: "Max generated frames (dynamic mode)",
+        help_pl: "Górna granica mnożnika w trybie dynamicznym. 0 = bez nadpisania.",
+        help_en: "Upper limit of the multiplier in dynamic mode. 0 = no override.",
+        kind: Kind::Number { id: NGX_DLSSG_DYNAMIC_MULTI_FRAME_COUNT_MAX, min: 0, max: 15, zero_pl: "bez nadpisania", zero_en: "no override", unit: "" },
+    },
+    Item {
+        section: Section::DlssOther,
+        pl: "DLAA zamiast DLSS",
+        en: "DLAA instead of DLSS",
+        help_pl: "Starsze nadpisanie: renderowanie w pełnej rozdzielczości z antyaliasingiem DLSS.",
+        help_en: "Older override: full-resolution rendering with DLSS antialiasing.",
+        kind: Kind::Choice(&[
+            o("Domyślne", "Default", &[(NGX_DLAA_OVERRIDE, 0)]),
+            o("Włączone", "On", &[(NGX_DLAA_OVERRIDE, 1)]),
+        ]),
+    },
+    Item {
+        section: Section::DlssOther,
+        pl: "Tryb Wydajność = Ultra wydajność",
+        en: "Performance mode = Ultra Performance",
+        help_pl: "Gdy gra wybiera tryb Wydajność, sterownik używa Ultra wydajność.",
+        help_en: "When the game picks Performance, the driver uses Ultra Performance.",
+        kind: Kind::Choice(&[
+            o("Wyłączone", "Off", &[(NGX_DLSS_OPTIMAL_SETTINGS, 0)]),
+            o("Włączone", "On", &[(NGX_DLSS_OPTIMAL_SETTINGS, 1)]),
+        ]),
+    },
+    Item {
+        section: Section::DlssOther,
+        pl: "Nadpisanie w grach ze Streamline",
+        en: "Override in Streamline games",
+        help_pl: "Pozwala nadpisaniom działać w grach używających NVIDIA Streamline.",
+        help_en: "Lets the overrides work in games that use NVIDIA Streamline.",
+        kind: Kind::Choice(&[
+            o("Wyłączone", "Off", &[(SL_DLSS_OVERRIDE, 0)]),
+            o("Włączone", "On", &[(SL_DLSS_OVERRIDE, 1)]),
+        ]),
+    },
+];

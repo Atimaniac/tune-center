@@ -24,6 +24,10 @@ pub struct Monitor {
 /// Szczegółowe odczyty karty do widoku czujników (jak w GPU-Z).
 #[derive(Default, Clone)]
 pub struct Details {
+    /// Dokładna temperatura rdzenia (°C, z częścią ułamkową), gdy karta ją podaje.
+    pub core_precise_c: Option<f32>,
+    /// Karta nie udostępnia hotspotu w API sterownika (RTX 50).
+    pub hotspot_hidden: bool,
     pub mem_temp_c: Option<f32>,
     pub mem_used_mb: Option<u32>,
     pub mem_total_mb: Option<u32>,
@@ -199,6 +203,8 @@ impl Backend for Demo {
                 tdp_w: Some(250.0),
                 pstate: Some(0),
                 limit: Some("Pwr".into()),
+                core_precise_c: Some(56.4),
+                hotspot_hidden: false,
             },
         }
     }

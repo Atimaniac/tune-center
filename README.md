@@ -151,12 +151,21 @@ Podzakładki poza Overclock są zbudowane wyłącznie na oficjalnym, publicznym 
 (https://github.com/NVIDIA/nvapi, licencja MIT) - bez funkcji
 nieudokumentowanych. Działa niezależnie od trybu `--demo`.
 
+- **DLSS** - nadpisania DLSS jak w NVIDIA App, globalnie albo dla wybranej
+  gry (ten sam wybór profilu co w "Ustawieniach 3D"): Super Resolution
+  (nadpisanie, model/preset - także "Najnowszy", tryb od Ultra wydajności
+  po DLAA, własna skala renderowania 33-100%), Ray Reconstruction (to samo),
+  Frame Generation (nadpisanie, model, tryb - także dynamiczny, mnożnik
+  generowanych klatek, docelowy FPS) oraz DLAA, "Wydajność = Ultra
+  wydajność" i nadpisanie w grach ze Streamline. Wszystkie ustawienia są w
+  publicznym `NvApiDriverSettings.h` (SDK R620); zapis z weryfikacją odczytem
+  i kopią zapasową jak w "Ustawieniach 3D". Zmiany działają od następnego
+  uruchomienia gry.
 - **Ustawienia 3D** - jak "Zarządzaj ustawieniami 3D": V-Sync (także
   adaptacyjna i szybka), maks. klatek przygotowanych, limit FPS,
   technologia monitora, preferowane odświeżanie, tryb zarządzania energią,
-  filtrowanie tekstur i anizotropowe, antyaliasing, okluzja otoczenia,
-  nadpisanie DLSS (model, DLAA, Ray Reconstruction, Frame Generation,
-  liczba generowanych klatek) i ustawienia VR.
+  filtrowanie tekstur i anizotropowe, antyaliasing, okluzja otoczenia i
+  ustawienia VR.
   - "Ustawienia globalne" albo "Ustawienia programu": wybór z listy profili
     Nvidii (wyszukiwarka) lub "Dodaj program..." (plik .exe). W profilu
     programu ustawienie dziedziczone z globalnego ma dopisek "(globalne)",
@@ -539,9 +548,11 @@ tego samego rodzaju, a nie jego brak.
 W zakładce NVIDIA > Overclock > Informacje:
 
 - **Temperatura hotspot** - najcieplejszy punkt karty, odczytywany wprost ze
-  sterownika (NVAPI / ADL). Nie każda karta go udostępnia; w szczególności karty
-  GeForce RTX serii 50 nie mają już tego czujnika. Wtedy w wierszu jest
-  informacja, że karta go nie udostępnia.
+  sterownika (NVAPI / ADL). Karty GeForce RTX serii 50 nie udostępniają go w
+  API sterownika (sprawdzone pod obciążeniem na RTX 5070: wszystkie czujniki
+  NVAPI i NVML to rdzeń albo pamięć) - wiersz Hot Spot pokazuje wtedy
+  "niedostępny". GPU-Z odczytuje go własnym sterownikiem jądra. "Temperatura
+  GPU" na RTX 50 ma dokładność do części stopnia.
 - **HAGS** (sprzętowo przyspieszane planowanie GPU) - stan ustawienia Windows
   i przycisk Włącz/Wyłącz. Program zmienia tę samą wartość co przełącznik w
   Ustawieniach Windows (`HwSchMode` w rejestrze). Zmiana działa po restarcie

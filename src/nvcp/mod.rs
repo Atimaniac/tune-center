@@ -42,6 +42,8 @@ enum Page {
     /// Dawna zakładka GPU.
     Overclock,
     Settings3d,
+    /// Nadpisania DLSS (jak w NVIDIA App).
+    Dlss,
     Display,
     Color,
     Gsync,
@@ -202,6 +204,7 @@ impl NvcpTab {
                     for (page, label) in [
                         (Page::Overclock, "Overclock"),
                         (Page::Settings3d, tr("Ustawienia 3D", "3D settings")),
+                        (Page::Dlss, "DLSS"),
                         (Page::Display, tr("Ekran", "Display")),
                         (Page::Color, tr("Kolor i HDR", "Color and HDR")),
                         (Page::Gsync, "G-SYNC"),
@@ -273,6 +276,7 @@ impl NvcpTab {
                         .show(ui, |ui| match self.page {
                             Page::Overclock => {}
                             Page::Settings3d => self.settings_ui(ui, &api),
+                            Page::Dlss => self.dlss_ui(ui, &api),
                             Page::Display => self.display_ui(ui, &api),
                             Page::Color => self.color_ui(ui, &api),
                             Page::Gsync => self.gsync_ui(ui, &api),
@@ -339,9 +343,101 @@ impl NvcpTab {
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui, api: &Arc<Api>) {
+        if !self.scope_ui(ui, api) {
+            return;
+        }
+        self.sections_ui(ui, api, catalog::ITEMS, &catalog::Section::ALL);
+        ui.add_space(10.0);
+        self.restore_row(ui, api);
+        ui.add_space(6.0);
+        self.advanced_ui(ui, api);
+    }
+
+    /// Podzakładka DLSS: nadpisania DLSS jak w NVIDIA App (globalnie albo
+    /// dla wybranej gry), zapisywane w profilach sterownika (DRS).
+    fn dlss_ui(&mut self, ui: &mut egui::Ui, api: &Arc<Api>) {
+        ui.label(
+            RichText::new(tr(
+                "Nadpisania DLSS zapisywane w profilach sterownika - tak jak w NVIDIA App. Ustawienia globalne działają we wszystkich grach z DLSS; ustawienia programu tylko w wybranej grze (mają pierwszeństwo). Zmiany działają od następnego uruchomienia gry. Każda grupa działa dopiero po włączeniu jej \"Nadpisania przez sterownik\".",
+                "DLSS overrides stored in driver profiles - like in NVIDIA App. Global settings apply to every DLSS game; program settings only to the chosen game (and take precedence). Changes take effect the next time the game starts. Each group works only with its \"Driver override\" turned on.",
+            ))
+            .small()
+            .color(muted()),
+        );
+        ui.add_space(6.0);
+        if !self.scope_ui(ui, api) {
+            return;
+        }
+        self.sections_ui(ui, api, catalog::DLSS_ITEMS, &catalog::Section::DLSS);
+        ui.add_space(10.0);
+        ui.horizontal_wrapped(|ui| {
+            let label = if self.target == Target::Global {
+                tr(
+                    "Przywróć domyślne DLSS (globalne)",
+                    "Restore DLSS defaults (global)",
+                )
+            } else {
+                tr(
+                    "Usuń nadpisania DLSS tej gry",
+                    "Remove this game's DLSS overrides",
+                )
+            };
+            if ui.button(label).clicked() {
+                let mut ids: Vec<u32> = catalog::DLSS_ITEMS.iter().flat_map(|i| i.ids()).collect();
+                ids.sort_unstable();
+                ids.dedup();
+                self.run(api, Action::Restore(ids));
+            }
+            if ui.button(tr("Odśwież", "Refresh")).clicked() {
+                let r = self.drs(api).and_then(|d| d.reload());
+                self.invalidate_3d();
+                self.profiles = None;
+                if let Err(e) = r {
+                    self.fail(e);
+                }
+            }
+        });
+    }
+
+    /// Sekcje z pozycjami katalogu dla bieżącego profilu.
+    fn sections_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        api: &Arc<Api>,
+        items: &'static [Item],
+        sections: &[catalog::Section],
+    ) {
+        let global = self.target == Target::Global;
+        let mut actions: Vec<Action> = Vec::new();
+        for &section in sections {
+            let list: Vec<&'static Item> = items.iter().filter(|i| i.section == section).collect();
+            if list.is_empty() {
+                continue;
+            }
+            ui.add_space(8.0);
+            ui.label(RichText::new(section.title()).strong().color(accent()));
+            egui::Grid::new(("nvcp_items", section as u8))
+                .num_columns(2)
+                .min_col_width(360.0)
+                .spacing([16.0, 6.0])
+                .striped(true)
+                .show(ui, |ui| {
+                    for item in list {
+                        self.item_row(ui, api, item, global, &mut actions);
+                        ui.end_row();
+                    }
+                });
+        }
+        for action in actions {
+            self.run(api, action);
+        }
+    }
+
+    /// Wybór profilu (globalny albo program); `false`, gdy nie ma czego pokazać.
+    fn scope_ui(&mut self, ui: &mut egui::Ui, api: &Arc<Api>) -> bool {
         if let Err(e) = self.drs(api) {
             ui.label(RichText::new(e).color(warn()));
-            return;
+            return false;
         }
 
         // Wybór profilu: globalny albo program.
@@ -371,45 +467,10 @@ impl NvcpTab {
 
         if let Target::Profile(name) = self.target.clone() {
             if !self.program_picker(ui, api, &name) {
-                return;
+                return false;
             }
         }
-
-        let target = self.target.clone();
-        let global = target == Target::Global;
-        let mut actions: Vec<Action> = Vec::new();
-
-        for section in catalog::Section::ALL {
-            let items: Vec<&Item> = catalog::ITEMS
-                .iter()
-                .filter(|i| i.section == section)
-                .collect();
-            if items.is_empty() {
-                continue;
-            }
-            ui.add_space(8.0);
-            ui.label(RichText::new(section.title()).strong().color(accent()));
-            egui::Grid::new(("nvcp3d", section as u8))
-                .num_columns(2)
-                .min_col_width(360.0)
-                .spacing([16.0, 6.0])
-                .striped(true)
-                .show(ui, |ui| {
-                    for item in items {
-                        self.item_row(ui, api, item, global, &mut actions);
-                        ui.end_row();
-                    }
-                });
-        }
-
-        for action in actions {
-            self.run(api, action);
-        }
-
-        ui.add_space(10.0);
-        self.restore_row(ui, api);
-        ui.add_space(6.0);
-        self.advanced_ui(ui, api);
+        true
     }
 
     /// Lista programów; zwraca `false`, gdy żaden nie jest jeszcze wybrany.
@@ -580,7 +641,7 @@ impl NvcpTab {
                     if !global && !own {
                         text = crate::trf!("{text} (globalne)", "{text} (global)");
                     }
-                    egui::ComboBox::from_id_salt(("nvcp_item", item.en))
+                    egui::ComboBox::from_id_salt(("nvcp_item", item.section as u8, item.en))
                         .width(280.0)
                         .selected_text(text)
                         .show_ui(ui, |ui| {
@@ -1916,5 +1977,40 @@ mod hardware {
         drs.delete_profile(&name).expect("usunięcie profilu");
         assert_eq!(drs.profile_of_app(exe).unwrap(), None);
         println!("OK: zapis, odczyt, przywrócenie i usunięcie profilu działają");
+    }
+
+    /// Zapis wszystkich nadpisań DLSS na tymczasowym profilu:
+    /// `cargo test nvcp_hardware_dlss -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn nvcp_hardware_dlss() {
+        let api = Arc::new(Api::load().expect("NVAPI"));
+        let mut drs = Drs::open(api).expect("DRS");
+        let exe = "tunecenter-selftest-dlss.exe";
+        let name = drs.add_program(exe).expect("utworzenie profilu");
+        let target = Target::Profile(name.clone());
+        let mut checked = 0;
+        for item in catalog::DLSS_ITEMS {
+            let writes: Vec<(u32, u32)> = match &item.kind {
+                // Ostatnia opcja listy (np. Preset O, Własna skala, Dynamiczne).
+                Kind::Choice(opts) => opts.last().unwrap().writes.to_vec(),
+                Kind::Number { id, max, .. } => vec![(*id, (*max).min(75))],
+            };
+            let r = drs.set_many(&target, &writes);
+            println!(
+                "{:<45} {:?} -> {:?}",
+                item.en,
+                writes,
+                r.as_ref().map(|_| "OK")
+            );
+            r.expect("zapis");
+            for (id, v) in &writes {
+                let read = drs.get(&target, *id).unwrap().unwrap();
+                assert_eq!((read.value, read.location), (Some(*v), Location::Current));
+            }
+            checked += 1;
+        }
+        drs.delete_profile(&name).expect("usunięcie profilu");
+        println!("OK: {checked} ustawień DLSS zapisanych i odczytanych, profil usunięty");
     }
 }
