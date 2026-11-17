@@ -198,7 +198,12 @@ udostępnia pobierania gotowych shaderów; Tune Center czyta je z plików gry.
   ustawionym jak w grze (`NvAPI_D3D12_SetNvShaderExtnSlotSpace`). Gra musi
   być zamknięta. Pierwsza kompilacja Active Matter: ok. 5-7 min; kolejna,
   z pamięci podręcznej, ok. 20 s.
-- **Etap 3**: kompilacja Unity DirectX 11 z plików gry.
+- **Etap 3 (gotowy)**: Unity DirectX 11 - Tune Center wyszukuje w plikach
+  gry (luźne pliki i paczki `.bundle`) wszystkie shadery DirectX 11 ze
+  wszystkimi wariantami, a sterownik Nvidii kompiluje je przez Direct3D 11
+  w procesie nazwanym jak gra, partiami (każda na nowym urządzeniu, z
+  czekaniem na zakończenie kompilacji w sterowniku). Pillars of Eternity:
+  2640 shaderów; Last Epoch: ok. 196 tys. shaderów, ok. 17 min.
 - Gry są tylko czytane: Tune Center niczego w nich nie zmienia, nie
   uruchamia ich i nie dodaje do nich plików (bezpieczne także przy
   anty-cheacie). Unity w DirectX 12 buduje potoki dopiero w trakcie gry,

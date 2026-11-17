@@ -745,6 +745,10 @@ fn main() -> eframe::Result<()> {
     if args.get(1).map(String::as_str) == Some(shaders::warm::HOST_ARG) {
         std::process::exit(shaders::warm::run_host(&args[2..]));
     }
+    #[cfg(windows)]
+    if args.get(1).map(String::as_str) == Some(shaders::warm::HOST_ARG_UNITY) {
+        std::process::exit(shaders::warm::run_host_unity(&args[2..]));
+    }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

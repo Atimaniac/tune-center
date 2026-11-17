@@ -12,6 +12,7 @@ pub mod games;
 #[cfg(windows)]
 mod registry;
 pub mod rootsig;
+pub mod unity;
 pub mod warm;
 
 use std::path::PathBuf;
@@ -90,8 +91,8 @@ pub fn plan(info: &Info) -> (&'static str, bool) {
         ),
         Engine::Unity => (
             tr(
-                "DirectX 11 z plików gry - w przygotowaniu (etap 3)",
-                "DirectX 11 from the game files - in progress (stage 3)",
+                "DirectX 11: wszystkie shadery z plików gry",
+                "DirectX 11: every shader from the game files",
             ),
             true,
         ),
@@ -295,8 +296,8 @@ impl ShaderTab {
                 if e.info.scskiller_recorder {
                     ui.label(
                         RichText::new(tr(
-                            "W folderze gry jest recorder SCSKiller (d3d12.dll, scskiller.cfg).",
-                            "The SCSKiller recorder is in the game folder (d3d12.dll, scskiller.cfg).",
+                            "W folderze gry jest recorder SCSKiller (scskiller.cfg).",
+                            "The SCSKiller recorder is in the game folder (scskiller.cfg).",
                         ))
                         .color(muted()),
                     );
@@ -338,28 +339,59 @@ impl ShaderTab {
     }
 }
 
-/// Kompilacja z góry dla wybranej gry (obecnie: Dagor DirectX 12, compute).
+/// Kompilacja z góry dla wybranej gry: Dagor DirectX 12 (compute) albo
+/// Unity DirectX 11 (wszystkie shadery z plików gry).
 fn compile_ui(
     ui: &mut egui::Ui,
     e: &Entry,
     warms: &mut std::collections::HashMap<String, warm::Warm>,
 ) {
-    let Some(dump) = e
+    let missing = |ui: &mut egui::Ui, text: &str| {
+        ui.label(RichText::new(text).color(warn()));
+    };
+    let unity = e.info.engine == Engine::Unity && e.info.api.as_deref() != Some("DirectX 12");
+    let dagor = e
         .info
         .shaders
         .iter()
-        .find(|s| s.kind == ShaderKind::DagorDx12)
-    else {
-        return;
-    };
-    let Some(exe) = warm::dagor_game_exe(&e.game.dir) else {
-        ui.label(
-            RichText::new(tr(
-                "Nie znaleziono pliku .exe gry w win64.",
-                "Game .exe not found in win64.",
-            ))
-            .color(warn()),
+        .find(|s| s.kind == ShaderKind::DagorDx12);
+    let (exe, job, about) = if let Some(dump) = dagor {
+        let Some(exe) = warm::dagor_game_exe(&e.game.dir) else {
+            missing(
+                ui,
+                tr(
+                    "Nie znaleziono pliku .exe gry w win64.",
+                    "Game .exe not found in win64.",
+                ),
+            );
+            return;
+        };
+        let about = crate::trf!(
+            "Sterownik Nvidia kompiluje shadery gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta. Teraz: shadery obliczeniowe (compute); graficzne w następnej wersji.",
+            "The Nvidia driver compiles the game's shaders into its cache under the name {exe}, as the game would. The game must be closed. Now: compute shaders; graphics shaders in the next version."
         );
+        let job = warm::Job::Dagor {
+            dump: dump.path.clone(),
+            cbv_ranges: warm::dagor_cbv_ranges(&e.game.dir),
+        };
+        (exe, job, about)
+    } else if unity {
+        let Some((data_dir, exe)) = unity::game_layout(&e.game.dir) else {
+            missing(
+                ui,
+                tr(
+                    "Nie znaleziono pliku .exe i folderu _Data gry.",
+                    "Game .exe and _Data folder not found.",
+                ),
+            );
+            return;
+        };
+        let about = crate::trf!(
+            "Tune Center wyszukuje w plikach gry wszystkie shadery DirectX 11 (ze wszystkimi wariantami), a sterownik Nvidia kompiluje je do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
+            "Tune Center finds every DirectX 11 shader in the game files (with all variants) and the Nvidia driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
+        );
+        (exe, warm::Job::Unity { data_dir }, about)
+    } else {
         return;
     };
     ui.add_space(6.0);
@@ -368,14 +400,7 @@ fn compile_ui(
             .strong()
             .color(accent()),
     );
-    ui.label(
-        RichText::new(crate::trf!(
-            "Sterownik Nvidia kompiluje shadery gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta. Teraz: shadery obliczeniowe (compute); graficzne w następnej wersji.",
-            "The Nvidia driver compiles the game's shaders into its cache under the name {exe}, as the game would. The game must be closed. Now: compute shaders; graphics shaders in the next version."
-        ))
-        .small()
-        .color(muted()),
-    );
+    ui.label(RichText::new(about).small().color(muted()));
     let w = warms.entry(e.game.id.clone()).or_default();
     let p = w.progress.lock().unwrap().clone();
     let running = p.phase == warm::Phase::Running;
@@ -388,13 +413,27 @@ fn compile_ui(
             .clicked()
         {
             let ctx = ui.ctx().clone();
-            let cbv = warm::dagor_cbv_ranges(&e.game.dir);
-            w.start(&exe, &dump.path, cbv, move || ctx.request_repaint());
+            w.start(&exe, job, move || ctx.request_repaint());
         }
         if running {
             ui.spinner();
         }
     });
+    // Unity: najpierw przegląd plików gry (znalezione shadery kompilują się
+    // równolegle, więc liczba wszystkich rośnie do końca przeglądu).
+    if let Some((files_done, files)) = p.scan.filter(|(d, t)| running && d < t) {
+        ui.label(
+            RichText::new(crate::trf!(
+                "Przeglądanie plików gry: {} / {}, znalezione shadery: {}",
+                "Scanning the game files: {} / {}, shaders found: {}",
+                files_done,
+                files,
+                p.total
+            ))
+            .small()
+            .color(muted()),
+        );
+    }
     if running || p.total > 0 {
         let fraction = if p.total > 0 {
             p.done as f32 / p.total as f32
@@ -413,6 +452,16 @@ fn compile_ui(
         );
     }
     match &p.phase {
+        warm::Phase::Done if unity => {
+            let text = crate::trf!(
+                "Gotowe: sterownik skompilował {} shaderów (shadery, które już były w pamięci podręcznej, pomija), odrzucone: {} ({}).",
+                "Done: the driver compiled {} shaders (shaders already in its cache are skipped), rejected: {} ({}).",
+                p.ok,
+                p.failed,
+                p.adapter
+            );
+            ui.label(RichText::new(text).color(if p.failed == 0 { accent() } else { warn() }));
+        }
         warm::Phase::Done => {
             let text = crate::trf!(
                 "Gotowe: {} shaderów w pamięci podręcznej sterownika (nowo skompilowane: ok. {}, już były: ok. {}), odrzucone: {} ({}).",

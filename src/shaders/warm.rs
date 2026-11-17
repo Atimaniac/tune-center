@@ -282,6 +282,263 @@ pub fn run_host(args: &[String]) -> i32 {
     0
 }
 
+// ------------------------- Unity, Direct3D 11 -------------------------------
+
+/// Argument procesu kompilującego shadery Unity (DirectX 11).
+pub const HOST_ARG_UNITY: &str = "--shader-warm-unity";
+
+#[cfg(windows)]
+mod d3d11 {
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::Graphics::Direct3D::*;
+    use windows::Win32::Graphics::Direct3D11::*;
+    use windows::Win32::Graphics::Dxgi::*;
+
+    use super::super::unity::Stage;
+
+    pub struct Device {
+        device: ID3D11Device,
+        pub adapter: String,
+    }
+
+    // Metody Create* urządzenia D3D11 są wolnowątkowe (bez flagi
+    // D3D11_CREATE_DEVICE_SINGLETHREADED).
+    unsafe impl Send for Device {}
+    unsafe impl Sync for Device {}
+
+    pub fn nvidia_device() -> Result<Device, String> {
+        // SAFETY: wywołania DXGI/D3D11 z poprawnymi argumentami.
+        unsafe {
+            let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(|e| format!("DXGI: {e}"))?;
+            let mut index = 0;
+            loop {
+                let adapter = factory
+                    .EnumAdapters1(index)
+                    .map_err(|_| "nie znaleziono karty Nvidia / no Nvidia GPU found".to_string())?;
+                index += 1;
+                let desc = adapter.GetDesc1().map_err(|e| e.to_string())?;
+                if desc.VendorId != super::d3d::NVIDIA {
+                    continue;
+                }
+                let name = String::from_utf16_lossy(&desc.Description);
+                let mut device = None;
+                D3D11CreateDevice(
+                    &adapter,
+                    D3D_DRIVER_TYPE_UNKNOWN,
+                    HMODULE::default(),
+                    D3D11_CREATE_DEVICE_FLAG(0),
+                    Some(&[D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0]),
+                    D3D11_SDK_VERSION,
+                    Some(&mut device),
+                    None,
+                    None,
+                )
+                .map_err(|e| format!("D3D11CreateDevice: {e}"))?;
+                return Ok(Device {
+                    device: device.ok_or("D3D11CreateDevice: brak urządzenia")?,
+                    adapter: name.trim_end_matches('\0').to_owned(),
+                });
+            }
+        }
+    }
+
+    impl Device {
+        /// Tworzy shader danego etapu. Sterownik kompiluje go w swoich wątkach;
+        /// obiekt trzymamy do końca kompilacji (zwolnienie ją porzuca).
+        pub fn create(&self, stage: Stage, code: &[u8]) -> Result<ID3D11DeviceChild, String> {
+            let d = &self.device;
+            let none: Option<&ID3D11ClassLinkage> = None;
+            macro_rules! make {
+                ($method:ident) => {{
+                    let mut s = None;
+                    d.$method(code, none, Some(&mut s))
+                        .map(|()| s.map(ID3D11DeviceChild::from))
+                }};
+            }
+            // SAFETY: kod to cały kontener DXBC.
+            let r = unsafe {
+                match stage {
+                    Stage::Vertex => make!(CreateVertexShader),
+                    Stage::Pixel => make!(CreatePixelShader),
+                    Stage::Geometry => make!(CreateGeometryShader),
+                    Stage::Hull => make!(CreateHullShader),
+                    Stage::Domain => make!(CreateDomainShader),
+                    Stage::Compute => make!(CreateComputeShader),
+                }
+            };
+            r.map_err(|e| format!("{e}"))?
+                .ok_or_else(|| "brak obiektu shadera".to_string())
+        }
+    }
+
+    /// Czas procesora zużyty przez cały proces (wszystkie wątki, także
+    /// wątki kompilatora sterownika), w ms.
+    pub fn process_cpu_ms() -> u64 {
+        use windows::Win32::Foundation::FILETIME;
+        use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+        let (mut a, mut b, mut k, mut u) = (
+            FILETIME::default(),
+            FILETIME::default(),
+            FILETIME::default(),
+            FILETIME::default(),
+        );
+        // SAFETY: uchwyt bieżącego procesu, wskaźniki na lokalne struktury.
+        if unsafe { GetProcessTimes(GetCurrentProcess(), &mut a, &mut b, &mut k, &mut u) }.is_err()
+        {
+            return 0;
+        }
+        let t = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
+        (t(k) + t(u)) / 10_000
+    }
+
+    /// Czeka, aż wątki sterownika skończą kompilować: zużycie procesora przez
+    /// proces spada poniżej 5% jednego rdzenia przez 1 s z rzędu.
+    pub fn wait_driver_idle(max: std::time::Duration) {
+        let start = std::time::Instant::now();
+        let mut last = process_cpu_ms();
+        let mut quiet = 0;
+        while quiet < 4 && start.elapsed() < max {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            let now = process_cpu_ms();
+            quiet = if now.saturating_sub(last) < 12 {
+                quiet + 1
+            } else {
+                0
+            };
+            last = now;
+        }
+    }
+}
+
+/// Proces kompilujący shadery gry Unity: `--shader-warm-unity <folder _Data>`.
+/// Wątki przeglądające pliki gry przekazują unikalne kontenery DXBC do wątku
+/// głównego, który tworzy je partiami na urządzeniu D3D11 karty Nvidia.
+/// Wiersze stdout: `scan <pliki zrobione> <pliki wszystkie>`,
+/// `progress <skompilowane> <znalezione>`, `result <ok> <błędy>`, `error ...`.
+///
+/// Sterownik Nvidii kompiluje shadery D3D11 w swoich wątkach po powrocie z
+/// `Create*Shader` (wywołanie trwa poniżej 2 ms także przy nowym shaderze), a
+/// zwolnienie obiektu przed końcem kompilacji ją porzuca. Pomiary na Last
+/// Epoch (196 tys. shaderów): zwalnianie od razu - w pamięci podręcznej ok.
+/// 140 B na shader i drugi przebieg dopisuje; trzymanie wszystkich - pełna
+/// kompilacja (ok. 170 shaderów/s), ale 13 GB pamięci. Dlatego partie:
+/// utworzenie `BATCH` shaderów, czekanie na bezczynność wątków sterownika,
+/// zwolnienie partii.
+#[cfg(windows)]
+pub fn run_host_unity(args: &[String]) -> i32 {
+    use super::unity;
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+    const BATCH: usize = 4096;
+
+    let out = std::io::stdout();
+    let say = |line: String| {
+        let mut o = out.lock();
+        let _ = writeln!(o, "{line}");
+        let _ = o.flush();
+    };
+    let Some(data_dir) = args.first() else {
+        say("fatal użycie: --shader-warm-unity <folder _Data>".into());
+        return 2;
+    };
+    let device = match d3d11::nvidia_device() {
+        Ok(d) => d,
+        Err(e) => {
+            say(format!("fatal {e}"));
+            return 4;
+        }
+    };
+    say(format!("adapter {}", device.adapter));
+    let mut device = Some(device);
+
+    let files = unity::candidate_files(Path::new(data_dir));
+    say(format!("scan 0 {}", files.len()));
+    let next_file = AtomicUsize::new(0);
+    let files_done = AtomicUsize::new(0);
+    let found = AtomicUsize::new(0);
+    let seen = Mutex::new(std::collections::HashSet::<[u8; 16]>::new());
+    let errors = Mutex::new(Vec::<String>::new());
+    // Mały bufor: gdy główny wątek czeka na sterownik, skanery stoją i nie
+    // zakłócają pomiaru bezczynności.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<(unity::Stage, Vec<u8>)>(256);
+    let cpus = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let scanners = (cpus / 4).clamp(1, 4);
+    let (mut done, mut ok) = (0usize, 0usize);
+
+    std::thread::scope(|scope| {
+        for _ in 0..scanners {
+            let tx = tx.clone();
+            let (files, next_file, files_done, seen, found, errors, say) = (
+                &files,
+                &next_file,
+                &files_done,
+                &seen,
+                &found,
+                &errors,
+                &say,
+            );
+            scope.spawn(move || loop {
+                let i = next_file.fetch_add(1, Relaxed);
+                let Some(path) = files.get(i) else { break };
+                let result = unity::scan_file(path, &mut |d| {
+                    if seen.lock().unwrap().insert(d.digest()) {
+                        found.fetch_add(1, Relaxed);
+                        let _ = tx.send((d.stage, d.code.to_vec()));
+                    }
+                });
+                if let Err(e) = result {
+                    let mut list = errors.lock().unwrap();
+                    if list.len() < 10 {
+                        list.push(format!("{}: {e}", path.display()));
+                    }
+                }
+                let n = files_done.fetch_add(1, Relaxed) + 1;
+                if n % 100 == 0 || n == files.len() {
+                    say(format!("scan {n} {}", files.len()));
+                }
+            });
+        }
+        drop(tx);
+        let mut jobs = rx.iter().peekable();
+        while jobs.peek().is_some() {
+            // Każda partia na nowym urządzeniu: sterownik trzyma wyniki w pamięci
+            // do zwolnienia urządzenia (jedno urządzenie dla Last Epoch - 12,5 GB).
+            let device = match device.take().map_or_else(d3d11::nvidia_device, Ok) {
+                Ok(d) => d,
+                Err(e) => {
+                    say(format!("fatal {e}"));
+                    return;
+                }
+            };
+            // Shadery partii żyją, aż sterownik skończy je kompilować.
+            let mut keep = Vec::with_capacity(BATCH);
+            let mut count = 0;
+            for (stage, code) in jobs.by_ref().take(BATCH) {
+                count += 1;
+                match device.create(stage, &code) {
+                    Ok(shader) => keep.push(shader),
+                    Err(e) => {
+                        let mut list = errors.lock().unwrap();
+                        if list.len() < 10 {
+                            list.push(format!("{stage:?}: {e}"));
+                        }
+                    }
+                }
+            }
+            d3d11::wait_driver_idle(std::time::Duration::from_secs(600));
+            ok += keep.len();
+            done += count;
+            drop(keep);
+            drop(device);
+            say(format!("progress {done} {}", found.load(Relaxed)));
+        }
+    });
+    for e in errors.into_inner().unwrap() {
+        say(format!("error {e}"));
+    }
+    say(format!("result {ok} {}", done - ok));
+    0
+}
+
 // --------------------------- strona interfejsu ------------------------------
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -302,9 +559,20 @@ pub struct Progress {
     pub failed: usize,
     /// Ile potoków sterownik miał już w pamięci podręcznej (szybkie utworzenie).
     pub cached: usize,
+    /// Przegląd plików gry (Unity): (przejrzane, wszystkie).
+    pub scan: Option<(usize, usize)>,
     pub adapter: String,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
+}
+
+/// Co kompilować.
+#[derive(Clone, Debug)]
+pub enum Job {
+    /// Zrzut shaderów Dagor DirectX 12 (compute) i tryb buforów stałych.
+    Dagor { dump: PathBuf, cbv_ranges: bool },
+    /// Folder `*_Data` gry Unity (DirectX 11).
+    Unity { data_dir: PathBuf },
 }
 
 /// Uruchomiona kompilacja jednej gry.
@@ -347,14 +615,8 @@ fn staged_host(exe_name: &str) -> Result<PathBuf, String> {
 }
 
 impl Warm {
-    /// Uruchamia kompilację zrzutu `dump` w procesie nazwanym `exe_name`.
-    pub fn start(
-        &self,
-        exe_name: &str,
-        dump: &Path,
-        cbv_ranges: bool,
-        wake: impl Fn() + Send + 'static,
-    ) {
+    /// Uruchamia kompilację w procesie nazwanym `exe_name`.
+    pub fn start(&self, exe_name: &str, job: Job, wake: impl Fn() + Send + 'static) {
         {
             let mut p = self.progress.lock().unwrap();
             if p.phase == Phase::Running {
@@ -389,13 +651,19 @@ impl Warm {
                 return;
             }
         };
-        let dump = dump.to_path_buf();
         std::thread::spawn(move || {
             let mut cmd = std::process::Command::new(&host);
-            cmd.arg(HOST_ARG)
-                .arg(&dump)
-                .arg(if cbv_ranges { "1" } else { "0" })
-                .stdout(std::process::Stdio::piped())
+            match &job {
+                Job::Dagor { dump, cbv_ranges } => {
+                    cmd.arg(HOST_ARG)
+                        .arg(dump)
+                        .arg(if *cbv_ranges { "1" } else { "0" });
+                }
+                Job::Unity { data_dir } => {
+                    cmd.arg(HOST_ARG_UNITY).arg(data_dir);
+                }
+            }
+            cmd.stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null());
             #[cfg(windows)]
             {
@@ -443,6 +711,7 @@ pub fn apply_line(shared: &Arc<Mutex<Progress>>, line: &str) {
     let (kind, rest) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
     let nums: Vec<usize> = rest.split(' ').filter_map(|w| w.parse().ok()).collect();
     match kind {
+        "scan" if nums.len() == 2 => p.scan = Some((nums[0], nums[1])),
         "progress" if nums.len() == 2 => {
             p.done = nums[0];
             p.total = nums[1];
