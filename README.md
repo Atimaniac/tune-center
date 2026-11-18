@@ -16,7 +16,7 @@ przełącza się przyciskami w nagłówku, obok logo:
   AMD Ryzen: Curve Optimizer dla każdego rdzenia i limity PBO.
 - **FAN** - sterowanie wentylatorami płyty głównej: ręcznie lub krzywą
   zależną od temperatury, z profilami (dawny FanCtl).
-- **SENSORS** - wszystkie odczyty temperatur i obroty wentylatorów.
+- **SENSORS** - najważniejsze temperatury z wykresami z ostatnich 2 minut.
 - **POWER** - aktualny pobór mocy procesora i karty graficznej, suma
   oraz licznik energii zużytej w bieżącej sesji.
 - **OPTIONS** - uruchamianie z Windows, minimalizowanie do zasobnika
@@ -408,7 +408,10 @@ Zakładka SENSORS pokazuje tylko najważniejsze temperatury: po jednym głównym
 czujniku dla procesora, karty graficznej, płyty głównej, dysków i pamięci RAM
 (jeśli sprzęt je udostępnia). Kafelki dzielą między siebie całe okno, więc
 wszystkie są widoczne bez przewijania; liczba kolumn i wielkość cyfr zależą od
-rozmiaru okna. Obroty wentylatorów są w zakładce FAN.
+rozmiaru okna. Każdy kafelek ma plakietkę stanu (NORMALNA poniżej 65 °C,
+WYSOKA od 65 °C, GORĄCO od 80 °C), zmianę z ostatnich 5 s, minimum i maksimum
+oraz wykres z ostatnich 120 s (odczyt co sekundę, także gdy okno jest
+schowane). Obroty wentylatorów są w zakładce FAN.
 
 ## Power
 
@@ -417,7 +420,12 @@ rozmiaru okna. Obroty wentylatorów są w zakładce FAN.
 - **Razem**: suma poboru mocy, jej średnia i maksimum, łączna energia,
   czas sesji i przycisk "Wyzeruj licznik". Maksimum sumy to największa
   chwilowa suma, a nie suma osobnych maksimów.
-- Pasek pod wartością pokazuje bieżący pobór względem maksimum sesji.
+- Każdy kafelek (procesor, karta, Razem) ma wykres z ostatnich 120 s, zmianę
+  z ostatnich 5 s i plakietkę obciążenia: NISKI poniżej 35%, ŚREDNI do 80%,
+  WYSOKI od 80% limitu mocy (procesor: PL2 Intel lub PPT AMD, karta: domyślny
+  limit sterownika).
+- Pasek sesji: czas, zużyta energia, koszt (cena za kWh i waluta w OPTIONS,
+  domyślnie 0,90 zł; 0 ukrywa koszt) i "Wyzeruj licznik".
 - Licznik działa od uruchomienia programu, także przy zminimalizowanym
   oknie. Przerwy dłuższe niż 5 s (uśpienie komputera) nie są doliczane.
 - To pobór samego procesora i karty graficznej według ich własnych

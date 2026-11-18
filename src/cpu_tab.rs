@@ -14,6 +14,7 @@ use crate::amd_tab::AmdTab;
 use crate::cpu::intel::{self, State, OFFSET_MAX_MV, OFFSET_MIN_MV};
 use crate::cpu::pawnio::PawnIo;
 use crate::cpu::{cpu_info, CpuInfo};
+use crate::icons::Icon;
 use crate::theme::{self, accent, hot, muted, warn};
 
 const GAP: f32 = 14.0;
@@ -22,6 +23,9 @@ const MARGIN: f32 = 16.0;
 /// Kolory kafelków jak w Intel XTU: rdzenie P niebieskie, rdzenie E zielone.
 const P_CORE: Color32 = Color32::from_rgb(0, 104, 181);
 const E_CORE: Color32 = Color32::from_rgb(92, 122, 58);
+/// Jaśniejsze odcienie tych kolorów do napisów na ciemnym tle.
+const P_CORE_TEXT: Color32 = Color32::from_rgb(80, 170, 255);
+const E_CORE_TEXT: Color32 = Color32::from_rgb(140, 200, 90);
 
 enum Action {
     Reload,
@@ -52,6 +56,20 @@ impl CpuTab {
             Self::Intel(tab) => tab.ui(ui),
             Self::Amd(tab) => tab.ui(ui),
         }
+    }
+
+    /// Limit mocy procesora odczytany przy starcie lub "Odczytaj z procesora"
+    /// (Intel: PL2, AMD: PPT) - do plakietki obciążenia w zakładce POWER.
+    pub fn power_limit_w(&self) -> Option<f32> {
+        match self {
+            Self::Intel(tab) => tab
+                .state
+                .as_ref()
+                .and_then(|s| s.limits.as_ref().ok())
+                .map(|l| l.pl2_w as f32),
+            Self::Amd(tab) => tab.ppt_limit_w(),
+        }
+        .filter(|w| *w > 0.0)
     }
 }
 
@@ -242,22 +260,11 @@ impl IntelTab {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let mut action = None;
 
-        ui.horizontal_wrapped(|ui| {
-            let name = if self.info.name.is_empty() {
-                crate::i18n::tr("Procesor", "Processor")
-            } else {
-                self.info.name.as_str()
-            };
-            ui.label(RichText::new(name).size(17.0).strong().color(theme::text()));
-            ui.separator();
-            if ui
-                .button(crate::i18n::tr("Odczytaj z procesora", "Read from CPU"))
-                .clicked()
-            {
-                action = Some(Action::Reload);
-            }
-        });
-        ui.add_space(6.0);
+        let vendor = if self.info.intel { "INTEL" } else { "CPU" };
+        if vendor_header(ui, vendor, &self.info.name, None) {
+            action = Some(Action::Reload);
+        }
+        ui.add_space(10.0);
 
         if let Err(e) = &self.driver {
             ui.label(RichText::new(e).color(warn()));
@@ -268,7 +275,7 @@ impl IntelTab {
         };
 
         if !self.status.is_empty() {
-            ui.label(RichText::new(&self.status).color(muted()));
+            theme::info(ui, &self.status);
             ui.add_space(6.0);
         }
 
@@ -277,22 +284,28 @@ impl IntelTab {
             .request_repaint_after(std::time::Duration::from_millis(1000));
         egui::ScrollArea::vertical().show(ui, |ui| {
             let avail = ui.available_width();
-            let card_w = theme::grid_card_width(avail, 340.0, GAP, 3, MARGIN);
+            let card_w = theme::grid_card_width(avail, 400.0, GAP, 3, MARGIN);
             monitor_section(ui, readings.as_ref());
             ui.add_space(18.0);
 
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::splat(GAP);
-                if self.limits_card(ui, &state, card_w) {
-                    action = Some(Action::Limits);
-                }
-                if self.voltage_card(ui, &state, card_w) {
-                    action = Some(Action::Voltages);
-                }
-                if self.iccmax_card(ui, &state, card_w) {
-                    action = Some(Action::IccMax);
-                }
-            });
+            // Wiersze składane ręcznie (`horizontal_wrapped` nie zawija ramek).
+            let cols = (((avail + GAP) / (400.0 + GAP)).floor().max(1.0) as usize).min(3);
+            for row in [0usize, 1, 2].chunks(cols) {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::splat(GAP);
+                    for card in row {
+                        let clicked = match card {
+                            0 => self.limits_card(ui, &state, card_w).then_some(Action::Limits),
+                            1 => self.voltage_card(ui, &state, card_w).then_some(Action::Voltages),
+                            _ => self.iccmax_card(ui, &state, card_w).then_some(Action::IccMax),
+                        };
+                        if clicked.is_some() {
+                            action = clicked;
+                        }
+                    }
+                });
+                ui.add_space(GAP);
+            }
 
             ui.add_space(18.0);
             if self.ratio_section(ui, &state) {
@@ -300,12 +313,9 @@ impl IntelTab {
             }
 
             ui.add_space(12.0);
-            ui.label(
-                RichText::new(
-                    crate::i18n::tr("Ustawienia działają do restartu komputera i nie są stosowane automatycznie. Zamknij Intel XTU i ThrottleStop - korzystają z tych samych rejestrów. Zmieniaj napięcie po 5-10 mV i testuj stabilność po każdej zmianie.", "Settings last until the computer restarts and are not applied automatically. Close Intel XTU and ThrottleStop - they use the same registers. Change voltage 5-10 mV at a time and test stability after each change."),
-                )
-                .size(11.5)
-                .color(muted()),
+            theme::info(
+                ui,
+                crate::i18n::tr("Ustawienia działają do restartu komputera i nie są stosowane automatycznie. Zamknij Intel XTU i ThrottleStop - korzystają z tych samych rejestrów. Zmieniaj napięcie po 5-10 mV i testuj stabilność po każdej zmianie.", "Settings last until the computer restarts and are not applied automatically. Close Intel XTU and ThrottleStop - they use the same registers. Change voltage 5-10 mV at a time and test stability after each change."),
             );
             ui.add_space(12.0);
         });
@@ -333,7 +343,7 @@ impl IntelTab {
         theme::card(14, MARGIN as i8).show(ui, |ui| {
             ui.set_width(width);
             ui.vertical(|ui| {
-                title(ui, crate::i18n::tr("Limity mocy", "Power limits"));
+                title(ui, Icon::Power, crate::i18n::tr("Limity mocy", "Power limits"));
                 match &state.limits {
                     Err(e) => error(ui, e),
                     Ok(limits) => {
@@ -379,7 +389,7 @@ impl IntelTab {
                             ui.label(RichText::new(crate::i18n::tr("Zablokowane przez BIOS do restartu.", "Locked by the BIOS until restart.")).color(warn()));
                         }
                         let can = self.armed && !limits.locked && self.limits_changed();
-                        if ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Zastosuj limity mocy", "Apply power limits"))).clicked() {
+                        if theme::primary_button(ui, Some(Icon::Check), crate::i18n::tr("Zastosuj limity mocy", "Apply power limits"), can).clicked() {
                             apply = true;
                         }
                         note(
@@ -399,7 +409,7 @@ impl IntelTab {
         theme::card(14, MARGIN as i8).show(ui, |ui| {
             ui.set_width(width);
             ui.vertical(|ui| {
-                title(ui, crate::i18n::tr("Offset napięcia (Core Voltage Offset)", "Core Voltage Offset"));
+                title(ui, Icon::Gauge, crate::i18n::tr("Offset napięcia (Core Voltage Offset)", "Core Voltage Offset"));
                 egui::Grid::new("cpu_voltage").num_columns(3).spacing([14.0, 8.0]).show(ui, |ui| {
                     header_row(ui);
                     for (i, (domain, voltage)) in state.voltages.iter().enumerate() {
@@ -428,7 +438,7 @@ impl IntelTab {
 
                 ui.add_space(6.0);
                 let can = self.armed && self.voltages_changed();
-                if ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Zastosuj napięcia", "Apply voltages"))).clicked() {
+                if theme::primary_button(ui, Some(Icon::Check), crate::i18n::tr("Zastosuj napięcia", "Apply voltages"), can).clicked() {
                     apply = true;
                 }
                 note(
@@ -447,7 +457,7 @@ impl IntelTab {
         theme::card(14, MARGIN as i8).show(ui, |ui| {
             ui.set_width(width);
             ui.vertical(|ui| {
-                title(ui, "Core IccMax");
+                title(ui, Icon::Chip, "Core IccMax");
                 match &state.iccmax_a {
                     None => note(
                         ui,
@@ -470,7 +480,7 @@ impl IntelTab {
                         });
                         ui.add_space(6.0);
                         let can = self.armed && self.iccmax_changed();
-                        if ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Zastosuj IccMax", "Apply IccMax"))).clicked() {
+                        if theme::primary_button(ui, Some(Icon::Check), crate::i18n::tr("Zastosuj IccMax", "Apply IccMax"), can).clicked() {
                             apply = true;
                         }
                         note(
@@ -485,9 +495,47 @@ impl IntelTab {
     }
 }
 
-fn title(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).size(16.0).strong().color(theme::text()));
-    ui.add_space(6.0);
+fn title(ui: &mut egui::Ui, icon: Icon, text: &str) {
+    theme::subheading(ui, icon, text);
+    ui.add_space(2.0);
+}
+
+/// Nagłówek zakładki: producent, nazwa procesora, rodzina i przycisk
+/// "Odczytaj z procesora". Zwraca true po kliknięciu przycisku.
+pub fn vendor_header(ui: &mut egui::Ui, vendor: &str, name: &str, family: Option<&str>) -> bool {
+    let mut clicked = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        ui.label(
+            RichText::new(vendor)
+                .size(26.0)
+                .strong()
+                .italics()
+                .color(theme::text()),
+        );
+        theme::vsep(ui, 28.0);
+        let name = if name.is_empty() {
+            crate::i18n::tr("Procesor", "Processor")
+        } else {
+            name
+        };
+        ui.label(RichText::new(name).size(20.0).color(theme::text()));
+        if let Some(family) = family {
+            ui.label(RichText::new(family).size(14.0).color(muted()));
+        }
+        theme::vsep(ui, 28.0);
+        if theme::primary_button(
+            ui,
+            Some(Icon::Refresh),
+            crate::i18n::tr("Odczytaj z procesora", "Read from CPU"),
+            true,
+        )
+        .clicked()
+        {
+            clicked = true;
+        }
+    });
+    clicked
 }
 
 fn header_row(ui: &mut egui::Ui) {
@@ -512,8 +560,8 @@ fn error(ui: &mut egui::Ui, text: &str) {
 }
 
 fn note(ui: &mut egui::Ui, text: &str) {
-    ui.add_space(4.0);
-    ui.label(RichText::new(text).size(11.5).color(muted()));
+    ui.add_space(6.0);
+    theme::info(ui, text);
 }
 
 /// Informacja o niedostępnym podglądzie; szczegóły błędu są w podpowiedzi.
@@ -584,64 +632,65 @@ fn monitor_section(ui: &mut egui::Ui, readings: Option<&crate::cpu::monitor::Rea
         ),
     ];
     // Kafelki w wierszach - liczba kolumn z szerokości okna.
-    let cols = ((ui.available_width() + 8.0) / (150.0 + 20.0 + 8.0))
-        .floor()
-        .max(1.0) as usize;
-    for row in tiles.chunks(cols) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing = Vec2::splat(8.0);
-            for (name, value) in row {
-                theme::card(10, 10).show(ui, |ui| {
-                    ui.set_width(150.0);
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new(*name).size(11.5).color(muted()));
-                        ui.label(
-                            RichText::new(value.as_str())
-                                .size(17.0)
-                                .strong()
-                                .color(accent()),
-                        );
-                    });
-                });
-            }
+    theme::card_grid(
+        ui,
+        &tiles,
+        150.0,
+        10.0,
+        6,
+        10,
+        10,
+        |ui, _, (name, value), _| {
+            ui.vertical(|ui| {
+                ui.label(RichText::new(*name).size(11.5).color(muted()));
+                ui.label(
+                    RichText::new(value.as_str())
+                        .size(17.0)
+                        .strong()
+                        .color(accent()),
+                );
+            });
+        },
+    );
+    // Kafelek na rdzeń: temperatura, zegar i VID.
+    theme::card_grid(ui, &r.cores, 128.0, 10.0, 10, 10, 10, |ui, _, c, _| {
+        let color = if c.efficient {
+            E_CORE_TEXT
+        } else {
+            P_CORE_TEXT
+        };
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.label(
+                RichText::new(crate::trf!("Rdzeń {}", "Core {}", c.label))
+                    .size(14.0)
+                    .strong()
+                    .color(color),
+            );
+            let t = RichText::new(fmt(c.temp_c, "°C", 0)).size(18.0).strong();
+            ui.label(match c.temp_c {
+                Some(v) => t.color(theme::temp_color(v)),
+                None => t,
+            });
+            ui.label(
+                RichText::new(fmt(c.mhz, "MHz", 0))
+                    .size(12.5)
+                    .color(theme::text()),
+            );
+            ui.label(
+                RichText::new(format!("VID {}", fmt(c.vid_v, "V", 3)))
+                    .size(12.0)
+                    .color(muted()),
+            );
         });
-        ui.add_space(8.0);
-    }
-    ui.add_space(8.0);
-    egui::Grid::new("cpu_cores")
-        .num_columns(4)
-        .spacing([28.0, 4.0])
-        .striped(true)
-        .show(ui, |ui| {
-            for h in [
-                tr("Rdzeń", "Core"),
-                tr("Temperatura", "Temperature"),
-                tr("Zegar", "Clock"),
-                "VID",
-            ] {
-                ui.label(RichText::new(h).size(11.5).color(muted()));
-            }
-            ui.end_row();
-            for c in &r.cores {
-                let color = if c.efficient { E_CORE } else { P_CORE };
-                ui.label(RichText::new(&c.label).strong().color(color));
-                let t = RichText::new(fmt(c.temp_c, "°C", 0));
-                ui.label(match c.temp_c {
-                    Some(v) => t.color(theme::temp_color(v)),
-                    None => t,
-                });
-                ui.label(fmt(c.mhz, "MHz", 0));
-                ui.label(fmt(c.vid_v, "V", 3));
-                ui.end_row();
-            }
-        });
-    ui.label(
-        RichText::new(tr(
+    });
+    ui.add_space(6.0);
+    theme::info(
+        ui,
+        tr(
             "Te same rejestry procesora co Intel XTU (temperatury 0x19C/0x1B1, liczniki energii RAPL, VID 0x198, zegary APERF/MPERF, ograniczenia 0x64F), czytane co sekundę przez moduł PawnIO IntelMSR.",
             "The same CPU registers as Intel XTU (temperatures 0x19C/0x1B1, RAPL energy counters, VID 0x198, APERF/MPERF clocks, limits 0x64F), read every second through the PawnIO IntelMSR module.",
-        ))
-        .size(11.5)
-        .color(muted()),
+        ),
     );
 }
 
@@ -709,13 +758,7 @@ impl IntelTab {
     fn ratio_section(&mut self, ui: &mut egui::Ui, state: &State) -> bool {
         use crate::i18n::tr;
         let mut apply = false;
-        ui.label(
-            RichText::new(tr("Mnożniki turbo", "Turbo ratios"))
-                .size(17.0)
-                .strong()
-                .color(theme::text()),
-        );
-        ui.add_space(6.0);
+        theme::heading(ui, Icon::Cpu, tr("Mnożniki turbo", "Turbo ratios"));
         match &state.p_turbo {
             Ok(current) => ratio_editor(
                 ui,
@@ -744,12 +787,13 @@ impl IntelTab {
         ui.add_space(8.0);
         let changed = self.ratios_changed(state);
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(
-                    self.armed && changed,
-                    egui::Button::new(tr("Zastosuj mnożniki", "Apply ratios")),
-                )
-                .clicked()
+            if theme::primary_button(
+                ui,
+                Some(Icon::Check),
+                tr("Zastosuj mnożniki", "Apply ratios"),
+                self.armed && changed,
+            )
+            .clicked()
             {
                 apply = true;
             }
@@ -776,14 +820,13 @@ impl IntelTab {
                 ui.label(RichText::new(e).size(11.5).color(warn()));
             }
         });
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(tr(
+        ui.add_space(6.0);
+        theme::info(
+            ui,
+            tr(
                 "Jak \"Active Core Ratio\" w Intel XTU: limit mnożnika (x100 MHz), gdy aktywnych jest tyle rdzeni, ile obejmuje grupa (grupa 1 = 1-2 rdzenie itd. - podział ustala procesor). Przy większej liczbie aktywnych rdzeni mnożnik nie może być wyższy. Działa do restartu; zablokowany procesor (bez K) nie przyjmie zmian - program przywróci wtedy poprzednie wartości. Podnoś po 1 i sprawdzaj stabilność.",
                 "Like \"Active Core Ratio\" in Intel XTU: the ratio limit (x100 MHz) when as many cores are active as the group covers (group 1 = 1-2 cores etc. - the split is set by the CPU). With more active cores the ratio may not be higher. Lasts until restart; a locked CPU (non-K) will not accept changes - the program then restores the previous values. Raise by 1 and test stability.",
-            ))
-            .size(11.5)
-            .color(muted()),
+            ),
         );
         apply && changed
     }

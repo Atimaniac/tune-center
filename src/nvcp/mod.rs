@@ -214,17 +214,21 @@ impl NvcpTab {
                         ),
                         (Page::Shaders, "Shader compilation"),
                     ] {
-                        if ui.selectable_label(self.page == page, label).clicked() {
+                        if crate::theme::sub_tab(ui, label, self.page == page).clicked() {
                             self.page = page;
                             self.status = None;
                         }
                     }
                     if let Some(driver) = &self.driver {
+                        // Sam numer wersji (bez gałęzi), żeby mieścił się w wierszu
+                        // podzakładek; pełna nazwa w podpowiedzi.
+                        let short = driver.split(" (").next().unwrap_or(driver);
                         ui.separator();
                         ui.label(
-                            RichText::new(crate::trf!("Sterownik {driver}", "Driver {driver}"))
+                            RichText::new(crate::trf!("Sterownik {short}", "Driver {short}"))
                                 .color(muted()),
-                        );
+                        )
+                        .on_hover_text(driver.as_str());
                     }
                 });
                 ui.separator();

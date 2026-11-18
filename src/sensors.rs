@@ -1,13 +1,14 @@
 //! Zakładka SENSORS: najważniejsze temperatury, po jednej na podzespół.
 
-use eframe::egui::{self, CornerRadius, RichText, Sense, Vec2};
+use std::collections::VecDeque;
+
+use eframe::egui::{self, Color32, RichText, Sense, Vec2};
+
+use crate::history::{self, History};
 
 use crate::bridge::{Snapshot, Temp};
 use crate::disks::Disk;
-use crate::theme::{self, muted, track};
-
-const TEMP_MIN: f32 = 20.0;
-const TEMP_MAX: f32 = 100.0;
+use crate::theme::{self, muted};
 
 const CPU_PREFS: &[&str] = &["package", "tctl", "tdie", "core max", "core average"];
 const GPU_PREFS: &[&str] = &["gpu core", "core"];
@@ -82,18 +83,18 @@ pub fn key_temps<'a>(temps: &'a [Temp]) -> Vec<(&'static str, &'a Temp)> {
 }
 
 /// Odstęp między kafelkami.
-const GAP: f32 = 14.0;
+const GAP: f32 = 12.0;
 /// Margines wewnętrzny kafelka.
-const MARGIN: f32 = 16.0;
+const MARGIN: f32 = 14.0;
 /// Największa szerokość kafelka razem z ramką.
-const MAX_W: f32 = 420.0;
+const MAX_W: f32 = 400.0;
 
 /// Liczba kolumn, przy której `count` kafelków mieści się w obszarze
 /// `width` x `height` i kafelki są możliwie duże. Zwraca (kolumny, wysokość kafelka).
 pub fn layout(count: usize, width: f32, height: f32) -> (usize, f32) {
-    const MIN_W: f32 = 210.0;
-    const MIN_H: f32 = 96.0;
-    const MAX_H: f32 = 190.0;
+    const MIN_W: f32 = 230.0;
+    const MIN_H: f32 = 150.0;
+    const MAX_H: f32 = 220.0;
 
     let count = count.max(1);
     let max_cols = (((width + GAP) / (MIN_W + GAP)).floor() as usize).clamp(1, count);
@@ -112,6 +113,11 @@ pub fn layout(count: usize, width: f32, height: f32) -> (usize, f32) {
         best = (cols, MIN_H);
     }
     best
+}
+
+/// Klucz kafelka w historii odczytów.
+pub fn tile_key(tile: &Tile) -> String {
+    format!("{}|{}", tile.title, tile.hw)
 }
 
 /// Kafelek: tytuł, nazwa podzespołu i temperatura.
@@ -183,7 +189,13 @@ pub fn tiles(temps: &[Temp], gpu: Option<(&str, f32)>, disks: &[Disk]) -> Vec<Ti
     out
 }
 
-pub fn ui(ui: &mut egui::Ui, snap: Option<&Snapshot>, gpu: Option<(&str, f32)>, disks: &[Disk]) {
+pub fn ui(
+    ui: &mut egui::Ui,
+    snap: Option<&Snapshot>,
+    gpu: Option<(&str, f32)>,
+    disks: &[Disk],
+    history: &History,
+) {
     let key = tiles(snap.map(|s| s.temps.as_slice()).unwrap_or(&[]), gpu, disks);
     if key.is_empty() {
         ui.add_space(40.0);
@@ -200,16 +212,12 @@ pub fn ui(ui: &mut egui::Ui, snap: Option<&Snapshot>, gpu: Option<(&str, f32)>, 
         return;
     }
 
-    ui.label(
-        RichText::new(crate::i18n::tr(
-            "Najważniejsze temperatury",
-            "Key temperatures",
-        ))
-        .size(17.0)
-        .strong()
-        .color(theme::text()),
+    theme::heading(
+        ui,
+        crate::icons::Icon::Thermo,
+        crate::i18n::tr("Najważniejsze temperatury", "Key temperatures"),
     );
-    ui.add_space(8.0);
+    ui.add_space(4.0);
 
     // Kafelki dzielą między siebie całe wolne miejsce, więc wszystkie są
     // widoczne bez przewijania; pasek przewijania pojawia się dopiero w
@@ -223,55 +231,86 @@ pub fn ui(ui: &mut egui::Ui, snap: Option<&Snapshot>, gpu: Option<(&str, f32)>, 
         // 2 px na obramowanie i 1 px zapasu na zaokrąglenia.
         let inner = Vec2::new(
             (outer_w - 2.0 * MARGIN - 3.0).max(120.0),
-            (tile_h - 2.0 * MARGIN - 3.0).max(60.0),
+            (tile_h - 2.0 * MARGIN - 3.0).max(100.0),
         );
 
         ui.spacing_mut().item_spacing = Vec2::new(GAP, GAP);
         for row in key.chunks(cols) {
-            ui.horizontal(|ui| {
+            ui.horizontal_top(|ui| {
                 for tile in row {
-                    temp_tile(ui, tile, inner);
+                    temp_tile(ui, tile, history.get(&tile_key(tile)), inner);
                 }
             });
         }
     });
 }
 
-fn temp_tile(ui: &mut egui::Ui, tile: &Tile, inner: Vec2) {
+/// Stan temperatury: napis plakietki i kolor.
+fn state(value: f32) -> (&'static str, Color32) {
+    if value >= 80.0 {
+        (crate::i18n::tr("GORĄCO", "HOT"), theme::hot())
+    } else if value >= 65.0 {
+        (crate::i18n::tr("WYSOKA", "HIGH"), theme::warn())
+    } else {
+        (crate::i18n::tr("NORMALNA", "NORMAL"), theme::ok())
+    }
+}
+
+/// Kafelek: tytuł z plakietką stanu, podzespół, temperatura ze zmianą,
+/// minimum i maksimum oraz wykres z ostatnich 120 s.
+fn temp_tile(ui: &mut egui::Ui, tile: &Tile, series: Option<&VecDeque<f32>>, inner: Vec2) {
     let value = tile.value;
-    let title = crate::i18n::tr_dyn(tile.title);
+    let title = crate::i18n::tr_dyn(tile.title).to_uppercase();
+    let color = theme::temp_color(value);
+    let (state_text, state_color) = state(value);
+    let (min, max, delta) = match series {
+        Some(s) if !s.is_empty() => history::stats(s),
+        _ => (value, value, 0.0),
+    };
     // Wysoki kafelek dostaje większe cyfry.
-    let digits = (inner.y * 0.42).clamp(26.0, 52.0);
+    let digits = (inner.y * 0.16).clamp(22.0, 32.0);
+
     theme::card(12, MARGIN as i8).show(ui, |ui| {
         ui.set_width(inner.x);
         ui.set_height(inner.y);
         ui.spacing_mut().item_spacing = Vec2::new(6.0, 2.0);
         ui.vertical(|ui| {
-            ui.label(
-                RichText::new(title)
-                    .size(15.0)
-                    .strong()
-                    .color(theme::text()),
-            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(title)
+                        .size(13.0)
+                        .strong()
+                        .color(theme::text()),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    history::badge(ui, state_text, state_color);
+                });
+            });
             ui.add(egui::Label::new(RichText::new(&tile.hw).size(11.5).color(muted())).truncate());
-            ui.label(
-                RichText::new(format!("{value:.0} °C"))
-                    .size(digits)
-                    .strong()
-                    .color(theme::temp_color(value)),
-            );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("{value:.1}°C"))
+                        .size(digits)
+                        .strong()
+                        .color(color),
+                );
+                history::delta(ui, delta, "°C");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(format!("MIN {min:.1}° / MAX {max:.1}°"))
+                            .size(11.5)
+                            .color(muted()),
+                    );
+                });
+            });
+            ui.add_space(4.0);
 
-            // Pasek wypełnienia w zakresie 20-100 °C, przy dolnej krawędzi kafelka.
-            let spare = ui.available_height() - 6.0;
-            if spare > 0.0 {
-                ui.add_space(spare);
-            }
-            let (resp, painter) = ui.allocate_painter(Vec2::new(inner.x, 6.0), Sense::hover());
-            let frac = ((value - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)).clamp(0.0, 1.0);
-            painter.rect_filled(resp.rect, CornerRadius::same(3), track());
-            let mut fill = resp.rect;
-            fill.set_width(resp.rect.width() * frac);
-            painter.rect_filled(fill, CornerRadius::same(3), theme::temp_color(value));
+            // Wykres zajmuje resztę kafelka; pod nim podpisy osi czasu.
+            let chart_h = (ui.available_height() - 18.0).max(24.0);
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(inner.x, chart_h), Sense::hover());
+            history::chart(ui.painter(), rect, series, color, false, 4.0);
+            history::time_axis(ui);
         });
     });
 }
@@ -348,17 +387,17 @@ mod tests {
     #[test]
     fn tiles_fit_without_scrolling() {
         // Typowe okno 1080 x 600: pięć kafelków.
-        assert_eq!(layout(5, 1080.0, 600.0), (3, 190.0));
+        assert_eq!(layout(5, 1080.0, 600.0), (3, 220.0));
 
-        // Niskie okno: więcej kolumn, żeby nie przewijać.
-        let (cols, h) = layout(6, 1080.0, 230.0);
+        // Sześć kafelków w niższym oknie: 3 x 2 bez przewijania.
+        let (cols, h) = layout(6, 1080.0, 340.0);
         assert_eq!(cols, 3);
-        assert!(2.0 * h + 14.0 <= 230.01);
+        assert!(2.0 * h + 12.0 <= 340.01);
 
         // Jeden kafelek nie rozciąga się w nieskończoność.
-        assert_eq!(layout(1, 1080.0, 900.0), (1, 190.0));
+        assert_eq!(layout(1, 1080.0, 900.0), (1, 220.0));
 
         // Wąskie okno: jedna kolumna, przewijanie zamiast ściskania.
-        assert_eq!(layout(4, 300.0, 200.0), (1, 96.0));
+        assert_eq!(layout(4, 300.0, 200.0), (1, 150.0));
     }
 }

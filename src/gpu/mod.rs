@@ -789,6 +789,15 @@ impl GpuTab {
         Some((name.as_str(), self.monitor.temp_c? as f32))
     }
 
+    /// Domyślny limit mocy karty (TDP) ze sterownika, np. dla plakietki
+    /// obciążenia w zakładce POWER.
+    pub fn power_limit_w(&self) -> Option<f32> {
+        if self.demo {
+            return None;
+        }
+        self.monitor.details.tdp_w.filter(|w| *w > 0.0)
+    }
+
     /// Pobór mocy wybranej karty odczytany wprost ze sterownika.
     pub fn power(&self) -> Option<crate::power::GpuPower> {
         if self.demo {
@@ -1099,33 +1108,38 @@ impl GpuTab {
                         self.reload();
                     }
                     ui.separator();
-                    ui.selectable_value(
-                        &mut self.tab,
-                        Tab::Info,
-                        crate::i18n::tr("Informacje", "Info"),
-                    );
-                    ui.selectable_value(
-                        &mut self.tab,
-                        Tab::Clocks,
-                        crate::i18n::tr("Zegary", "Clocks"),
-                    );
+                    for (tab, label) in [
+                        (Tab::Info, crate::i18n::tr("Informacje", "Info")),
+                        (Tab::Clocks, crate::i18n::tr("Zegary", "Clocks")),
+                    ] {
+                        if theme::sub_tab(ui, label, self.tab == tab).clicked() {
+                            self.tab = tab;
+                        }
+                    }
                     // Karty AMD nie udostępniają krzywej V/F - opcja jest wyszarzona.
                     let has_curve = self.vendor() != Vendor::Amd;
-                    if ui
-                        .add_enabled(
-                            has_curve,
+                    if has_curve {
+                        if theme::sub_tab(
+                            ui,
+                            crate::i18n::tr("Krzywa V/F", "V/F curve"),
+                            self.tab == Tab::Curve,
+                        )
+                        .clicked()
+                        {
+                            self.tab = Tab::Curve;
+                        }
+                    } else {
+                        ui.add_enabled(
+                            false,
                             egui::Button::selectable(
-                                self.tab == Tab::Curve,
+                                false,
                                 crate::i18n::tr("Krzywa V/F", "V/F curve"),
                             ),
                         )
                         .on_disabled_hover_text(crate::i18n::tr(
                             "Niedostępne dla kart AMD",
                             "Not available for AMD cards",
-                        ))
-                        .clicked()
-                    {
-                        self.tab = Tab::Curve;
+                        ));
                     }
                     if self.demo {
                         ui.separator();

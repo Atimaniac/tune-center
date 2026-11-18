@@ -1,4 +1,5 @@
-//! Jednorazowe przygotowanie plików logo z obrazu źródłowego:
+//! Jednorazowe przygotowanie plików logo z obrazu źródłowego (`make_logo`)
+//! albo z makiety (`concept_logo`, obecne okrągłe logo):
 //! `TC_LOGO=<obraz> cargo test make_logo -- --ignored --nocapture`.
 //!
 //! Tworzy w `assets/`: `icon.png` (źródło 1024 px, białe tło usunięte),
@@ -89,6 +90,14 @@ fn make_logo() {
     let mut img = image::open(&path).expect("odczyt obrazu").to_rgba8();
     println!("źródło: {}x{}", img.width(), img.height());
     remove_white_background(&mut img);
+    write_icons(&img);
+}
+
+/// Zapisuje z logo `img` (RGBA, przezroczyste tło) pliki ikon programu i
+/// obrazki kreatora instalatora (`icon.png`, `icon-128.rgba`, `icon.ico`,
+/// `wizard-small.bmp`, `wizard-large.bmp`).
+fn write_icons(img: &RgbaImage) {
+    let img = img.clone();
     let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
 
     let master = image::imageops::resize(&img, 1024, 1024, FilterType::Lanczos3);
@@ -118,4 +127,61 @@ fn make_logo() {
         .save(assets.join("wizard-large.bmp"))
         .unwrap();
     println!("zapisano pliki logo w {}", assets.display());
+}
+
+/// Logo z nagłówka makiety (okrągły pierścień "TUNE"): wycina koło
+/// `TC_LOGO_CIRCLE=cx,cy,r` z obrazu `TC_CONCEPT`, ciemne tło makiety
+/// zamienia na przezroczystość i zapisuje teksturę `assets/logo-header.rgba`
+/// (160x160 RGBA). `TC_PREVIEW=<plik.png>` zapisuje dodatkowo podgląd.
+#[test]
+#[ignore]
+fn concept_logo() {
+    let path = std::env::var("TC_CONCEPT").expect("TC_CONCEPT");
+    let img = image::open(&path).expect("odczyt obrazu").to_rgba8();
+    println!("źródło: {}x{}", img.width(), img.height());
+    let circle: Vec<f32> = std::env::var("TC_LOGO_CIRCLE")
+        .expect("TC_LOGO_CIRCLE")
+        .split(',')
+        .map(|v| v.trim().parse().unwrap())
+        .collect();
+    let (cx, cy, r) = (circle[0], circle[1], circle[2]);
+    let side = (2.0 * r).ceil() as u32;
+    let (x0, y0) = ((cx - r).round() as u32, (cy - r).round() as u32);
+    let mut out = image::imageops::crop_imm(&img, x0, y0, side, side).to_image();
+    for (x, y, p) in out.enumerate_pixels_mut() {
+        let dx = x as f32 + 0.5 - r;
+        let dy = y as f32 + 0.5 - r;
+        let d = (dx * dx + dy * dy).sqrt() / r;
+        // Wnętrze pierścienia zostaje pełne; dalej zostają tylko jasne
+        // piksele (pierścień i poświata), a ciemne tło znika.
+        let bright = p[0].max(p[1]).max(p[2]) as f32;
+        let by_light = ((bright - 30.0) / 70.0).clamp(0.0, 1.0);
+        let inside = if d < 0.72 { 1.0 } else { 0.0 };
+        let edge = ((1.0 - d) / 0.06).clamp(0.0, 1.0);
+        let a = (by_light.max(inside) * edge * 255.0).round() as u8;
+        p[3] = a;
+    }
+    let tex = image::imageops::resize(&out, 160, 160, FilterType::Lanczos3);
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    std::fs::write(assets.join("logo-header.rgba"), tex.as_raw()).unwrap();
+    if let Ok(preview) = std::env::var("TC_PREVIEW") {
+        // Podgląd na tle okna programu.
+        let mut bg = RgbaImage::from_pixel(160, 160, Rgba([5, 10, 20, 255]));
+        image::imageops::overlay(&mut bg, &tex, 0, 0);
+        image::imageops::resize(&bg, 320, 320, FilterType::Nearest)
+            .save(preview)
+            .unwrap();
+    }
+    println!("zapisano assets/logo-header.rgba");
+    // Ta sama grafika jako ikona programu, zasobnika i instalatora - bez
+    // półprzezroczystej poświaty, czyste koło z wygładzoną krawędzią (na pasku
+    // zadań poświata wyglądała jak ciemny kwadrat).
+    let mut icon = image::imageops::crop_imm(&img, x0, y0, side, side).to_image();
+    for (x, y, p) in icon.enumerate_pixels_mut() {
+        let dx = x as f32 + 0.5 - r;
+        let dy = y as f32 + 0.5 - r;
+        let d = (dx * dx + dy * dy).sqrt() / r;
+        p[3] = (((0.92 - d) / 0.03).clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
+    write_icons(&icon);
 }

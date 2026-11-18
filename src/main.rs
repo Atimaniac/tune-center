@@ -19,7 +19,9 @@ mod fans;
 mod gpu;
 mod gpu_fans;
 mod hags;
+mod history;
 mod i18n;
+mod icons;
 mod leds;
 #[cfg(test)]
 mod logo_tool;
@@ -36,15 +38,17 @@ mod update;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Align2, Color32, CornerRadius, RichText, Sense, Stroke, StrokeKind};
+use eframe::egui::{self, Align2, Color32, RichText, Sense, Stroke};
 
 use bridge::{Backend, Status};
 use fans::FansTab;
 use gpu::GpuTab;
-use theme::{accent, bg, muted, warn};
+use icons::Icon;
+use theme::{accent, muted, warn};
 
-/// Rozmiar logo wczytywanego jako tekstura (plik `assets/icon-128.rgba`).
-const LOGO_SIZE: usize = 128;
+/// Rozmiar logo w nagłówku i ABOUT (plik `assets/logo-header.rgba`, okrągłe
+/// logo z makiety; ikona okna i zasobnika zostaje przy `icon-128.rgba`).
+const LOGO_SIZE: usize = 160;
 
 /// Odstęp między klatkami animacji (~30 klatek/s): kręcące się wentylatory,
 /// pulsujące numery profili GPU.
@@ -62,50 +66,117 @@ enum Tab {
 }
 
 /// Zakładki w kolejności przycisków w nagłówku.
-const TABS: [(Tab, &str); 7] = [
-    (Tab::Nvidia, "NVIDIA"),
-    (Tab::Cpu, "CPU"),
-    (Tab::Fans, "FAN"),
-    (Tab::Sensors, "SENSORS"),
-    (Tab::Power, "POWER"),
-    (Tab::Options, "OPTIONS"),
-    (Tab::About, "ABOUT"),
+const TABS: [(Tab, &str, Icon); 7] = [
+    (Tab::Nvidia, "NVIDIA", Icon::Gpu),
+    (Tab::Cpu, "CPU", Icon::Cpu),
+    (Tab::Fans, "FAN", Icon::Fan),
+    (Tab::Sensors, "SENSORS", Icon::Sensors),
+    (Tab::Power, "POWER", Icon::Power),
+    (Tab::Options, "OPTIONS", Icon::Options),
+    (Tab::About, "ABOUT", Icon::About),
 ];
 
-/// Przycisk zakładki: zaokrąglony prostokąt z napisem. Nieaktywny jest
-/// wypełniony ciemnym błękitem, aktywny ma tło okna i morskie obramowanie.
-fn tab_button(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
-    let font = theme::tab_font(15.0);
+/// Pochylenie boków przycisku zakładki (piksele).
+const TAB_SKEW: f32 = 10.0;
+
+/// Przycisk zakładki: równoległobok z ikoną i napisem. Nieaktywny ma ciemne
+/// tło i ciemnoniebieską obwódkę, aktywny świeci jasnym błękitem i ma
+/// poświatę pod spodem.
+fn tab_button(ui: &mut egui::Ui, label: &str, icon: Icon, selected: bool) -> egui::Response {
+    let font = theme::tab_font(13.0);
     let text_width = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
         .size()
         .x;
-    let size = egui::vec2((text_width + 28.0).max(92.0), 30.0);
+    let size = egui::vec2(text_width + 26.0 + 2.0 * TAB_SKEW + 12.0, 38.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
 
     if ui.is_rect_visible(rect) {
-        let (fill, stroke, text) = if selected {
-            (
-                bg(),
-                Stroke::new(2.0_f32, theme::tab_active()),
-                theme::tab_active(),
-            )
-        } else if response.hovered() {
-            (theme::tab_fill_hovered(), Stroke::NONE, Color32::WHITE)
-        } else {
-            (theme::tab_fill(), Stroke::NONE, Color32::WHITE)
+        let p = ui.painter();
+        let shape = [
+            egui::pos2(rect.left() + TAB_SKEW, rect.top()),
+            egui::pos2(rect.right(), rect.top()),
+            egui::pos2(rect.right() - TAB_SKEW, rect.bottom()),
+            egui::pos2(rect.left(), rect.bottom()),
+        ];
+        let light = theme::is_light();
+        let hovered = response.hovered();
+        let (fill, edge, text) = match (selected, hovered, light) {
+            (true, _, false) => (Color32::from_rgb(12, 44, 88), theme::glow(), Color32::WHITE),
+            (true, _, true) => (
+                Color32::from_rgb(214, 234, 252),
+                theme::glow(),
+                Color32::BLACK,
+            ),
+            (false, true, false) => (
+                Color32::from_rgb(12, 30, 56),
+                Color32::from_rgb(52, 110, 180),
+                Color32::WHITE,
+            ),
+            (false, false, false) => (
+                Color32::from_rgb(8, 18, 34),
+                Color32::from_rgb(30, 62, 104),
+                Color32::from_rgb(214, 226, 242),
+            ),
+            (false, true, true) => (
+                Color32::from_rgb(232, 242, 252),
+                Color32::from_rgb(120, 170, 220),
+                Color32::BLACK,
+            ),
+            (false, false, true) => (
+                Color32::WHITE,
+                Color32::from_rgb(170, 198, 230),
+                Color32::BLACK,
+            ),
         };
-        // Obramowanie rysujemy do środka, żeby aktywny przycisk nie był większy.
-        ui.painter().rect(
-            rect,
-            CornerRadius::same(9),
+        let mut closed = shape.to_vec();
+        closed.push(shape[0]);
+        if selected {
+            theme::glow_line(p, &closed, edge, 0.9);
+            // Poświata pod aktywną zakładką.
+            theme::radial_glow(
+                p,
+                egui::pos2(rect.center().x, rect.bottom() + 2.0),
+                egui::pos2(rect.width() * 0.5, 12.0),
+                theme::glow().gamma_multiply(0.5),
+            );
+        }
+        p.add(egui::Shape::convex_polygon(
+            shape.to_vec(),
             fill,
-            stroke,
-            StrokeKind::Inside,
+            Stroke::new(if selected { 1.5 } else { 1.0 }, edge),
+        ));
+        if selected {
+            theme::glow_line(
+                p,
+                &[
+                    egui::pos2(rect.left() + 6.0, rect.bottom()),
+                    egui::pos2(rect.right() - TAB_SKEW - 6.0, rect.bottom()),
+                ],
+                theme::glow(),
+                1.0,
+            );
+        }
+        let content = text_width + 25.0;
+        let x = rect.center().x - content / 2.0;
+        let icon_color = if selected { theme::glow() } else { text };
+        icons::paint(
+            p,
+            egui::Rect::from_center_size(
+                egui::pos2(x + 9.0, rect.center().y),
+                egui::vec2(18.0, 18.0),
+            ),
+            icon,
+            icon_color,
         );
-        ui.painter()
-            .text(rect.center(), Align2::CENTER_CENTER, label, font, text);
+        p.text(
+            egui::pos2(x + 25.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            label,
+            font,
+            text,
+        );
     }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -153,6 +224,10 @@ struct App {
     update_asked: bool,
     /// Ostatnie sprawdzenie aktualizacji (automatycznie co 15 minut).
     update_checked: Instant,
+    /// Historia temperatur zakładki SENSORS (120 s).
+    sensor_hist: history::History,
+    /// Historia mocy zakładki POWER (120 s).
+    power_hist: history::History,
 }
 
 impl App {
@@ -210,7 +285,7 @@ impl App {
             "logo",
             egui::ColorImage::from_rgba_unmultiplied(
                 [LOGO_SIZE, LOGO_SIZE],
-                include_bytes!("../assets/icon-128.rgba"),
+                include_bytes!("../assets/logo-header.rgba"),
             ),
             egui::TextureOptions::LINEAR,
         );
@@ -245,6 +320,8 @@ impl App {
             updates,
             update_asked: false,
             update_checked: Instant::now(),
+            sensor_hist: history::History::default(),
+            power_hist: history::History::default(),
         }
     }
 
@@ -342,13 +419,8 @@ impl App {
 
     /// Zakładka OPTIONS: ustawienia całego programu.
     fn options_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.label(
-            RichText::new(crate::i18n::tr("Opcje", "Options"))
-                .size(17.0)
-                .strong()
-                .color(theme::text()),
-        );
-        ui.add_space(6.0);
+        theme::heading(ui, Icon::Options, crate::i18n::tr("Opcje", "Options"));
+        ui.add_space(2.0);
 
         let width = theme::grid_card_width(ui.available_width(), 380.0, 14.0, 1, 18.0).min(640.0);
         theme::card(14, 18).show(ui, |ui| {
@@ -480,6 +552,31 @@ impl App {
                     "At startup and then every 15 minutes the program asks GitHub for the latest release and shows a note at the bottom of the window that a newer version is ready to install. It downloads nothing on its own.",
                 ),
             );
+
+            ui.horizontal(|ui| {
+                ui.label(crate::i18n::tr("Cena energii za kWh:", "Energy price per kWh:"));
+                let mut price = self.fans.config.energy_price;
+                let mut currency = self.fans.config.energy_currency.clone();
+                let a = ui.add(
+                    egui::DragValue::new(&mut price)
+                        .range(0.0..=100.0)
+                        .speed(0.01)
+                        .max_decimals(2),
+                );
+                let b = ui.add(egui::TextEdit::singleline(&mut currency).desired_width(48.0).char_limit(6));
+                if a.changed() || b.changed() {
+                    self.fans.config.energy_price = price;
+                    self.fans.config.energy_currency = currency;
+                    self.fans.config.save();
+                }
+            });
+            option_note(
+                ui,
+                crate::i18n::tr(
+                    "Do kosztu energii zużytej w sesji (zakładka POWER). 0 ukrywa koszt.",
+                    "Used for the cost of energy used in the session (POWER tab). 0 hides the cost.",
+                ),
+            );
         });
     }
 
@@ -565,13 +662,8 @@ fn option_note(ui: &mut egui::Ui, text: &str) {
 fn about_card(ui: &mut egui::Ui, width: f32, title: &str, lines: &[&str]) {
     theme::card(14, 18).show(ui, |ui| {
         ui.set_width(width);
-        ui.label(
-            RichText::new(title)
-                .size(16.0)
-                .strong()
-                .color(theme::text()),
-        );
-        ui.add_space(6.0);
+        theme::subheading(ui, Icon::About, title);
+        ui.add_space(2.0);
         for line in lines {
             ui.label(RichText::new(*line).color(theme::text()));
             ui.add_space(2.0);
@@ -610,6 +702,34 @@ impl eframe::App for App {
             }
         }
 
+        // Historia temperatur zakładki SENSORS (co sekundę, także w tle).
+        if self.sensor_hist.due(now) {
+            let snap = self.bridge.as_ref().ok().and_then(|b| b.state().0);
+            let key = sensors::tiles(
+                snap.as_ref().map(|s| s.temps.as_slice()).unwrap_or(&[]),
+                self.gpu.reading(),
+                &self.disks.list(),
+            );
+            let values: Vec<(String, f32)> = key
+                .iter()
+                .map(|t| (sensors::tile_key(t), t.value))
+                .collect();
+            self.sensor_hist.record(&values, now);
+            if let Ok(m) = self.meter.lock() {
+                let mut values: Vec<(String, f32)> = m
+                    .rows()
+                    .iter()
+                    .map(|r| (power_tab::row_key(r), r.watts))
+                    .collect();
+                values.push((power_tab::TOTAL_KEY.to_owned(), m.total().watts));
+                // Przed pierwszym odczytem licznik daje same zera - nie zapisujemy
+                // ich, żeby wykres nie zaczynał się od skoku z 0 W.
+                if values.iter().any(|(_, w)| *w > 0.0) {
+                    self.power_hist.record(&values, now);
+                }
+            }
+        }
+
         // Opóźniony zapis ustawień wentylatorów działa także przy ukrytym oknie.
         self.fans
             .tick(self.bridge.as_ref().ok(), self.gpu_fans.as_ref());
@@ -627,58 +747,106 @@ impl eframe::App for App {
             Err(e) => (None, Status::Error(e.clone())),
         };
 
+        // --- tło całego okna (granat z poświatą); panele są przezroczyste ---
+        theme::paint_background(ui.painter(), ctx.content_rect());
+
         // --- nagłówek: logo, nazwa i przyciski zakładek ---
-        egui::Panel::top("header")
-            .frame(
-                egui::Frame::NONE
-                    .fill(bg())
-                    .inner_margin(egui::Margin::symmetric(20, 12)),
-            )
+        let header = egui::Panel::top("header")
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                left: 18,
+                right: 18,
+                top: 10,
+                bottom: 16,
+            }))
             .show(ui, |ui| {
                 // W wąskim oknie przyciski przechodzą do kolejnego wiersza.
                 ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 6.0);
-                    ui.add(egui::Image::from_texture(egui::load::SizedTexture::new(
+                    ui.spacing_mut().item_spacing = egui::vec2(2.0, 8.0);
+                    let (logo_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(80.0, 80.0), Sense::hover());
+                    theme::radial_glow(
+                        ui.painter(),
+                        logo_rect.center(),
+                        egui::pos2(52.0, 52.0),
+                        theme::glow().gamma_multiply(0.15),
+                    );
+                    egui::Image::from_texture(egui::load::SizedTexture::new(
                         self.logo.id(),
-                        egui::vec2(64.0, 64.0),
-                    )));
-                    ui.add_space(6.0);
+                        egui::vec2(80.0, 80.0),
+                    ))
+                    .paint_at(ui, logo_rect);
+                    ui.add_space(12.0);
                     ui.label(
                         RichText::new("TUNE CENTER")
-                            .font(theme::tab_font(26.0))
+                            .font(theme::tab_font(23.0))
                             .color(theme::wordmark()),
                     );
-                    ui.add_space(14.0);
-                    for (tab, label) in TABS {
-                        if tab_button(ui, label, self.tab == tab).clicked() {
+                    ui.add_space(18.0);
+                    let tabs_x = ui.cursor().left();
+                    for (tab, label, icon) in TABS {
+                        if tab_button(ui, label, icon, self.tab == tab).clicked() {
                             self.tab = tab;
                         }
                     }
-                });
+                    tabs_x
+                })
+                .inner
             });
+        // Świecąca linia pod nagłówkiem, z uskokiem pod zakładkami jak w panelu.
+        {
+            let r = header.response.rect;
+            let y = r.bottom() - 2.0;
+            let x_step = (header.inner + 4.0).min(r.right() - 120.0);
+            let p = ui.painter();
+            theme::gradient_line(
+                p,
+                y - 10.0,
+                r.left(),
+                x_step - 16.0,
+                1.5,
+                Color32::TRANSPARENT,
+                theme::glow().gamma_multiply(0.7),
+            );
+            theme::glow_line(
+                p,
+                &[
+                    egui::pos2(x_step - 16.0, y - 10.0),
+                    egui::pos2(x_step - 6.0, y),
+                    egui::pos2(r.right() - 80.0, y),
+                ],
+                theme::glow(),
+                0.7,
+            );
+            theme::gradient_line(
+                p,
+                y,
+                r.right() - 80.0,
+                r.right(),
+                1.5,
+                theme::glow().gamma_multiply(0.6),
+                Color32::TRANSPARENT,
+            );
+        }
 
         // --- pasek stanu na samym dole okna ---
-        egui::Panel::bottom("status")
-            .frame(
-                egui::Frame::NONE
-                    .fill(bg())
-                    .inner_margin(egui::Margin::symmetric(20, 6)),
-            )
+        let status_panel = egui::Panel::bottom("status")
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 8)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let (text, color) = match &status {
                         Status::Starting => (
                             crate::i18n::tr("Czujniki: uruchamianie...", "Sensors: starting...")
                                 .to_owned(),
-                            muted(),
+                            warn(),
                         ),
                         Status::Running => (
                             crate::i18n::tr("Czujniki: połączono", "Sensors: connected").to_owned(),
-                            accent(),
+                            theme::ok(),
                         ),
-                        Status::Error(e) => (e.clone(), warn()),
+                        Status::Error(e) => (e.clone(), theme::hot()),
                     };
-                    ui.label(RichText::new(text).size(12.0).color(color));
+                    theme::dot(ui, color);
+                    ui.label(RichText::new(text).size(13.0).color(theme::text()));
                     if let Some(notice) = &self.notice {
                         ui.separator();
                         ui.label(RichText::new(notice).size(12.0).color(warn()));
@@ -727,14 +895,14 @@ impl eframe::App for App {
                                 | update::State::Downloading { .. }
                                 | update::State::Launched
                         );
-                        let button = egui::Button::new(
-                            RichText::new(crate::i18n::tr(
-                                "Sprawdź aktualizację",
-                                "Check for updates",
-                            ))
-                            .size(12.0),
-                        );
-                        if ui.add_enabled(!checking, button).clicked() {
+                        if theme::primary_button(
+                            ui,
+                            Some(Icon::Download),
+                            crate::i18n::tr("Sprawdź aktualizację", "Check for updates"),
+                            !checking,
+                        )
+                        .clicked()
+                        {
                             self.update_asked = true;
                             let ctx = ctx.clone();
                             self.updates.start(move || ctx.request_repaint());
@@ -861,12 +1029,31 @@ impl eframe::App for App {
                 });
             });
 
+        // Linia nad paskiem stanu.
+        {
+            let r = status_panel.response.rect;
+            theme::gradient_line(
+                ui.painter(),
+                r.top(),
+                r.left(),
+                r.center().x,
+                1.0,
+                Color32::TRANSPARENT,
+                theme::card_edge(),
+            );
+            theme::gradient_line(
+                ui.painter(),
+                r.top(),
+                r.center().x,
+                r.right(),
+                1.0,
+                theme::card_edge(),
+                Color32::TRANSPARENT,
+            );
+        }
+
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::NONE
-                    .fill(bg())
-                    .inner_margin(egui::Margin::symmetric(20, 10)),
-            )
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(22, 12)))
             .show(ui, |ui| match self.tab {
                 Tab::Nvidia => self.nvcp.ui(ui, &mut self.gpu, snap.as_ref()),
                 Tab::Cpu => self.cpu.ui(ui),
@@ -879,10 +1066,26 @@ impl eframe::App for App {
                     };
                     self.fans.ui(ui, merged.as_ref(), dt)
                 }
-                Tab::Sensors => {
-                    sensors::ui(ui, snap.as_ref(), self.gpu.reading(), &self.disks.list())
-                }
-                Tab::Power => power_tab::ui(ui, &self.meter),
+                Tab::Sensors => sensors::ui(
+                    ui,
+                    snap.as_ref(),
+                    self.gpu.reading(),
+                    &self.disks.list(),
+                    &self.sensor_hist,
+                ),
+                Tab::Power => power_tab::ui(
+                    ui,
+                    &self.meter,
+                    &self.power_hist,
+                    power_tab::Limits {
+                        cpu_w: self.cpu.power_limit_w(),
+                        gpu_w: self.gpu.power_limit_w(),
+                    },
+                    (
+                        self.fans.config.energy_price,
+                        &self.fans.config.energy_currency,
+                    ),
+                ),
                 Tab::Options => self.options_ui(ui, &ctx),
                 Tab::About => self.about_ui(ui),
             });

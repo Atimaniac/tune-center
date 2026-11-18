@@ -75,10 +75,24 @@ pub struct Config {
     /// Tryby LED sprzed wyłączenia: (adres SMBus, tryb bezpośredni, tryb).
     #[serde(default)]
     pub leds_saved: Vec<(u8, u8, u8)>,
+    /// Cena energii za kWh do kosztu sesji w zakładce POWER (0 = nie pokazuj).
+    #[serde(default = "default_price")]
+    pub energy_price: f32,
+    /// Waluta ceny energii (np. "zł").
+    #[serde(default = "default_currency")]
+    pub energy_currency: String,
     #[serde(default)]
     pub active: String,
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
+}
+
+fn default_price() -> f32 {
+    0.90
+}
+
+fn default_currency() -> String {
+    "zł".to_owned()
 }
 
 fn yes() -> bool {
@@ -95,6 +109,8 @@ impl Default for Config {
             gpu_fans_direct: true,
             leds_off: false,
             leds_saved: Vec::new(),
+            energy_price: default_price(),
+            energy_currency: default_currency(),
             active: String::new(),
             profiles: BTreeMap::new(),
         };
