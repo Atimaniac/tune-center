@@ -4,7 +4,8 @@
 //! Numery poleceń SMU, kodowanie maski rdzenia i marginesu, adresy skrzynek
 //! i bezpieczników rdzeni pochodzą z projektu ZenStates-Core (irusanov,
 //! GPL-3.0; użyte jako odniesienie, bez kopiowania kodu). Położenie limitów
-//! w tabeli PM: ryzen_monitor (Zen 3) i rigstats (Zen 5, sprawdzone na 9800X3D).
+//! w tabeli PM: ryzen_monitor (Zen 2, Zen 3) i rigstats (Zen 5, sprawdzone na
+//! 9800X3D). Ryzen 3000 (Zen 2): tylko limity PBO, bez Curve Optimizera.
 //! Polecenia trafiają do SMU przez oficjalny moduł PawnIO `RyzenSMU.bin`.
 //!
 //! Dwie rzeczy są zrobione okrężną drogą, bo nie ma dla nich pewnego,
@@ -135,6 +136,8 @@ pub fn mailbox_transaction(
 /// Obsługiwane generacje procesorów desktopowych.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Generation {
+    /// Ryzen 3000 (Matisse). Bez Curve Optimizera - pojawił się dopiero w Zen 3.
+    Zen2,
     /// Ryzen 5000 (Vermeer).
     Zen3,
     /// Ryzen 7000 (Raphael).
@@ -147,6 +150,7 @@ impl Generation {
     /// Rozpoznanie po rodzinie i modelu z CPUID.
     pub fn detect(family: u32, model: u32) -> Option<Self> {
         match (family, model) {
+            (0x17, 0x71) => Some(Self::Zen2),
             (0x19, 0x20) | (0x19, 0x21) => Some(Self::Zen3),
             (0x19, 0x61) => Some(Self::Zen4),
             (0x1A, 0x44) => Some(Self::Zen5),
@@ -156,6 +160,7 @@ impl Generation {
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::Zen2 => "Zen 2 (Ryzen 3000)",
             Self::Zen3 => "Zen 3 (Ryzen 5000)",
             Self::Zen4 => "Zen 4 (Ryzen 7000)",
             Self::Zen5 => "Zen 5 (Ryzen 9000)",
@@ -195,6 +200,17 @@ const CORE_SLOTS_PER_CCD: u32 = 8;
 
 pub fn commands(generation: Generation) -> Commands {
     match generation {
+        // Zen 2 (Matisse): te same polecenia limitów PBO w RSMU co Zen 3
+        // (ZenStates-Core: wspólne ustawienia Matisse i Vermeer); Curve
+        // Optimizera ten procesor nie ma.
+        Generation::Zen2 => Commands {
+            set_ppt: 0x53,
+            set_tdc: 0x54,
+            set_edc: 0x55,
+            set_scalar: 0x58,
+            get_scalar: 0x6C,
+            curve: None,
+        },
         // Zen 3: odniesienie oznacza zapis marginesu przez RSMU jako niepewny,
         // więc zapis idzie potwierdzoną drogą przez MP1 (0x35). Odczyt przez
         // RSMU 0x7C jest sprawdzany przed pierwszym zapisem i po każdym zapisie.
@@ -416,6 +432,15 @@ pub struct Layout {
 /// układ najbliższej znanej wersji jako niepotwierdzony.
 pub fn layout(generation: Generation, version: u32) -> Layout {
     match generation {
+        // Zen 2: tabela 0x2407xx-0x2409xx ma limity w tych samych polach co
+        // Zen 3 (ryzen_monitor), ale bez sprzętu do sprawdzenia - wartości są
+        // niepotwierdzone, dopóki zapis i odczyt nie wskażą pola.
+        Generation::Zen2 => Layout {
+            ppt: 0,
+            tdc: 2,
+            edc: 8,
+            verified: false,
+        },
         Generation::Zen3 => Layout {
             ppt: 0,
             tdc: 2,
@@ -718,7 +743,9 @@ mod tests {
         assert_eq!(Generation::detect(0x19, 0x21), Some(Generation::Zen3));
         assert_eq!(Generation::detect(0x19, 0x61), Some(Generation::Zen4));
         assert_eq!(Generation::detect(0x1A, 0x44), Some(Generation::Zen5));
-        assert_eq!(Generation::detect(0x17, 0x71), None);
+        assert_eq!(Generation::detect(0x17, 0x71), Some(Generation::Zen2));
+        assert_eq!(Generation::detect(0x17, 0x08), None);
+        assert!(commands(Generation::Zen2).curve.is_none());
         assert_eq!(
             commands(Generation::Zen5).curve.unwrap().core_fuse,
             0x304A_03DC

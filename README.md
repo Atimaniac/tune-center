@@ -285,6 +285,7 @@ Obsługiwane procesory do komputerów stacjonarnych:
 
 | Procesor | Curve Optimizer | Limity PBO |
 | --- | --- | --- |
+| Ryzen 3000 (Zen 2) | nie (procesor go nie ma) | tak, niesprawdzone na sprzęcie |
 | Ryzen 5000 (Zen 3) | tak, -30..+30 | tak |
 | Ryzen 7000 (Zen 4) | tak, -50..+30 | tak |
 | Ryzen 9000 (Zen 5) | tak, -50..+30 | tak |

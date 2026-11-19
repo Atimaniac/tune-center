@@ -1,9 +1,9 @@
-//! ZakĹ‚adka "Procesor" dla AMD Ryzen: Curve Optimizer dla kaĹĽdego rdzenia
+//! Zakładka "Procesor" dla AMD Ryzen: Curve Optimizer dla każdego rdzenia
 //! i limity Precision Boost Overdrive (PPT, TDC, EDC, skalar).
 //!
-//! Zmiany trafiajÄ… do procesora po klikniÄ™ciu przycisku w danej sekcji
-//! i znikajÄ… po restarcie albo uĹ›pieniu komputera - program niczego nie
-//! zapisuje na staĹ‚e ani nie stosuje automatycznie przy starcie.
+//! Zmiany trafiają do procesora po kliknięciu przycisku w danej sekcji
+//! i znikają po restarcie albo uśpieniu komputera - program niczego nie
+//! zapisuje na stałe ani nie stosuje automatycznie przy starcie.
 
 use eframe::egui::{self, RichText};
 
@@ -30,20 +30,20 @@ pub struct AmdTab {
     generation: Option<Generation>,
     driver: Result<AmdDriver, String>,
     state: Option<State>,
-    /// Marginesy w edycji, w kolejnoĹ›ci rdzeni ze stanu.
+    /// Marginesy w edycji, w kolejności rdzeni ze stanu.
     margins: Vec<i32>,
-    /// WartoĹ›Ä‡ do wpisania wszystkim rdzeniom naraz.
+    /// Wartość do wpisania wszystkim rdzeniom naraz.
     all_cores: i32,
     ppt_w: u32,
     tdc_a: u32,
     edc_a: u32,
     scalar: u32,
-    /// PoĹ‚oĹĽenie limitĂłw w tabeli PM; ustalane przy pierwszym odczycie.
+    /// Położenie limitów w tabeli PM; ustalane przy pierwszym odczycie.
     layout: Option<Layout>,
     /// Czy odczyt PPT, TDC i EDC jest potwierdzony (znana wersja tabeli albo
-    /// zapis, po ktĂłrym tabela pokazaĹ‚a zadanÄ… wartoĹ›Ä‡).
+    /// zapis, po którym tabela pokazała zadaną wartość).
     confirmed: [bool; 3],
-    /// Pola limitĂłw zostaĹ‚y juĹĽ ustawione na wartoĹ›ci z procesora.
+    /// Pola limitów zostały już ustawione na wartości z procesora.
     limits_loaded: bool,
     armed: bool,
     status: String,
@@ -66,11 +66,11 @@ impl AmdTab {
     pub fn new(info: CpuInfo) -> Self {
         let generation = Generation::detect(info.family, info.model);
         let driver = match (generation, module("RyzenSMU.bin"), module("AMDFamily17.bin")) {
-            (None, _, _) => Err(crate::trf!("Ten procesor AMD (rodzina 0x{:X}, model 0x{:X}) nie jest obsĹ‚ugiwany. ObsĹ‚ugiwane sÄ… Ryzen 5000, 7000 i 9000 do komputerĂłw stacjonarnych.", "This AMD processor (family 0x{:X}, model 0x{:X}) is not supported. Supported: desktop Ryzen 5000, 7000 and 9000.",
+            (None, _, _) => Err(crate::trf!("Ten procesor AMD (rodzina 0x{:X}, model 0x{:X}) nie jest obsługiwany. Obsługiwane są Ryzen 3000, 5000, 7000 i 9000 do komputerów stacjonarnych.", "This AMD processor (family 0x{:X}, model 0x{:X}) is not supported. Supported: desktop Ryzen 3000, 5000, 7000 and 9000.",
                 info.family, info.model
             )),
             (Some(_), Some(smu), Some(smn)) => AmdDriver::open(&smu, &smn),
-            _ => Err(crate::i18n::tr("Nie moĹĽna ustaliÄ‡ katalogu programu.", "Cannot determine the program folder.").to_string()),
+            _ => Err(crate::i18n::tr("Nie można ustalić katalogu programu.", "Cannot determine the program folder.").to_string()),
         };
         let mut tab = Self {
             info,
@@ -79,7 +79,7 @@ impl AmdTab {
             state: None,
             margins: Vec::new(),
             all_cores: 0,
-            // ZastÄ™powane wartoĹ›ciami z procesora, gdy uda siÄ™ je odczytaÄ‡.
+            // Zastępowane wartościami z procesora, gdy uda się je odczytać.
             ppt_w: 142,
             tdc_a: 110,
             edc_a: 170,
@@ -87,7 +87,7 @@ impl AmdTab {
             layout: None,
             confirmed: [false; 3],
             limits_loaded: false,
-            // Zapis dostÄ™pny od razu (bez "odblokuj zapis"), jak w zakĹ‚adce karty.
+            // Zapis dostępny od razu (bez "odblokuj zapis"), jak w zakładce karty.
             armed: true,
             status: String::new(),
         };
@@ -110,7 +110,7 @@ impl AmdTab {
         };
         let Ok(driver) = &mut self.driver else { return };
 
-        // UkĹ‚ad tabeli PM zaleĹĽy od jej wersji; ustalamy go raz.
+        // Układ tabeli PM zależy od jej wersji; ustalamy go raz.
         let layout = match self.layout {
             Some(layout) => layout,
             None => {
@@ -124,7 +124,7 @@ impl AmdTab {
 
         let state = amd::read_state(driver, cmds, layout, self.info.physical_cores);
         if let (Ok(limits), false) = (&state.limits, self.limits_loaded) {
-            // Pola startujÄ… od bieĹĽÄ…cych ustawieĹ„ procesora.
+            // Pola startują od bieżących ustawień procesora.
             if let Some(v) = limits.ppt_w {
                 self.ppt_w = v.round() as u32;
             }
@@ -177,7 +177,7 @@ impl AmdTab {
             match amd::set_margin(driver, curve, *core, *new) {
                 Ok(_) => done += 1,
                 Err(e) => {
-                    // Po pierwszym bĹ‚Ä™dzie nie ruszamy kolejnych rdzeni.
+                    // Po pierwszym błędzie nie ruszamy kolejnych rdzeni.
                     error = Some(e);
                     break;
                 }
@@ -186,7 +186,7 @@ impl AmdTab {
         self.status = match error {
             Some(e) if done == 0 => format!("Curve Optimizer: {e}."),
             Some(e) => crate::trf!(
-                "Zmieniono {done} rdzeni, potem bĹ‚Ä…d: {e}.",
+                "Zmieniono {done} rdzeni, potem błąd: {e}.",
                 "Changed {done} cores, then an error: {e}."
             ),
             None => crate::trf!(
@@ -197,7 +197,7 @@ impl AmdTab {
         self.reload();
     }
 
-    /// WysyĹ‚a limit i sprawdza w tabeli PM, czy procesor go pokazuje.
+    /// Wysyła limit i sprawdza w tabeli PM, czy procesor go pokazuje.
     fn send_limit(&mut self, limit: Limit, name: &str, unit: &str, value: u32) -> String {
         let Some(cmds) = self.commands() else {
             return String::new();
@@ -215,7 +215,7 @@ impl AmdTab {
         }
         let Some(layout) = &mut self.layout else {
             return crate::trf!(
-                "WysĹ‚ano {name} {value} {unit}. SMU przyjÄ™Ĺ‚o polecenie.",
+                "Wysłano {name} {value} {unit}. SMU przyjęło polecenie.",
                 "Sent {name} {value} {unit}. The SMU accepted the command."
             );
         };
@@ -229,16 +229,16 @@ impl AmdTab {
             }
             Ok(Readback::Relocated(_)) => {
                 self.confirmed[limit_slot(limit)] = true;
-                crate::trf!("{name} ustawione na {value} {unit}. WartoĹ›Ä‡ znaleziono w innym polu tabeli niĹĽ zakĹ‚adane - odczyt {name} zostaĹ‚ poprawiony.", "{name} set to {value} {unit}. The value was found in a different table field than assumed - the {name} readout has been corrected."
+                crate::trf!("{name} ustawione na {value} {unit}. Wartość znaleziono w innym polu tabeli niż zakładane - odczyt {name} został poprawiony.", "{name} set to {value} {unit}. The value was found in a different table field than assumed - the {name} readout has been corrected."
                 )
             }
             Ok(Readback::Unconfirmed) => {
                 self.confirmed[limit_slot(limit)] = false;
-                crate::trf!("SMU przyjÄ™Ĺ‚o {name} {value} {unit}, ale tabela procesora nie pokazuje tej wartoĹ›ci. PĹ‚yta mogĹ‚a ograniczyÄ‡ limit; odczyt {name} jest niepewny.", "The SMU accepted {name} {value} {unit}, but the CPU table does not show that value. The board may have capped the limit; the {name} readout is uncertain."
+                crate::trf!("SMU przyjęło {name} {value} {unit}, ale tabela procesora nie pokazuje tej wartości. Płyta mogła ograniczyć limit; odczyt {name} jest niepewny.", "The SMU accepted {name} {value} {unit}, but the CPU table does not show that value. The board may have capped the limit; the {name} readout is uncertain."
                 )
             }
             Err(e) => crate::trf!(
-                "SMU przyjÄ™Ĺ‚o {name} {value} {unit}; odczyt kontrolny nie powiĂłdĹ‚ siÄ™: {e}.",
+                "SMU przyjęło {name} {value} {unit}; odczyt kontrolny nie powiódł się: {e}.",
                 "The SMU accepted {name} {value} {unit}; the verification read failed: {e}."
             ),
         }
@@ -302,7 +302,7 @@ impl AmdTab {
             ui.add_space(12.0);
             theme::info(
                 ui,
-                crate::i18n::tr("Ustawienia dziaĹ‚ajÄ… do restartu lub uĹ›pienia komputera i nie sÄ… stosowane automatycznie. Zamknij Ryzen Master i inne programy do strojenia. Zmieniaj Curve Optimizer po kilka punktĂłw i testuj stabilnoĹ›Ä‡ po kaĹĽdej zmianie - niestabilny rdzeĹ„ czÄ™sto ujawnia siÄ™ dopiero przy maĹ‚ym obciÄ…ĹĽeniu.", "Settings last until the computer restarts or sleeps and are not applied automatically. Close Ryzen Master and other tuning programs. Change Curve Optimizer a few points at a time and test stability after each change - an unstable core often shows up only under light load."),
+                crate::i18n::tr("Ustawienia działają do restartu lub uśpienia komputera i nie są stosowane automatycznie. Zamknij Ryzen Master i inne programy do strojenia. Zmieniaj Curve Optimizer po kilka punktów i testuj stabilność po każdej zmianie - niestabilny rdzeń często ujawnia się dopiero przy małym obciążeniu.", "Settings last until the computer restarts or sleeps and are not applied automatically. Close Ryzen Master and other tuning programs. Change Curve Optimizer a few points at a time and test stability after each change - an unstable core often shows up only under light load."),
             );
             ui.add_space(12.0);
         });
@@ -322,7 +322,7 @@ impl AmdTab {
         }
     }
 
-    /// Curve Optimizer: kafelek na rdzeĹ„. Zwraca true po klikniÄ™ciu "Zastosuj".
+    /// Curve Optimizer: kafelek na rdzeń. Zwraca true po kliknięciu "Zastosuj".
     fn curve_section(&mut self, ui: &mut egui::Ui, state: &State) -> bool {
         let mut apply = false;
         theme::heading(ui, Icon::Target, "Curve Optimizer");
@@ -330,8 +330,8 @@ impl AmdTab {
         let Some(curve) = self.commands().and_then(|c| c.curve) else {
             ui.label(
                 RichText::new(crate::i18n::tr(
-                    "Curve Optimizer nie jest obsĹ‚ugiwany dla tego procesora.",
-                    "Curve Optimizer is not supported for this processor.",
+                    "Ten procesor nie ma Curve Optimizera - AMD wprowadziło go od Ryzen 5000 (Zen 3). Limity PBO poniżej działają.",
+                    "This processor has no Curve Optimizer - AMD introduced it with Ryzen 5000 (Zen 3). The PBO limits below work.",
                 ))
                 .color(muted()),
             );
@@ -341,7 +341,7 @@ impl AmdTab {
             None => return false,
             Some(Err(e)) => {
                 ui.label(
-                    RichText::new(crate::trf!("NiedostÄ™pne: {e}.", "Unavailable: {e}."))
+                    RichText::new(crate::trf!("Niedostępne: {e}.", "Unavailable: {e}."))
                         .color(hot()),
                 );
                 return false;
@@ -350,7 +350,7 @@ impl AmdTab {
         };
         let range = curve.min..=curve.max;
 
-        // Wpisanie jednej wartoĹ›ci do wszystkich pĂłl (bez wysyĹ‚ania do procesora).
+        // Wpisanie jednej wartości do wszystkich pól (bez wysyłania do procesora).
         ui.horizontal_wrapped(|ui| {
             ui.add_space(42.0);
             ui.label(RichText::new(crate::i18n::tr("Wszystkie rdzenie:", "All cores:")).size(14.0));
@@ -368,7 +368,7 @@ impl AmdTab {
                 true,
             )
             .on_hover_text(crate::i18n::tr(
-                "WypeĹ‚nia pola poniĹĽej; do procesora trafia dopiero po \"Zastosuj\"",
+                "Wypełnia pola poniżej; do procesora trafia dopiero po \"Zastosuj\"",
                 "Fills the fields below; nothing is sent to the CPU until \"Apply\"",
             ))
             .clicked()
@@ -401,7 +401,7 @@ impl AmdTab {
             |ui, i, (core, current), tile_w| {
                 ui.vertical(|ui| {
                     ui.label(
-                        RichText::new(crate::trf!("RdzeĹ„ {}", "Core {}", core.index))
+                        RichText::new(crate::trf!("Rdzeń {}", "Core {}", core.index))
                             .size(16.0)
                             .strong()
                             .color(theme::text()),
@@ -431,7 +431,7 @@ impl AmdTab {
                         }
                         Err(e) => {
                             ui.label(
-                                RichText::new(crate::i18n::tr("bĹ‚Ä…d odczytu", "read error"))
+                                RichText::new(crate::i18n::tr("błąd odczytu", "read error"))
                                     .color(hot()),
                             )
                             .on_hover_text(e);
@@ -444,11 +444,11 @@ impl AmdTab {
         ui.add_space(8.0);
         theme::info(
             ui,
-            &crate::trf!("Zakres: {} .. +{}. WartoĹ›Ä‡ ujemna obniĹĽa napiÄ™cie rdzenia (jeden punkt to okoĹ‚o 3-5 mV), dodatnia je podnosi.{}", "Range: {} .. +{}. A negative value lowers the core voltage (one point is about 3-5 mV), a positive one raises it.{}",
+            &crate::trf!("Zakres: {} .. +{}. Wartość ujemna obniża napięcie rdzenia (jeden punkt to około 3-5 mV), dodatnia je podnosi.{}", "Range: {} .. +{}. A negative value lowers the core voltage (one point is about 3-5 mV), a positive one raises it.{}",
                 curve.min,
                 curve.max,
                 if curve.set_mailbox.is_some() {
-                    crate::i18n::tr(" Na Ryzen 5000 zapis idzie przez skrzynkÄ™ MP1, a odczyt kontrolny przez RSMU.", " On Ryzen 5000 writes go through the MP1 mailbox and the verification read through RSMU.")
+                    crate::i18n::tr(" Na Ryzen 5000 zapis idzie przez skrzynkę MP1, a odczyt kontrolny przez RSMU.", " On Ryzen 5000 writes go through the MP1 mailbox and the verification read through RSMU.")
                 } else {
                     ""
                 }
@@ -457,7 +457,7 @@ impl AmdTab {
         apply
     }
 
-    /// Limity PBO. Zwraca akcjÄ™ klikniÄ™tego przycisku.
+    /// Limity PBO. Zwraca akcję klikniętego przycisku.
     fn pbo_section(&mut self, ui: &mut egui::Ui, state: &State) -> Option<Action> {
         let mut action = None;
         let width = (ui.available_width() - 2.0 * MARGIN - 4.0).max(300.0);
@@ -467,14 +467,14 @@ impl AmdTab {
             ui.add_space(4.0);
             let limits = state.limits.as_ref().ok();
             let confirmed = self.confirmed;
-            // BieĹĽÄ…ca wartoĹ›Ä‡ z tabeli procesora; "?" gdy odczyt nie jest potwierdzony.
+            // Bieżąca wartość z tabeli procesora; "?" gdy odczyt nie jest potwierdzony.
             let current = |ui: &mut egui::Ui, value: Option<f32>, unit: &str, slot: usize| match value {
                 Some(v) if confirmed[slot] => {
                     ui.label(RichText::new(format!("{v:.0} {unit}")).size(16.0).color(accent()));
                 }
                 Some(v) => {
                     ui.label(RichText::new(format!("{v:.0} {unit} ?")).size(16.0).color(warn())).on_hover_text(
-                        crate::i18n::tr("UkĹ‚ad tabeli tej wersji nie jest potwierdzony. WartoĹ›Ä‡ zostanie sprawdzona przy pierwszym ustawieniu tego limitu.", "The table layout for this version is not confirmed. The value will be checked the first time you set this limit."),
+                        crate::i18n::tr("Układ tabeli tej wersji nie jest potwierdzony. Wartość zostanie sprawdzona przy pierwszym ustawieniu tego limitu.", "The table layout for this version is not confirmed. The value will be checked the first time you set this limit."),
                     );
                 }
                 None => {
@@ -491,7 +491,7 @@ impl AmdTab {
                 egui::Grid::new("amd_pbo").num_columns(4).spacing([40.0, 10.0]).show(ui, |ui| {
                     ui.label("");
                     ui.label(RichText::new(crate::i18n::tr("Obecnie", "Current")).size(12.5).color(muted()));
-                    ui.label(RichText::new(crate::i18n::tr("Nowa wartoĹ›Ä‡", "New value")).size(12.5).color(accent()));
+                    ui.label(RichText::new(crate::i18n::tr("Nowa wartość", "New value")).size(12.5).color(accent()));
                     ui.label("");
                     ui.end_row();
 
@@ -503,7 +503,7 @@ impl AmdTab {
                     }
                     ui.end_row();
 
-                    row_label(ui, crate::i18n::tr("Limit prÄ…du ciÄ…gĹ‚ego (TDC)", "Sustained current limit (TDC)"));
+                    row_label(ui, crate::i18n::tr("Limit prądu ciągłego (TDC)", "Sustained current limit (TDC)"));
                     current(ui, limits.and_then(|l| l.tdc_a), "A", 1);
                     ui.add_sized(field, egui::DragValue::new(&mut self.tdc_a).range(amd::CURRENT_MIN_A..=amd::CURRENT_MAX_A).suffix(" A"));
                     if theme::primary_button(ui, None, crate::i18n::tr("Ustaw TDC", "Set TDC"), self.armed).clicked() {
@@ -511,7 +511,7 @@ impl AmdTab {
                     }
                     ui.end_row();
 
-                    row_label(ui, crate::i18n::tr("Limit prÄ…du szczytowego (EDC)", "Peak current limit (EDC)"));
+                    row_label(ui, crate::i18n::tr("Limit prądu szczytowego (EDC)", "Peak current limit (EDC)"));
                     current(ui, limits.and_then(|l| l.edc_a), "A", 2);
                     ui.add_sized(field, egui::DragValue::new(&mut self.edc_a).range(amd::CURRENT_MIN_A..=amd::CURRENT_MAX_A).suffix(" A"));
                     if theme::primary_button(ui, None, crate::i18n::tr("Ustaw EDC", "Set EDC"), self.armed).clicked() {
@@ -533,10 +533,10 @@ impl AmdTab {
             });
             ui.add_space(8.0);
             let note = match &state.limits {
-                Ok(limits) => crate::trf!("BieĹĽÄ…ce limity pochodzÄ… z tabeli procesora (wersja 0x{:06X}). Po kaĹĽdym ustawieniu program sprawdza, czy tabela pokazuje zadanÄ… wartoĹ›Ä‡. Znak zapytania oznacza odczyt jeszcze niepotwierdzony zapisem.", "Current limits come from the CPU table (version 0x{:06X}). After each change the program checks that the table shows the requested value. A question mark means the readout has not yet been confirmed by a write.",
+                Ok(limits) => crate::trf!("Bieżące limity pochodzą z tabeli procesora (wersja 0x{:06X}). Po każdym ustawieniu program sprawdza, czy tabela pokazuje zadaną wartość. Znak zapytania oznacza odczyt jeszcze niepotwierdzony zapisem.", "Current limits come from the CPU table (version 0x{:06X}). After each change the program checks that the table shows the requested value. A question mark means the readout has not yet been confirmed by a write.",
                     limits.version
                 ),
-                Err(e) => crate::trf!("BieĹĽÄ…cych limitĂłw nie udaĹ‚o siÄ™ odczytaÄ‡ ({e}). Limity moĹĽna ustawiaÄ‡, ale bez potwierdzenia odczytem.", "Current limits could not be read ({e}). Limits can still be set, but without read-back confirmation."
+                Err(e) => crate::trf!("Bieżących limitów nie udało się odczytać ({e}). Limity można ustawiać, ale bez potwierdzenia odczytem.", "Current limits could not be read ({e}). Limits can still be set, but without read-back confirmation."
                 ),
             };
             theme::info(ui, &note);

@@ -88,7 +88,7 @@ pub fn glow() -> Color32 {
 /// Tekst pomocniczy.
 pub fn muted() -> Color32 {
     pick(
-        Color32::from_rgb(140, 158, 186),
+        Color32::from_rgb(180, 194, 216),
         Color32::from_rgb(78, 90, 110),
     )
 }
@@ -206,6 +206,14 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     w.open.bg_stroke = Stroke::new(1.0_f32, glow());
     w.open.corner_radius = radius;
     w.noninteractive.bg_stroke = Stroke::new(1.0_f32, card_edge());
+    // Domyślny tekst etykiet i przycisków w ciemnym motywie egui jest dość
+    // ciemnoszary i słabo czytelny na granacie - jaśniejszy odcień.
+    if !light {
+        w.noninteractive.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(214, 222, 236));
+        w.inactive.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(226, 232, 242));
+        w.hovered.fg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
+        w.active.fg_stroke = Stroke::new(2.0_f32, Color32::WHITE);
+    }
     w.noninteractive.corner_radius = radius;
     ctx.set_visuals(visuals);
 

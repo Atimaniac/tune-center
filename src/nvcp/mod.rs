@@ -497,16 +497,18 @@ impl NvcpTab {
             } else {
                 current.to_owned()
             };
+            // Pole szukania stoi obok listy, a nie w niej: w egui 0.37 pole
+            // tekstowe w rozwiniętej liście nie dostawało klawiatury.
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .hint_text(tr("Szukaj programu...", "Search program..."))
+                    .desired_width(180.0),
+            );
             egui::ComboBox::from_id_salt("nvcp_program")
                 .width(320.0)
                 .selected_text(shown)
                 .height(400.0)
                 .show_ui(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.filter)
-                            .hint_text(tr("Szukaj...", "Search..."))
-                            .desired_width(300.0),
-                    );
                     let filter = self.filter.to_lowercase();
                     let mut shown = 0;
                     for p in self.profiles.as_ref().unwrap() {
@@ -521,7 +523,7 @@ impl NvcpTab {
                         let label = if p.predefined {
                             p.name.clone()
                         } else {
-                            format!("{} ★", p.name)
+                            crate::trf!("{} (własny)", "{} (own)", p.name)
                         };
                         if ui.selectable_label(p.name == current, label).clicked() {
                             chosen = Some(p.name.clone());
@@ -581,8 +583,8 @@ impl NvcpTab {
         if name.is_empty() {
             ui.label(
                 RichText::new(tr(
-                    "Wybierz program z listy (★ = profil utworzony przez Ciebie) albo dodaj nowy.",
-                    "Choose a program from the list (★ = profile you created) or add a new one.",
+                    "Wybierz program z listy („własny” = profil utworzony przez Ciebie) albo dodaj nowy.",
+                    "Choose a program from the list (\"own\" = profile you created) or add a new one.",
                 ))
                 .color(muted()),
             );
