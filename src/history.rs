@@ -5,9 +5,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{
-    self, pos2, Color32, CornerRadius, Painter, Rect, RichText, Sense, Stroke, Vec2,
-};
+use eframe::egui::{self, pos2, Color32, CornerRadius, RichText, Sense, Stroke, Vec2};
 
 use crate::theme::{self, muted, track};
 
@@ -75,8 +73,8 @@ pub fn badge(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
 
 /// Zmiana z ostatnich 5 s: trójkąt (rysowany - domyślna czcionka nie ma
 /// znaków ▲▼) i wartość. Wzrost pomarańczowy, spadek zielony.
-pub fn delta(ui: &mut egui::Ui, delta: f32, unit: &str) {
-    if delta.abs() < 0.1 {
+pub fn delta(ui: &mut egui::Ui, delta: f32, unit: &str, decimals: usize) {
+    if delta.abs() < 0.5 * 10f32.powi(-(decimals as i32)) {
         return;
     }
     let up = delta > 0.0;
@@ -98,7 +96,7 @@ pub fn delta(ui: &mut egui::Ui, delta: f32, unit: &str) {
     ui.painter()
         .add(egui::Shape::convex_polygon(pts, c, Stroke::NONE));
     ui.label(
-        RichText::new(format!("{:.1}{unit}", delta.abs()))
+        RichText::new(format!("{:.decimals$}{unit}", delta.abs()))
             .size(11.5)
             .color(c),
     );
@@ -115,17 +113,57 @@ pub fn time_axis(ui: &mut egui::Ui) {
     });
 }
 
-/// Wykres liniowy z wypełnieniem i przerywaną siatką. Oś pozioma: 120 s
-/// (najnowszy odczyt przy prawej krawędzi). Oś pionowa: od zera
-/// (`from_zero`, np. moc) albo wokół min-maks serii z zapasem `min_span`.
+/// Zakres osi pionowej wykresu.
+#[derive(Clone, Copy)]
+pub enum Scale {
+    /// Wokół min-maks serii, co najmniej `min_span` wysokości (np. temperatury).
+    Around(f32),
+    /// Od zera do maksimum serii z zapasem, co najmniej do podanej wartości (np. moc).
+    FromZero(f32),
+    /// Stały zakres (np. 0-100 %).
+    Fixed(f32, f32),
+}
+
+/// Seria z historii jako lista z lukami (wspólny format wykresów).
+pub fn as_points(series: Option<&VecDeque<f32>>) -> Vec<Option<f32>> {
+    series
+        .map(|s| s.iter().map(|v| Some(*v)).collect())
+        .unwrap_or_default()
+}
+
+/// Minimum, maksimum i zmiana z ostatnich 5 s dla serii z lukami.
+pub fn stats_points(series: &[Option<f32>]) -> Option<(f32, f32, f32)> {
+    let values: Vec<f32> = series.iter().flatten().copied().collect();
+    let min = values.iter().copied().reduce(f32::min)?;
+    let max = values.iter().copied().reduce(f32::max)?;
+    let n = series.len();
+    let delta = match (
+        series.last().copied().flatten(),
+        n.checked_sub(6).and_then(|i| series[i]),
+    ) {
+        (Some(now), Some(before)) => now - before,
+        _ => 0.0,
+    };
+    Some((min, max, delta))
+}
+
+/// Wykres liniowy z wypełnieniem i przerywaną siatką, o rozmiarze `size`.
+/// Oś pozioma: 120 s (najnowszy odczyt przy prawej krawędzi), luki w serii
+/// (`None`) są pomijane. Po najechaniu kursorem: pionowa linia, punkt i dymek
+/// z wartością (`fmt`) i czasem odczytu.
 pub fn chart(
-    painter: &Painter,
-    rect: Rect,
-    series: Option<&VecDeque<f32>>,
+    ui: &mut egui::Ui,
+    size: Vec2,
+    series: &[Option<f32>],
     color: Color32,
-    from_zero: bool,
-    min_span: f32,
+    scale: Scale,
+    fmt: &dyn Fn(f32) -> String,
 ) {
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let painter = ui.painter_at(rect.expand(4.0));
     painter.rect_filled(rect, CornerRadius::same(4), theme::well());
     let grid = Stroke::new(1.0_f32, track());
     for f in [0.25, 0.5, 0.75] {
@@ -137,45 +175,91 @@ pub fn chart(
             4.0,
         ));
     }
-    let Some(s) = series.filter(|s| s.len() >= 2) else {
+    let Some((min, max, _)) = stats_points(series) else {
         return;
     };
-    let (min, max, _) = stats(s);
-    let (lo, hi) = if from_zero {
-        (0.0, (max * 1.15).max(min_span))
-    } else {
-        let mid = (min + max) / 2.0;
-        let half = ((max - min) / 2.0 + min_span / 4.0).max(min_span / 2.0);
-        (mid - half, mid + half)
+    let (lo, hi) = match scale {
+        Scale::FromZero(min_top) => (0.0, (max * 1.15).max(min_top)),
+        Scale::Fixed(lo, hi) => (lo, hi),
+        Scale::Around(min_span) => {
+            let mid = (min + max) / 2.0;
+            let half = ((max - min) / 2.0 + min_span / 4.0).max(min_span / 2.0);
+            (mid - half, mid + half)
+        }
     };
     let step = rect.width() / (LEN - 1) as f32;
-    let start = LEN - s.len();
-    let points: Vec<egui::Pos2> = s
+    let start = LEN.saturating_sub(series.len());
+    let x_of = |i: usize| rect.left() + (start + i) as f32 * step;
+    let y_of = |v: f32| {
+        (rect.bottom() - 3.0 - (v - lo) / (hi - lo) * (rect.height() - 8.0))
+            .clamp(rect.top(), rect.bottom())
+    };
+    let points: Vec<egui::Pos2> = series
         .iter()
         .enumerate()
-        .map(|(i, v)| {
-            let x = rect.left() + (start + i) as f32 * step;
-            let y = rect.bottom() - 3.0 - (v - lo) / (hi - lo) * (rect.height() - 8.0);
-            pos2(x, y.clamp(rect.top(), rect.bottom()))
-        })
+        .filter_map(|(i, v)| v.map(|v| pos2(x_of(i), y_of(v))))
         .collect();
 
-    // Wypełnienie pod linią: pas trapezów do dolnej krawędzi.
-    let mut mesh = egui::Mesh::default();
-    let fill = color.gamma_multiply(0.14);
-    for p in &points {
-        mesh.colored_vertex(*p, fill);
-        mesh.colored_vertex(pos2(p.x, rect.bottom()), fill);
+    if points.len() >= 2 {
+        // Wypełnienie pod linią: pas trapezów do dolnej krawędzi.
+        let mut mesh = egui::Mesh::default();
+        let fill = color.gamma_multiply(0.14);
+        for p in &points {
+            mesh.colored_vertex(*p, fill);
+            mesh.colored_vertex(pos2(p.x, rect.bottom()), fill);
+        }
+        for i in 0..points.len() as u32 - 1 {
+            let a = i * 2;
+            mesh.add_triangle(a, a + 1, a + 2);
+            mesh.add_triangle(a + 1, a + 3, a + 2);
+        }
+        painter.add(mesh);
+        painter.add(egui::Shape::line(
+            points.clone(),
+            Stroke::new(1.8_f32, color),
+        ));
     }
-    for i in 0..points.len() as u32 - 1 {
-        let a = i * 2;
-        mesh.add_triangle(a, a + 1, a + 2);
-        mesh.add_triangle(a + 1, a + 3, a + 2);
+    if let Some(last) = points.last() {
+        painter.circle_filled(*last, 3.0, color);
     }
-    painter.add(mesh);
-    let last = *points.last().unwrap();
-    painter.add(egui::Shape::line(points, Stroke::new(1.8_f32, color)));
-    painter.circle_filled(last, 3.0, color);
+
+    // Wartość w miejscu wskazanym kursorem.
+    if let Some(pos) = response.hover_pos() {
+        let i = ((pos.x - rect.left()) / step).round() as isize - start as isize;
+        if i >= 0 && (i as usize) < series.len() {
+            let i = i as usize;
+            let x = x_of(i);
+            painter.line_segment(
+                [pos2(x, rect.top()), pos2(x, rect.bottom())],
+                Stroke::new(1.0_f32, theme::text().gamma_multiply(0.6)),
+            );
+            let ago = series.len() - 1 - i;
+            let text = match series[i] {
+                Some(v) => {
+                    painter.circle_filled(pos2(x, y_of(v)), 4.0, color);
+                    painter.circle_stroke(
+                        pos2(x, y_of(v)),
+                        4.0,
+                        Stroke::new(1.5_f32, theme::text()),
+                    );
+                    fmt(v)
+                }
+                None => "—".to_owned(),
+            };
+            response.on_hover_ui_at_pointer(|ui| {
+                ui.label(RichText::new(text).strong().size(14.0));
+                ui.label(
+                    RichText::new(if ago == 0 {
+                        crate::i18n::tr("teraz", "now").to_owned()
+                    } else {
+                        crate::trf!("{} s temu", "{} s ago", ago)
+                    })
+                    .size(11.5)
+                    .color(muted()),
+                );
+            });
+        }
+    }
 }
 
 #[cfg(test)]

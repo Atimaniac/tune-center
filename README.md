@@ -100,8 +100,10 @@ Podzakładka Overclock jest pierwsza w zakładce NVIDIA i działa także na
 kartach AMD oraz wtedy, gdy pozostałe podzakładki (panel Nvidia) są
 niedostępne.
 
-- **Informacje**: czujniki karty jak w GPU-Z - nazwa, wartość (bieżąca,
-  najmniejsza, największa albo średnia) i wykres z 2 minut: zegary GPU,
+- **Informacje**: czujniki karty jako kafelki (jak SENSORS i POWER) - nazwa,
+  plakietka stanu, wartość (bieżąca,
+  najmniejsza, największa albo średnia), zmiana z 5 s, min/maks i wykres z
+  2 minut (najechanie kursorem pokazuje wartość i czas odczytu): zegary GPU,
   pamięci i wideo, temperatury GPU, hotspot i pamięci, wentylator (% i RPM),
   zajęta pamięć, przepływ PCIe TX/RX, obciążenie GPU, kontrolera pamięci,
   silnika wideo, magistrali, enkodera i dekodera, pobór mocy karty i układu

@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use eframe::egui::{self, Color32, RichText, Sense, Vec2};
+use eframe::egui::{self, Color32, RichText, Vec2};
 
 use crate::history::{self, History};
 
@@ -246,7 +246,7 @@ pub fn ui(
 }
 
 /// Stan temperatury: napis plakietki i kolor.
-fn state(value: f32) -> (&'static str, Color32) {
+pub fn temp_state(value: f32) -> (&'static str, Color32) {
     if value >= 80.0 {
         (crate::i18n::tr("GORĄCO", "HOT"), theme::hot())
     } else if value >= 65.0 {
@@ -262,7 +262,7 @@ fn temp_tile(ui: &mut egui::Ui, tile: &Tile, series: Option<&VecDeque<f32>>, inn
     let value = tile.value;
     let title = crate::i18n::tr_dyn(tile.title).to_uppercase();
     let color = theme::temp_color(value);
-    let (state_text, state_color) = state(value);
+    let (state_text, state_color) = temp_state(value);
     let (min, max, delta) = match series {
         Some(s) if !s.is_empty() => history::stats(s),
         _ => (value, value, 0.0),
@@ -295,7 +295,7 @@ fn temp_tile(ui: &mut egui::Ui, tile: &Tile, series: Option<&VecDeque<f32>>, inn
                         .strong()
                         .color(color),
                 );
-                history::delta(ui, delta, "°C");
+                history::delta(ui, delta, "°C", 1);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         RichText::new(format!("MIN {min:.1}° / MAX {max:.1}°"))
@@ -308,8 +308,14 @@ fn temp_tile(ui: &mut egui::Ui, tile: &Tile, series: Option<&VecDeque<f32>>, inn
 
             // Wykres zajmuje resztę kafelka; pod nim podpisy osi czasu.
             let chart_h = (ui.available_height() - 18.0).max(24.0);
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(inner.x, chart_h), Sense::hover());
-            history::chart(ui.painter(), rect, series, color, false, 4.0);
+            history::chart(
+                ui,
+                Vec2::new(inner.x, chart_h),
+                &history::as_points(series),
+                color,
+                history::Scale::Around(4.0),
+                &|v| format!("{v:.1} °C"),
+            );
             history::time_axis(ui);
         });
     });

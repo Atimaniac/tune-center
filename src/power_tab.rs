@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Color32, RichText, Sense, Vec2};
+use eframe::egui::{self, Color32, RichText, Vec2};
 
 use crate::history::{self, History};
 use crate::power::{Row, SharedMeter};
@@ -221,7 +221,7 @@ fn power_tile(ui: &mut egui::Ui, tile: &Tile, history: &History, inner: Vec2) {
                         .strong()
                         .color(accent()),
                 );
-                history::delta(ui, delta, " W");
+                history::delta(ui, delta, " W", 1);
             });
             ui.add_space(4.0);
             ui.columns(3, |cols| {
@@ -243,8 +243,14 @@ fn power_tile(ui: &mut egui::Ui, tile: &Tile, history: &History, inner: Vec2) {
             });
             ui.add_space(6.0);
             let chart_h = (ui.available_height() - 18.0).max(24.0);
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(inner.x, chart_h), Sense::hover());
-            history::chart(ui.painter(), rect, series, accent(), true, 10.0);
+            history::chart(
+                ui,
+                Vec2::new(inner.x, chart_h),
+                &history::as_points(series),
+                accent(),
+                history::Scale::FromZero(10.0),
+                &|v| fmt_watts(v),
+            );
             history::time_axis(ui);
         });
     });

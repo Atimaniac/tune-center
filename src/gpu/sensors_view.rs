@@ -1,5 +1,5 @@
 //! Widok czujników karty wzorowany na zakładce "Sensors" programu GPU-Z:
-//! wiersz = nazwa, wartość i wykres ostatnich dwóch minut.
+//! kafelek = nazwa, wartość i wykres ostatnich dwóch minut (jak SENSORS i POWER).
 //!
 //! Źródła: NVML (oficjalne API monitorowania Nvidii), NVAPI (temperatury,
 //! zegary, obciążenie silników, napięcie, topologia mocy), Windows (pamięć
@@ -7,11 +7,12 @@
 
 use std::collections::VecDeque;
 
-use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use eframe::egui::{self, Color32, RichText, Vec2};
 
 use super::backend::Monitor;
 use super::sampler::{Samples, HISTORY};
 use crate::bridge::Snapshot;
+use crate::history;
 use crate::i18n::tr;
 use crate::theme;
 
@@ -248,6 +249,56 @@ fn format(v: f32, decimals: usize, unit: &str) -> String {
     format!("{v:.decimals$} {unit}")
 }
 
+/// Dane jednego kafelka.
+struct Tile {
+    name: String,
+    source: String,
+    unit: &'static str,
+    decimals: usize,
+    max: Option<f32>,
+    series: Vec<Option<f32>>,
+    /// Limit mocy (TDP) - do plakietki obciążenia kafelka mocy karty.
+    tdp_w: Option<f32>,
+}
+
+impl Tile {
+    fn fmt(&self, v: f32) -> String {
+        format(v, self.decimals, self.unit)
+    }
+
+    /// Plakietka: temperatury - stan, moc karty - udział w TDP, % TDP - to samo.
+    fn badge(&self, v: f32) -> Option<(&'static str, Color32)> {
+        if self.unit == "°C" {
+            Some(crate::sensors::temp_state(v))
+        } else if self.unit == "W" && self.tdp_w.is_some() && self.name.contains("karty")
+            || self.unit == "W" && self.tdp_w.is_some() && self.name.contains("Board")
+        {
+            crate::power_tab::load_state(v, self.tdp_w)
+        } else if self.name.contains("TDP") {
+            crate::power_tab::load_state(v, Some(100.0))
+        } else {
+            None
+        }
+    }
+
+    fn color(&self, v: f32) -> Color32 {
+        if self.unit == "°C" {
+            theme::temp_color(v)
+        } else {
+            theme::accent()
+        }
+    }
+
+    fn scale(&self) -> history::Scale {
+        match (self.max, self.unit) {
+            (Some(max), _) => history::Scale::Fixed(0.0, max),
+            (None, "°C") => history::Scale::Around(4.0),
+            (None, "V") => history::Scale::Around(0.1),
+            _ => history::Scale::FromZero(1.0),
+        }
+    }
+}
+
 impl SensorsView {
     pub fn ui(&mut self, ui: &mut egui::Ui, samples: &Samples, snap: Option<&Snapshot>) {
         if samples.seq != self.seen {
@@ -263,103 +314,81 @@ impl SensorsView {
                 (Show::Max, tr("największe", "highest")),
                 (Show::Avg, tr("średnie", "average")),
             ] {
-                if ui.selectable_label(self.show == mode, text).clicked() {
+                if theme::sub_tab(ui, text, self.show == mode).clicked() {
                     self.show = mode;
                 }
             }
             ui.label(
                 RichText::new(crate::trf!(
-                    "(ostatnie {} s, odczyt co 1 s)",
-                    "(last {} s, read every 1 s)",
+                    "(ostatnie {} s, odczyt co 1 s; najedź na wykres, żeby zobaczyć wartość)",
+                    "(last {} s, read every 1 s; hover a chart to see the value)",
                     HISTORY
                 ))
-                .small()
+                .size(11.5)
                 .color(theme::muted()),
             );
         });
         ui.add_space(6.0);
 
         let history = &samples.history;
-        for row in rows() {
-            let series: Vec<Option<f32>> = history.iter().map(row.value).collect();
-            // Wiersze, których karta nie udostępnia (np. hotspot w RTX 50), pomijamy.
-            if series.iter().all(Option::is_none) {
-                // Hotspot RTX 50: wiersz zostaje, z wyjaśnieniem braku wartości.
-                let hidden = history.back().is_some_and(|m| m.details.hotspot_hidden);
-                if row.name == "Hot Spot" && hidden {
-                    text_row(
-                        ui,
-                        row.name,
-                        tr(
-                            "NVAPI / NVML. Sterownik kart RTX 50 nie udostępnia hotspotu w swoim API; GPU-Z odczytuje go własnym sterownikiem jądra.",
-                            "NVAPI / NVML. The RTX 50 driver does not expose the hotspot through its API; GPU-Z reads it with its own kernel driver.",
-                        ),
-                        tr("niedostępny na RTX 50 (najedź na nazwę)", "unavailable on RTX 50 (hover the name)"),
-                    );
-                }
-                continue;
-            }
-            let fmt = |v: f32| format(v, row.decimals, row.unit);
-            self.row(ui, row.name, row.source, &series, row.max, &fmt);
+        let last = history.back();
+        let tdp_w = last.and_then(|m| m.details.tdp_w);
+
+        // Odczyty bez wykresu: pasek "nazwa: wartość" nad kafelkami.
+        let mut chips: Vec<(String, String, String)> = Vec::new();
+        let hotspot_series = history.iter().any(|m| m.hotspot_c.is_some());
+        if !hotspot_series && last.is_some_and(|m| m.details.hotspot_hidden) {
+            chips.push((
+                "Hot Spot".into(),
+                tr("niedostępny na RTX 50", "unavailable on RTX 50").into(),
+                tr(
+                    "Sterownik kart RTX 50 nie udostępnia hotspotu w swoim API; GPU-Z odczytuje go własnym sterownikiem jądra.",
+                    "The RTX 50 driver does not expose the hotspot through its API; GPU-Z reads it with its own kernel driver.",
+                )
+                .into(),
+            ));
         }
-        // Przyczyna ograniczenia i stan wydajności - tekst, bez wykresu.
-        if let Some(m) = history.back() {
+        if let Some(m) = last {
             if let Some(limit) = &m.details.limit {
-                text_row(
-                    ui,
-                    tr("Przyczyna ograniczenia", "PerfCap Reason"),
-                    "NVML",
-                    limit,
-                );
+                chips.push((
+                    tr("Ograniczenie", "PerfCap").into(),
+                    limit.clone(),
+                    "NVML".into(),
+                ));
             }
             if let Some(p) = m.details.pstate {
-                text_row(
-                    ui,
-                    tr("Stan wydajności", "Performance State"),
-                    "NVML",
-                    &format!("P{p}"),
-                );
+                chips.push((
+                    tr("Stan wydajności", "Performance State").into(),
+                    format!("P{p}"),
+                    "NVML".into(),
+                ));
             }
             if let (Some(g), Some(w)) = (m.details.pcie_gen, m.details.pcie_width) {
-                text_row(
-                    ui,
-                    tr("Łącze PCIe (bieżące)", "PCIe Link (current)"),
-                    "NVML",
-                    &format!("Gen {g} x{w}"),
-                );
+                chips.push((
+                    tr("Łącze PCIe", "PCIe Link").into(),
+                    format!("Gen {g} x{w}"),
+                    "NVML".into(),
+                ));
             }
             if let Some(total) = m.details.mem_total_mb {
-                text_row(
-                    ui,
-                    tr("Pamięć karty", "Memory Size"),
-                    "NVML",
-                    &format!("{total} MB"),
-                );
+                chips.push((
+                    tr("Pamięć karty", "Memory Size").into(),
+                    format!("{total} MB"),
+                    "NVML".into(),
+                ));
             }
-            if let Some(tdp) = m.details.tdp_w {
-                text_row(
-                    ui,
-                    tr("Domyślny limit mocy (TDP)", "Default Power Limit (TDP)"),
-                    "NVML",
-                    &format!("{tdp:.0} W"),
-                );
+            if let Some(tdp) = tdp_w {
+                chips.push((
+                    tr("Limit mocy (TDP)", "Power Limit (TDP)").into(),
+                    format!("{tdp:.0} W"),
+                    "NVML".into(),
+                ));
             }
         }
         let cpu: Vec<Option<f32>> = self.cpu_temp.iter().copied().collect();
-        if cpu.iter().any(Option::is_some) {
-            self.row(
-                ui,
-                tr("Temperatura CPU", "CPU Temperature"),
-                "LibreHardwareMonitor",
-                &cpu,
-                None,
-                &|v| format!("{v:.1} °C"),
-            );
-        } else {
-            text_row(
-                ui,
-                tr("Temperatura CPU", "CPU Temperature"),
-                "LibreHardwareMonitor",
+        if !cpu.iter().any(Option::is_some) {
+            chips.push((
+                tr("Temperatura CPU", "CPU Temperature").into(),
                 match snap {
                     None => tr(
                         "niedostępna (proces czujników nie działa)",
@@ -370,158 +399,131 @@ impl SensorsView {
                         "unavailable (requires administrator)",
                     ),
                     Some(_) => tr("niedostępna", "unavailable"),
-                },
-            );
+                }
+                .into(),
+                "LibreHardwareMonitor".into(),
+            ));
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(8.0, 6.0);
+            for (name, value, source) in &chips {
+                ui.label(
+                    RichText::new(format!("  {name}: {value}  "))
+                        .size(12.5)
+                        .color(theme::text())
+                        .background_color(theme::well()),
+                )
+                .on_hover_text(crate::trf!("Źródło: {source}", "Source: {source}"));
+            }
+        });
+        ui.add_space(8.0);
+
+        // Kafelki z wykresem - tylko czujniki, które karta udostępnia.
+        let mut tiles: Vec<Tile> = rows()
+            .into_iter()
+            .filter_map(|row| {
+                let series: Vec<Option<f32>> = history.iter().map(row.value).collect();
+                series.iter().any(Option::is_some).then(|| Tile {
+                    name: row.name.to_owned(),
+                    source: row.source.to_owned(),
+                    unit: row.unit,
+                    decimals: row.decimals,
+                    max: row.max,
+                    series,
+                    tdp_w,
+                })
+            })
+            .collect();
+        if cpu.iter().any(Option::is_some) {
+            tiles.push(Tile {
+                name: tr("Temperatura CPU", "CPU Temperature").to_owned(),
+                source: "LibreHardwareMonitor".into(),
+                unit: "°C",
+                decimals: 1,
+                max: None,
+                series: cpu,
+                tdp_w: None,
+            });
         }
         let ram: Vec<Option<f32>> = self.sys_mem_mb.iter().copied().collect();
         if ram.iter().any(Option::is_some) {
-            self.row(
-                ui,
-                tr("Pamięć systemu zajęta", "System Memory Used"),
-                "Windows",
-                &ram,
-                None,
-                &|v| format!("{v:.0} MB"),
-            );
+            tiles.push(Tile {
+                name: tr("Pamięć systemu zajęta", "System Memory Used").to_owned(),
+                source: "Windows".into(),
+                unit: "MB",
+                decimals: 0,
+                max: None,
+                series: ram,
+                tdp_w: None,
+            });
         }
-    }
 
-    fn row(
-        &self,
-        ui: &mut egui::Ui,
-        name: &str,
-        source: &str,
-        series: &[Option<f32>],
-        max: Option<f32>,
-        fmt: &dyn Fn(f32) -> String,
-    ) {
-        let values: Vec<f32> = series.iter().flatten().copied().collect();
-        let shown = match self.show {
-            Show::Current => series.last().copied().flatten(),
-            Show::Min => values.iter().copied().reduce(f32::min),
-            Show::Max => values.iter().copied().reduce(f32::max),
-            Show::Avg => {
-                (!values.is_empty()).then(|| values.iter().sum::<f32>() / values.len() as f32)
-            }
-        };
-        let text = shown.map(fmt).unwrap_or_else(|| "—".into());
-        let (label_rect, value_rect, graph_rect) = row_rects(ui);
-        let p = ui.painter();
-        cell(p, label_rect);
-        cell(p, value_rect);
-        cell(p, graph_rect);
-        p.text(
-            label_rect.left_center() + Vec2::new(6.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            name,
-            egui::FontId::proportional(13.0),
-            theme::text(),
-        );
-        p.text(
-            value_rect.right_center() - Vec2::new(6.0, 0.0),
-            egui::Align2::RIGHT_CENTER,
-            text,
-            egui::FontId::monospace(12.5),
-            theme::text(),
-        );
-        // Wykres: słupki od prawej (najnowszy odczyt przy prawej krawędzi).
-        let top = max
-            .unwrap_or_else(|| values.iter().copied().fold(0.0, f32::max))
-            .max(1e-3);
-        let inner = graph_rect.shrink(2.0);
-        let step = inner.width() / HISTORY as f32;
-        let n = series.len();
-        let color = theme::accent();
-        for (i, v) in series.iter().enumerate() {
-            let Some(v) = v else { continue };
-            let x = inner.right() - (n - i) as f32 * step;
-            let h = (v / top).clamp(0.0, 1.0) * inner.height();
-            let bar = Rect::from_min_max(
-                Pos2::new(x, inner.bottom() - h.max(1.0)),
-                Pos2::new(x + step.max(1.0), inner.bottom()),
-            );
-            p.rect_filled(bar, 0.0, color);
-        }
-        // Wartość w miejscu wskazanym kursorem: pionowa linia i dymek.
-        let graph = ui.interact(
-            graph_rect,
-            ui.scope_id().with((name, "graph")),
-            Sense::hover(),
-        );
-        if let Some(pos) = graph.hover_pos() {
-            let back = ((inner.right() - pos.x) / step).floor() as usize;
-            if back < n {
-                let i = n - 1 - back;
-                let x = inner.right() - (back as f32 + 0.5) * step;
-                p.line_segment(
-                    [Pos2::new(x, inner.top()), Pos2::new(x, inner.bottom())],
-                    Stroke::new(1.0, theme::text()),
-                );
-                let text = match series[i] {
-                    Some(v) => fmt(v),
-                    None => "—".into(),
-                };
-                let ago = crate::trf!("{} s temu", "{} s ago", back);
-                graph.on_hover_ui_at_pointer(|ui| {
-                    ui.label(RichText::new(text).strong());
-                    ui.label(RichText::new(ago).small().color(theme::muted()));
+        let show = self.show;
+        theme::card_grid(ui, &tiles, 250.0, 10.0, 6, 10, 12, |ui, _, tile, width| {
+            tile_ui(ui, tile, width, show);
+        });
+    }
+}
+
+/// Kafelek czujnika: nazwa z plakietką, wartość (wg trybu) ze zmianą z 5 s,
+/// minimum i maksimum oraz wykres 120 s z podpowiedzią po najechaniu.
+fn tile_ui(ui: &mut egui::Ui, tile: &Tile, width: f32, show: Show) {
+    let values: Vec<f32> = tile.series.iter().flatten().copied().collect();
+    let shown = match show {
+        Show::Current => tile.series.last().copied().flatten(),
+        Show::Min => values.iter().copied().reduce(f32::min),
+        Show::Max => values.iter().copied().reduce(f32::max),
+        Show::Avg => (!values.is_empty()).then(|| values.iter().sum::<f32>() / values.len() as f32),
+    };
+    let (min, max, delta) = history::stats_points(&tile.series).unwrap_or((0.0, 0.0, 0.0));
+    let current = tile.series.last().copied().flatten();
+    let color = current.map(|v| tile.color(v)).unwrap_or(theme::accent());
+
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(6.0, 2.0);
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(tile.name.to_uppercase())
+                        .size(12.0)
+                        .strong()
+                        .color(theme::text()),
+                )
+                .truncate(),
+            )
+            .on_hover_text(crate::trf!("Źródło: {}", "Source: {}", tile.source));
+            if let Some((text, c)) = current.and_then(|v| tile.badge(v)) {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    history::badge(ui, text, c);
                 });
             }
-        }
-        ui.interact(label_rect, ui.scope_id().with(name), Sense::hover())
-            .on_hover_text(crate::trf!("Źródło: {source}", "Source: {source}"));
-    }
-}
-
-/// Prostokąty kolumn jednego wiersza (nazwa, wartość, wykres).
-fn row_rects(ui: &mut egui::Ui) -> (Rect, Rect, Rect) {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::hover());
-    let label_w = 230.0f32.min(width * 0.4);
-    let value_w = 120.0;
-    let gap = 4.0;
-    let label = Rect::from_min_size(rect.min, Vec2::new(label_w, rect.height() - 3.0));
-    let value = Rect::from_min_size(
-        Pos2::new(label.right() + gap, rect.top()),
-        Vec2::new(value_w, rect.height() - 3.0),
-    );
-    let graph = Rect::from_min_max(
-        Pos2::new(value.right() + gap, rect.top()),
-        Pos2::new(rect.right(), rect.bottom() - 3.0),
-    );
-    (label, value, graph)
-}
-
-fn cell(p: &egui::Painter, r: Rect) {
-    p.rect(
-        r,
-        2.0,
-        theme::well(),
-        Stroke::new(1.0, Color32::from_gray(90).gamma_multiply(0.5)),
-        egui::StrokeKind::Inside,
-    );
-}
-
-fn text_row(ui: &mut egui::Ui, name: &str, source: &str, value: &str) {
-    let (label_rect, value_rect, graph_rect) = row_rects(ui);
-    let full = Rect::from_min_max(value_rect.min, graph_rect.max);
-    let p = ui.painter();
-    cell(p, label_rect);
-    cell(p, full);
-    p.text(
-        label_rect.left_center() + Vec2::new(6.0, 0.0),
-        egui::Align2::LEFT_CENTER,
-        name,
-        egui::FontId::proportional(13.0),
-        theme::text(),
-    );
-    p.text(
-        full.left_center() + Vec2::new(6.0, 0.0),
-        egui::Align2::LEFT_CENTER,
-        value,
-        egui::FontId::monospace(12.5),
-        theme::text(),
-    );
-    ui.interact(label_rect, ui.scope_id().with(name), Sense::hover())
-        .on_hover_text(crate::trf!("Źródło: {source}", "Source: {source}"));
+        });
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(shown.map(|v| tile.fmt(v)).unwrap_or_else(|| "—".into()))
+                    .size(20.0)
+                    .strong()
+                    .color(color),
+            );
+            if show == Show::Current {
+                let unit = format!(" {}", tile.unit);
+                history::delta(ui, delta, &unit, tile.decimals);
+            }
+        });
+        ui.label(
+            RichText::new(format!("MIN {} / MAX {}", tile.fmt(min), tile.fmt(max)))
+                .size(11.0)
+                .color(theme::muted()),
+        );
+        ui.add_space(4.0);
+        history::chart(
+            ui,
+            Vec2::new(width, 56.0),
+            &tile.series,
+            color,
+            tile.scale(),
+            &|v| tile.fmt(v),
+        );
+        history::time_axis(ui);
+    });
 }
