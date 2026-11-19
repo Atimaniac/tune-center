@@ -104,11 +104,13 @@ niedostępne.
   plakietka stanu, wartość (bieżąca,
   najmniejsza, największa albo średnia), zmiana z 5 s, min/maks i wykres z
   2 minut (najechanie kursorem pokazuje wartość i czas odczytu): zegary GPU,
-  pamięci i wideo, temperatury GPU, hotspot i pamięci, wentylator (% i RPM),
+  pamięci i wideo, temperatury GPU, hotspot (gdy karta go podaje - RTX 50
+  nie) i pamięci,
   zajęta pamięć, przepływ PCIe TX/RX, obciążenie GPU, kontrolera pamięci,
   silnika wideo, magistrali, enkodera i dekodera, pobór mocy karty i układu
   GPU, % TDP, napięcie, przyczyna ograniczenia zegarów, stan P, łącze PCIe,
-  temperatura CPU i zajęta pamięć systemu; poniżej aktywne offsety. Źródła:
+  zajęta pamięć systemu; poniżej aktywne offsety. Wentylator karty jest w
+  zakładce FAN, temperatura procesora w SENSORS. Źródła:
   NVML (oficjalne), NVAPI, Windows. Moc na złączu 16-pin i w slocie PCIe
   oraz ich napięcia nie są dostępne w publicznym API Nvidii.
 - **Zegary**: offset rdzenia i pamięci; zakresy suwaków podaje sterownik.

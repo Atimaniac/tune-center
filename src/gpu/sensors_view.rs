@@ -30,7 +30,6 @@ enum Show {
 pub struct SensorsView {
     show: Show,
     /// Odczyty spoza karty, zbierane przy każdym nowym odczycie karty.
-    cpu_temp: VecDeque<Option<f32>>,
     sys_mem_mb: VecDeque<Option<f32>>,
     seen: u64,
 }
@@ -95,22 +94,6 @@ fn rows() -> Vec<Row> {
             1,
             None,
             |m| m.details.mem_temp_c
-        ),
-        row!(
-            tr("Wentylator (%)", "Fan Speed (%)"),
-            "NVAPI / NVML",
-            "%",
-            0,
-            pct,
-            |m| m.fan_pct.map(|v| v as f32)
-        ),
-        row!(
-            tr("Wentylator (RPM)", "Fan Speed (RPM)"),
-            "NVAPI",
-            "RPM",
-            0,
-            None,
-            |m| m.fan_rpm.map(|v| v as f32)
         ),
         row!(
             tr("Pamięć zajęta", "Memory Used"),
@@ -227,14 +210,6 @@ fn system_memory_used_mb() -> Option<f32> {
     None
 }
 
-fn cpu_temp(snap: Option<&Snapshot>) -> Option<f32> {
-    let temps = &snap?.temps;
-    crate::sensors::key_temps(temps)
-        .into_iter()
-        .find(|(title, _)| *title == "Procesor")
-        .and_then(|(_, t)| t.value)
-}
-
 fn push(q: &mut VecDeque<Option<f32>>, v: Option<f32>) {
     if q.len() >= HISTORY {
         q.pop_front();
@@ -300,10 +275,9 @@ impl Tile {
 }
 
 impl SensorsView {
-    pub fn ui(&mut self, ui: &mut egui::Ui, samples: &Samples, snap: Option<&Snapshot>) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, samples: &Samples, _snap: Option<&Snapshot>) {
         if samples.seq != self.seen {
             self.seen = samples.seq;
-            push(&mut self.cpu_temp, cpu_temp(snap));
             push(&mut self.sys_mem_mb, system_memory_used_mb());
         }
         ui.horizontal(|ui| {
@@ -336,18 +310,6 @@ impl SensorsView {
 
         // Odczyty bez wykresu: pasek "nazwa: wartość" nad kafelkami.
         let mut chips: Vec<(String, String, String)> = Vec::new();
-        let hotspot_series = history.iter().any(|m| m.hotspot_c.is_some());
-        if !hotspot_series && last.is_some_and(|m| m.details.hotspot_hidden) {
-            chips.push((
-                "Hot Spot".into(),
-                tr("niedostępny na RTX 50", "unavailable on RTX 50").into(),
-                tr(
-                    "Sterownik kart RTX 50 nie udostępnia hotspotu w swoim API; GPU-Z odczytuje go własnym sterownikiem jądra.",
-                    "The RTX 50 driver does not expose the hotspot through its API; GPU-Z reads it with its own kernel driver.",
-                )
-                .into(),
-            ));
-        }
         if let Some(m) = last {
             if let Some(limit) = &m.details.limit {
                 chips.push((
@@ -385,25 +347,6 @@ impl SensorsView {
                 ));
             }
         }
-        let cpu: Vec<Option<f32>> = self.cpu_temp.iter().copied().collect();
-        if !cpu.iter().any(Option::is_some) {
-            chips.push((
-                tr("Temperatura CPU", "CPU Temperature").into(),
-                match snap {
-                    None => tr(
-                        "niedostępna (proces czujników nie działa)",
-                        "unavailable (the sensor process is not running)",
-                    ),
-                    Some(s) if !s.admin => tr(
-                        "niedostępna (wymaga administratora)",
-                        "unavailable (requires administrator)",
-                    ),
-                    Some(_) => tr("niedostępna", "unavailable"),
-                }
-                .into(),
-                "LibreHardwareMonitor".into(),
-            ));
-        }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(8.0, 6.0);
             for (name, value, source) in &chips {
@@ -434,17 +377,6 @@ impl SensorsView {
                 })
             })
             .collect();
-        if cpu.iter().any(Option::is_some) {
-            tiles.push(Tile {
-                name: tr("Temperatura CPU", "CPU Temperature").to_owned(),
-                source: "LibreHardwareMonitor".into(),
-                unit: "°C",
-                decimals: 1,
-                max: None,
-                series: cpu,
-                tdp_w: None,
-            });
-        }
         let ram: Vec<Option<f32>> = self.sys_mem_mb.iter().copied().collect();
         if ram.iter().any(Option::is_some) {
             tiles.push(Tile {
