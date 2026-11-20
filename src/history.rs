@@ -165,6 +165,12 @@ pub fn chart(
     }
     let painter = ui.painter_at(rect.expand(4.0));
     painter.rect_filled(rect, CornerRadius::same(4), theme::well());
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(4),
+        Stroke::new(1.0_f32, theme::card_edge().gamma_multiply(0.6)),
+        egui::StrokeKind::Inside,
+    );
     let grid = Stroke::new(1.0_f32, track());
     for f in [0.25, 0.5, 0.75] {
         let y = rect.top() + rect.height() * f;

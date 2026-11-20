@@ -3548,7 +3548,7 @@ dependencies = [
 
 [[package]]
 name = "tunecenter"
-version = "0.18.9"
+version = "0.19.0"
 dependencies = [
  "eframe",
  "image",

@@ -100,19 +100,18 @@ Podzakładka Overclock jest pierwsza w zakładce NVIDIA i działa także na
 kartach AMD oraz wtedy, gdy pozostałe podzakładki (panel Nvidia) są
 niedostępne.
 
-- **Informacje**: czujniki karty jako kafelki (jak SENSORS i POWER) - nazwa,
-  plakietka stanu, wartość (bieżąca,
-  najmniejsza, największa albo średnia), zmiana z 5 s, min/maks i wykres z
-  2 minut (najechanie kursorem pokazuje wartość i czas odczytu): zegary GPU,
-  pamięci i wideo, temperatury GPU, hotspot (gdy karta go podaje - RTX 50
-  nie) i pamięci,
-  zajęta pamięć, przepływ PCIe TX/RX, obciążenie GPU, kontrolera pamięci,
-  silnika wideo, magistrali, enkodera i dekodera, pobór mocy karty i układu
-  GPU, % TDP, napięcie, przyczyna ograniczenia zegarów, stan P, łącze PCIe,
-  zajęta pamięć systemu; poniżej aktywne offsety. Wentylator karty jest w
-  zakładce FAN, temperatura procesora w SENSORS. Źródła:
-  NVML (oficjalne), NVAPI, Windows. Moc na złączu 16-pin i w slocie PCIe
-  oraz ich napięcia nie są dostępne w publicznym API Nvidii.
+- **Informacje**: czujniki karty jak w GPU-Z - wiersz z nazwą, wartością
+  (bieżąca, najmniejsza, największa albo średnia) i wykresem z 2 minut na
+  całą szerokość (najechanie kursorem pokazuje wartość i czas odczytu):
+  zegary GPU, pamięci i wideo, temperatura pamięci, hotspot (gdy karta go
+  podaje - RTX 50 nie), zajęta pamięć, obciążenie GPU, silnika wideo i
+  magistrali, enkoder, dekoder, napięcie. Przycisk "Ukryte" rozwija mniej
+  istotne odczyty: PCIe TX/RX, obciążenie kontrolera pamięci, pobór mocy
+  karty i układu GPU, % TDP, zajęta pamięć systemu. Nad wierszami: przyczyna
+  ograniczenia zegarów, stan P, łącze PCIe, pamięć karty, TDP; poniżej aktywne
+  offsety. Temperatura karty i procesora jest w SENSORS, wentylator w FAN.
+  Źródła: NVML (oficjalne), NVAPI, Windows. Moc na złączu 16-pin i w slocie
+  PCIe oraz ich napięcia nie są dostępne w publicznym API Nvidii.
 - **Zegary**: offset rdzenia i pamięci; zakresy suwaków podaje sterownik.
 - **Krzywa V/F**:
   - przeciągnij punkt w pionie, aby zmienić zegar przy danym napięciu,

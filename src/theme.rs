@@ -40,7 +40,7 @@ pub fn text() -> Color32 {
     pick(Color32::WHITE, Color32::BLACK)
 }
 
-fn card_fill() -> Color32 {
+pub fn card_fill() -> Color32 {
     pick(
         Color32::from_rgba_unmultiplied(9, 19, 36, 232),
         Color32::from_rgba_unmultiplied(255, 255, 255, 240),

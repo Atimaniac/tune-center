@@ -1,5 +1,6 @@
 //! Widok czujników karty wzorowany na zakładce "Sensors" programu GPU-Z:
-//! kafelek = nazwa, wartość i wykres ostatnich dwóch minut (jak SENSORS i POWER).
+//! wiersz = nazwa, wartość i wykres ostatnich dwóch minut na całą szerokość
+//! (wykres jak w SENSORS i POWER). Mniej istotne odczyty są pod "Ukryte".
 //!
 //! Źródła: NVML (oficjalne API monitorowania Nvidii), NVAPI (temperatury,
 //! zegary, obciążenie silników, napięcie, topologia mocy), Windows (pamięć
@@ -31,6 +32,8 @@ pub struct SensorsView {
     show: Show,
     /// Odczyty spoza karty, zbierane przy każdym nowym odczycie karty.
     sys_mem_mb: VecDeque<Option<f32>>,
+    /// Czy rozwinięte są mniej istotne odczyty ("Ukryte"); po starcie zwinięte.
+    show_hidden: bool,
     seen: u64,
 }
 
@@ -77,14 +80,6 @@ fn rows() -> Vec<Row> {
             0,
             None,
             |m| m.details.video_mhz.map(|v| v as f32)
-        ),
-        row!(
-            tr("Temperatura GPU", "GPU Temperature"),
-            "NVAPI",
-            "°C",
-            1,
-            None,
-            |m| m.details.core_precise_c.or(m.temp_c.map(|v| v as f32))
         ),
         row!("Hot Spot", "NVAPI", "°C", 1, None, |m| m.hotspot_c),
         row!(
@@ -224,36 +219,19 @@ fn format(v: f32, decimals: usize, unit: &str) -> String {
     format!("{v:.decimals$} {unit}")
 }
 
-/// Dane jednego kafelka.
-struct Tile {
+/// Dane jednego wiersza.
+struct Line {
     name: String,
     source: String,
     unit: &'static str,
     decimals: usize,
     max: Option<f32>,
     series: Vec<Option<f32>>,
-    /// Limit mocy (TDP) - do plakietki obciążenia kafelka mocy karty.
-    tdp_w: Option<f32>,
 }
 
-impl Tile {
+impl Line {
     fn fmt(&self, v: f32) -> String {
         format(v, self.decimals, self.unit)
-    }
-
-    /// Plakietka: temperatury - stan, moc karty - udział w TDP, % TDP - to samo.
-    fn badge(&self, v: f32) -> Option<(&'static str, Color32)> {
-        if self.unit == "°C" {
-            Some(crate::sensors::temp_state(v))
-        } else if self.unit == "W" && self.tdp_w.is_some() && self.name.contains("karty")
-            || self.unit == "W" && self.tdp_w.is_some() && self.name.contains("Board")
-        {
-            crate::power_tab::load_state(v, self.tdp_w)
-        } else if self.name.contains("TDP") {
-            crate::power_tab::load_state(v, Some(100.0))
-        } else {
-            None
-        }
     }
 
     fn color(&self, v: f32) -> Color32 {
@@ -269,10 +247,28 @@ impl Tile {
             (Some(max), _) => history::Scale::Fixed(0.0, max),
             (None, "°C") => history::Scale::Around(4.0),
             (None, "V") => history::Scale::Around(0.1),
+            (None, "MB") => history::Scale::Around(64.0),
             _ => history::Scale::FromZero(1.0),
         }
     }
 }
+
+/// Mniej istotne odczyty, schowane pod przyciskiem "Ukryte" (wybór użytkownika).
+fn is_hidden(name: &str) -> bool {
+    [
+        "PCIe TX",
+        "PCIe RX",
+        tr("Obciążenie kontrolera pamięci", "Memory Controller Load"),
+        tr("Pobór mocy karty", "Board Power Draw"),
+        tr("Pobór mocy układu GPU", "GPU Chip Power Draw"),
+        tr("Pobór mocy (% TDP)", "Power Consumption (% TDP)"),
+        tr("Pamięć systemu zajęta", "System Memory Used"),
+    ]
+    .contains(&name)
+}
+
+/// Wysokość wiersza (jak w GPU-Z: nazwa, wartość, wykres na całą długość).
+const ROW_H: f32 = 30.0;
 
 impl SensorsView {
     pub fn ui(&mut self, ui: &mut egui::Ui, samples: &Samples, _snap: Option<&Snapshot>) {
@@ -306,9 +302,8 @@ impl SensorsView {
 
         let history = &samples.history;
         let last = history.back();
-        let tdp_w = last.and_then(|m| m.details.tdp_w);
 
-        // Odczyty bez wykresu: pasek "nazwa: wartość" nad kafelkami.
+        // Odczyty bez wykresu: pasek "nazwa: wartość" nad wierszami.
         let mut chips: Vec<(String, String, String)> = Vec::new();
         if let Some(m) = last {
             if let Some(limit) = &m.details.limit {
@@ -339,7 +334,7 @@ impl SensorsView {
                     "NVML".into(),
                 ));
             }
-            if let Some(tdp) = tdp_w {
+            if let Some(tdp) = m.details.tdp_w {
                 chips.push((
                     tr("Limit mocy (TDP)", "Power Limit (TDP)").into(),
                     format!("{tdp:.0} W"),
@@ -361,101 +356,131 @@ impl SensorsView {
         });
         ui.add_space(8.0);
 
-        // Kafelki z wykresem - tylko czujniki, które karta udostępnia.
-        let mut tiles: Vec<Tile> = rows()
+        // Wiersze z wykresem - tylko czujniki, które karta udostępnia.
+        let mut lines: Vec<Line> = rows()
             .into_iter()
             .filter_map(|row| {
                 let series: Vec<Option<f32>> = history.iter().map(row.value).collect();
-                series.iter().any(Option::is_some).then(|| Tile {
+                series.iter().any(Option::is_some).then(|| Line {
                     name: row.name.to_owned(),
                     source: row.source.to_owned(),
                     unit: row.unit,
                     decimals: row.decimals,
                     max: row.max,
                     series,
-                    tdp_w,
                 })
             })
             .collect();
         let ram: Vec<Option<f32>> = self.sys_mem_mb.iter().copied().collect();
         if ram.iter().any(Option::is_some) {
-            tiles.push(Tile {
+            lines.push(Line {
                 name: tr("Pamięć systemu zajęta", "System Memory Used").to_owned(),
                 source: "Windows".into(),
                 unit: "MB",
                 decimals: 0,
                 max: None,
                 series: ram,
-                tdp_w: None,
             });
         }
+        let (hidden, shown): (Vec<Line>, Vec<Line>) =
+            lines.into_iter().partition(|l| is_hidden(&l.name));
 
         let show = self.show;
-        theme::card_grid(ui, &tiles, 250.0, 10.0, 6, 10, 12, |ui, _, tile, width| {
-            tile_ui(ui, tile, width, show);
-        });
+        for line in &shown {
+            line_ui(ui, line, show);
+        }
+        if !hidden.is_empty() {
+            ui.add_space(4.0);
+            let label = if self.show_hidden {
+                crate::trf!("Zwiń ukryte ({})", "Collapse hidden ({})", hidden.len())
+            } else {
+                crate::trf!("Ukryte ({})", "Hidden ({})", hidden.len())
+            };
+            let icon = if self.show_hidden {
+                crate::icons::Icon::Check
+            } else {
+                crate::icons::Icon::Download
+            };
+            if theme::primary_button(ui, Some(icon), &label, true)
+                .on_hover_text(tr(
+                    "PCIe TX/RX, kontroler pamięci, pobór mocy i pamięć systemu",
+                    "PCIe TX/RX, memory controller, power draw and system memory",
+                ))
+                .clicked()
+            {
+                self.show_hidden = !self.show_hidden;
+            }
+            ui.add_space(4.0);
+            if self.show_hidden {
+                for line in &hidden {
+                    line_ui(ui, line, show);
+                }
+            }
+        }
     }
 }
 
-/// Kafelek czujnika: nazwa z plakietką, wartość (wg trybu) ze zmianą z 5 s,
-/// minimum i maksimum oraz wykres 120 s z podpowiedzią po najechaniu.
-fn tile_ui(ui: &mut egui::Ui, tile: &Tile, width: f32, show: Show) {
-    let values: Vec<f32> = tile.series.iter().flatten().copied().collect();
+/// Wiersz jak w GPU-Z: nazwa, wartość (wg trybu) i wykres 120 s na całą
+/// pozostałą szerokość, z podpowiedzią po najechaniu.
+fn line_ui(ui: &mut egui::Ui, line: &Line, show: Show) {
+    let values: Vec<f32> = line.series.iter().flatten().copied().collect();
     let shown = match show {
-        Show::Current => tile.series.last().copied().flatten(),
+        Show::Current => line.series.last().copied().flatten(),
         Show::Min => values.iter().copied().reduce(f32::min),
         Show::Max => values.iter().copied().reduce(f32::max),
         Show::Avg => (!values.is_empty()).then(|| values.iter().sum::<f32>() / values.len() as f32),
     };
-    let (min, max, delta) = history::stats_points(&tile.series).unwrap_or((0.0, 0.0, 0.0));
-    let current = tile.series.last().copied().flatten();
-    let color = current.map(|v| tile.color(v)).unwrap_or(theme::accent());
+    let current = line.series.last().copied().flatten();
+    let color = current.map(|v| line.color(v)).unwrap_or(theme::accent());
+    let (min, max, _) = history::stats_points(&line.series).unwrap_or((0.0, 0.0, 0.0));
 
-    ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(6.0, 2.0);
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(tile.name.to_uppercase())
-                        .size(12.0)
-                        .strong()
-                        .color(theme::text()),
-                )
-                .truncate(),
-            )
-            .on_hover_text(crate::trf!("Źródło: {}", "Source: {}", tile.source));
-            if let Some((text, c)) = current.and_then(|v| tile.badge(v)) {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    history::badge(ui, text, c);
-                });
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(shown.map(|v| tile.fmt(v)).unwrap_or_else(|| "—".into()))
-                    .size(20.0)
-                    .strong()
-                    .color(color),
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
+        let width = ui.available_width();
+        let name_w = 230.0_f32.min(width * 0.35);
+        let value_w = 110.0;
+
+        let cell = |ui: &mut egui::Ui, w: f32| {
+            let (rect, response) =
+                ui.allocate_exact_size(Vec2::new(w, ROW_H), egui::Sense::hover());
+            ui.painter().rect(
+                rect,
+                egui::CornerRadius::same(6),
+                theme::card_fill(),
+                egui::Stroke::new(1.0_f32, theme::card_edge()),
+                egui::StrokeKind::Inside,
             );
-            if show == Show::Current {
-                let unit = format!(" {}", tile.unit);
-                history::delta(ui, delta, &unit, tile.decimals);
-            }
-        });
-        ui.label(
-            RichText::new(format!("MIN {} / MAX {}", tile.fmt(min), tile.fmt(max)))
-                .size(11.0)
-                .color(theme::muted()),
+            (rect, response)
+        };
+        let (rect, response) = cell(ui, name_w);
+        ui.painter().text(
+            rect.left_center() + Vec2::new(10.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            &line.name,
+            egui::FontId::proportional(13.0),
+            theme::text(),
         );
-        ui.add_space(4.0);
+        response.on_hover_text(crate::trf!("Źródło: {}", "Source: {}", line.source));
+
+        let (rect, response) = cell(ui, value_w);
+        ui.painter().text(
+            rect.right_center() - Vec2::new(10.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            shown.map(|v| line.fmt(v)).unwrap_or_else(|| "—".into()),
+            egui::FontId::proportional(13.5),
+            color,
+        );
+        response.on_hover_text(format!("MIN {} / MAX {}", line.fmt(min), line.fmt(max)));
+
+        let chart_w = ui.available_width().max(80.0);
         history::chart(
             ui,
-            Vec2::new(width, 56.0),
-            &tile.series,
+            Vec2::new(chart_w, ROW_H),
+            &line.series,
             color,
-            tile.scale(),
-            &|v| tile.fmt(v),
+            line.scale(),
+            &|v| line.fmt(v),
         );
-        history::time_axis(ui);
     });
+    ui.add_space(5.0);
 }
