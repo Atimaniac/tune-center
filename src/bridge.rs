@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -129,6 +129,10 @@ pub fn target(cfg: Option<&FanConfig>, temps: &[Temp]) -> Option<f32> {
 }
 
 struct Inner {
+    /// Proces czujników (podmieniany przy ponownym uruchomieniu po awarii).
+    child: Child,
+    /// Program się zamyka - zakończenie procesu nie jest awarią.
+    quitting: bool,
     stdin: ChildStdin,
     snapshot: Option<Snapshot>,
     status: Status,
@@ -181,8 +185,40 @@ impl Inner {
 }
 
 pub struct Backend {
-    child: Child,
     inner: Arc<Mutex<Inner>>,
+}
+
+/// Ile razy z rzędu ponawiamy uruchomienie procesu czujników po awarii.
+const MAX_RESTARTS: u32 = 5;
+/// Proces, który przepracował tyle czasu, zeruje licznik ponowień.
+const STABLE_AFTER: Duration = Duration::from_secs(120);
+
+/// Uruchamia proces czujników bez okna konsoli.
+fn start_child(path: &std::path::Path) -> Result<(Child, ChildStdin, ChildStdout), String> {
+    let mut cmd = Command::new(path);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = cmd.spawn().map_err(|e| {
+        crate::trf!(
+            "Nie udało się uruchomić {BRIDGE}: {e}",
+            "Could not start {BRIDGE}: {e}"
+        )
+    })?;
+    let stdin = child.stdin.take().ok_or(crate::i18n::tr(
+        "Brak stdin procesu pomocniczego",
+        "The helper process has no stdin",
+    ))?;
+    let stdout = child.stdout.take().ok_or(crate::i18n::tr(
+        "Brak stdout procesu pomocniczego",
+        "The helper process has no stdout",
+    ))?;
+    Ok((child, stdin, stdout))
 }
 
 impl Backend {
@@ -190,6 +226,10 @@ impl Backend {
     /// `gpu`: ostatni odczyt mocy karty wprost ze sterownika.
     /// `board`: tablica, na którą trafiają temperatury z każdego odczytu;
     /// `skip_kinds`: typy kart, których wentylatorami steruje sterownik karty.
+    ///
+    /// Gdy proces czujników zakończy się sam (np. awaria biblioteki
+    /// sterownika), jest uruchamiany ponownie (do `MAX_RESTARTS` razy z rzędu),
+    /// a wentylatory dostają ponownie swoje ustawienia.
     pub fn spawn(
         ctx: egui::Context,
         fans: Fans,
@@ -212,33 +252,11 @@ impl Backend {
             ));
         }
 
-        let mut cmd = Command::new(&path);
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
-
-        let mut child = cmd.spawn().map_err(|e| {
-            crate::trf!(
-                "Nie udało się uruchomić {BRIDGE}: {e}",
-                "Could not start {BRIDGE}: {e}"
-            )
-        })?;
-        let stdin = child.stdin.take().ok_or(crate::i18n::tr(
-            "Brak stdin procesu pomocniczego",
-            "The helper process has no stdin",
-        ))?;
-        let stdout = child.stdout.take().ok_or(crate::i18n::tr(
-            "Brak stdout procesu pomocniczego",
-            "The helper process has no stdout",
-        ))?;
-
+        let (child, stdin, stdout) = start_child(&path)?;
         let inner = Arc::new(Mutex::new(Inner {
             stdin,
+            child,
+            quitting: false,
             snapshot: None,
             status: Status::Starting,
             fans,
@@ -248,59 +266,104 @@ impl Backend {
 
         let thread_inner = inner.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                if line.trim().is_empty() {
-                    continue;
-                }
-                if let Ok(snap) = serde_json::from_str::<Snapshot>(&line) {
-                    let mut s = thread_inner.lock().unwrap();
-                    if let Some(err) = &snap.error {
-                        s.status = Status::Error(err.clone());
-                    } else {
-                        s.status = Status::Running;
-                        let readings: Vec<Reading> = snap
-                            .powers
-                            .iter()
-                            .map(|p| Reading {
-                                name: &p.name,
-                                hw: &p.hw,
-                                kind: &p.kind,
-                                watts: p.value,
-                            })
-                            .collect();
-                        // Moc karty graficznej: odczyt ze sterownika, jeśli świeży.
-                        let now = Instant::now();
-                        let driver = power::fresh(&gpu, now);
-                        let readings = power::with_driver_gpu(readings, driver.as_ref());
-                        if let Ok(mut meter) = meter.lock() {
-                            meter.update(&readings, now);
-                        }
-                        drop(readings);
-                        if let Ok(mut b) = board.lock() {
-                            b.clone_from(&snap.temps);
-                        }
-                        s.snapshot = Some(snap);
-                        s.apply();
+            let mut stdout = stdout;
+            let mut restarts = 0u32;
+            loop {
+                let started = Instant::now();
+                for line in BufReader::new(stdout).lines() {
+                    let Ok(line) = line else { break };
+                    if line.trim().is_empty() {
+                        continue;
                     }
+                    if let Ok(snap) = serde_json::from_str::<Snapshot>(&line) {
+                        let mut s = thread_inner.lock().unwrap();
+                        if let Some(err) = &snap.error {
+                            s.status = Status::Error(err.clone());
+                        } else {
+                            s.status = Status::Running;
+                            let readings: Vec<Reading> = snap
+                                .powers
+                                .iter()
+                                .map(|p| Reading {
+                                    name: &p.name,
+                                    hw: &p.hw,
+                                    kind: &p.kind,
+                                    watts: p.value,
+                                })
+                                .collect();
+                            // Moc karty graficznej: odczyt ze sterownika, jeśli świeży.
+                            let now = Instant::now();
+                            let driver = power::fresh(&gpu, now);
+                            let readings = power::with_driver_gpu(readings, driver.as_ref());
+                            if let Ok(mut meter) = meter.lock() {
+                                meter.update(&readings, now);
+                            }
+                            drop(readings);
+                            if let Ok(mut b) = board.lock() {
+                                b.clone_from(&snap.temps);
+                            }
+                            s.snapshot = Some(snap);
+                            s.apply();
+                        }
+                    }
+                    ctx.request_repaint();
+                }
+
+                // Proces się zakończył. Przy zamykaniu programu - koniec;
+                // inaczej (awaria) uruchamiamy go ponownie.
+                {
+                    let mut s = thread_inner.lock().unwrap();
+                    if s.quitting {
+                        break;
+                    }
+                    let _ = s.child.wait();
+                    if started.elapsed() > STABLE_AFTER {
+                        restarts = 0;
+                    }
+                    if restarts >= MAX_RESTARTS {
+                        if !matches!(s.status, Status::Error(_)) {
+                            s.status = Status::Error(
+                                crate::i18n::tr(
+                                    "Proces sensor-bridge kilka razy z rzędu zakończył działanie.",
+                                    "The sensor-bridge process exited several times in a row.",
+                                )
+                                .into(),
+                            );
+                        }
+                        break;
+                    }
+                    s.status = Status::Starting;
                 }
                 ctx.request_repaint();
+                restarts += 1;
+                std::thread::sleep(Duration::from_secs(2));
+
+                match start_child(&path) {
+                    Ok((child, stdin, out)) => {
+                        let mut s = thread_inner.lock().unwrap();
+                        if s.quitting {
+                            // Program zamyka się w trakcie ponowienia.
+                            s.child = child;
+                            s.stdin = stdin;
+                            s.send("quit");
+                            break;
+                        }
+                        s.child = child;
+                        s.stdin = stdin;
+                        // Nowy proces nie zna wysterowania - wyślemy je od nowa.
+                        s.applied.clear();
+                        stdout = out;
+                    }
+                    Err(e) => {
+                        thread_inner.lock().unwrap().status = Status::Error(e);
+                        break;
+                    }
+                }
             }
-            let mut s = thread_inner.lock().unwrap();
-            if !matches!(s.status, Status::Error(_)) {
-                s.status = Status::Error(
-                    crate::i18n::tr(
-                        "Proces sensor-bridge zakończył działanie.",
-                        "The sensor-bridge process has exited.",
-                    )
-                    .into(),
-                );
-            }
-            drop(s);
             ctx.request_repaint();
         });
 
-        Ok(Self { child, inner })
+        Ok(Self { inner })
     }
 
     pub fn state(&self) -> (Option<Snapshot>, Status) {
@@ -320,17 +383,22 @@ impl Drop for Backend {
     fn drop(&mut self) {
         // Bridge po `quit` przywraca sterowanie BIOS-u dla wszystkich wentylatorów.
         if let Ok(mut s) = self.inner.lock() {
+            s.quitting = true;
             s.send("quit");
         }
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            match self.child.try_wait() {
+            let Ok(mut s) = self.inner.lock() else { break };
+            match s.child.try_wait() {
                 Ok(Some(_)) | Err(_) => break,
                 Ok(None) if Instant::now() > deadline => {
-                    let _ = self.child.kill();
+                    let _ = s.child.kill();
                     break;
                 }
-                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                Ok(None) => {
+                    drop(s);
+                    std::thread::sleep(Duration::from_millis(50));
+                }
             }
         }
     }

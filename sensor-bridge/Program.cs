@@ -6,9 +6,15 @@
 
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text.Json;
 using LibreHardwareMonitor.Hardware;
+
+// Bez okna "sensor-bridge przestał działać": gdy biblioteka sterownika (np.
+// NVML w LibreHardwareMonitor) spowoduje naruszenie pamięci, proces po prostu
+// kończy się, a Tune Center uruchamia go ponownie.
+NativeMethods.SetErrorMode(NativeMethods.SEM_FAILCRITICALERRORS | NativeMethods.SEM_NOGPFAULTERRORBOX);
 
 var stdout = Console.Out;
 var restored = false;
@@ -211,4 +217,13 @@ static bool Handle(Computer computer, string line)
             break;
     }
     return true;
+}
+
+static class NativeMethods
+{
+    public const uint SEM_FAILCRITICALERRORS = 0x0001;
+    public const uint SEM_NOGPFAULTERRORBOX = 0x0002;
+
+    [DllImport("kernel32.dll")]
+    public static extern uint SetErrorMode(uint mode);
 }

@@ -475,8 +475,15 @@ impl App {
             }
             option_note(
                 ui,
-                crate::i18n::tr("Po zminimalizowaniu okno znika z paska zadań i zostaje ikona przy zegarze. Lewy klik na ikonie przywraca okno.", "When minimized, the window leaves the taskbar and an icon stays next to the clock. Left-click the icon to bring the window back."),
+                crate::i18n::tr("Po zminimalizowaniu okno znika z paska zadań i zostaje ikona przy zegarze. Lewy klik na ikonie przywraca okno, tak samo jak ponowne uruchomienie programu.", "When minimized, the window leaves the taskbar and an icon stays next to the clock. Left-click the icon to bring the window back - starting the program again does the same."),
             );
+            #[cfg(windows)]
+            if to_tray && !tray::tray_host_present() {
+                option_note(
+                    ui,
+                    crate::i18n::tr("Obecna powłoka Windows nie ma obszaru powiadomień - okno minimalizuje się zwyczajnie na pasek zadań.", "The current Windows shell has no notification area - the window minimizes to the taskbar as usual."),
+                );
+            }
 
             let mut light = theme::is_light();
             if ui.checkbox(&mut light, crate::i18n::tr("Jasny motyw", "Light theme")).changed() {
@@ -1133,6 +1140,16 @@ fn main() -> eframe::Result<()> {
     #[cfg(windows)]
     if args.get(1).map(String::as_str) == Some(shaders::warm::HOST_ARG_PROBE) {
         std::process::exit(shaders::warm::run_cache_probe());
+    }
+    // Jedna kopia programu: ponowne uruchomienie pokazuje okno już działającej
+    // (także schowane do zasobnika, gdy powłoka nie pokazuje ikony).
+    #[cfg(windows)]
+    {
+        let minimized = args.iter().any(|a| a == "--minimized");
+        let restart = args.iter().any(|a| a == "--restart");
+        if tray::activate_other_instance(!minimized, restart) {
+            return Ok(());
+        }
     }
 
     let options = eframe::NativeOptions {

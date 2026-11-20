@@ -463,6 +463,17 @@ prawy otwiera menu "Pokaż Tune Center" / "Zakończ". Sterowanie wentylatorami
 i licznik energii działają dalej. Pole "Minimalizuj do zasobnika" w zakładce OPTIONS
 wyłącza to zachowanie. Autostart uruchamia program od razu w zasobniku.
 
+Program działa w jednej kopii: ponowne uruchomienie pokazuje okno już
+działającego programu (także schowane w zasobniku). Jeśli powłoka Windows nie
+ma obszaru powiadomień (np. zastępcza powłoka zamiast Eksploratora - brak okna
+`Shell_TrayWnd`), okno nie jest chowane, tylko zwyczajnie minimalizowane na
+pasek zadań; OPTIONS pokazuje wtedy notatkę.
+
+Proces czujników `sensor-bridge.exe` jest uruchamiany ponownie, gdy sam się
+zakończy (np. po awarii biblioteki sterownika), do 5 razy z rzędu; Windows nie
+pokazuje wtedy okna "program przestał działać", a wentylatory dostają swoje
+ustawienia od nowa.
+
 Okno schowane w zasobniku nie jest rysowane i praktycznie nie obciąża
 procesora (wcześniejsze wersje z eframe 0.29 zajmowały wtedy cały rdzeń).
 Animacja wentylatorów w zakładce FAN jest ograniczona do ok. 30 klatek/s.
