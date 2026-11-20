@@ -455,6 +455,16 @@ HWiNFO i OpenRGB. Wymaga uprawnień administratora i sterownika PawnIO.
 - Poprzedni efekt jest zapamiętany; odznaczenie opcji go przywraca.
 - Podświetlenie płyty głównej i karty graficznej nie jest obsługiwane.
 
+### Taśma LED Skydimo
+
+Opcja "Podświetlenie Skydimo (taśma LED na USB)" steruje taśmą Skydimo
+(podświetlenie za monitorem, układ USB CH340, VID 1A86 PID 7523): jeden kolor
+na całej taśmie (wybór koloru) i jasność 0-100 %. Program pyta taśmę o model
+(np. SK0127 = 65 diod) i wysyła kolor w protokole Adalight, powtarzając go co
+sekundę - bez danych taśma gaśnie. Ustawienie działa od startu programu, także
+z autostartem Windows. Aplikacja SkyDimo musi być zamknięta (zajmuje port;
+warto wyłączyć jej autostart). Odznaczenie gasi taśmę i zwalnia port.
+
 ## Minimalizowanie do zasobnika
 
 Domyślnie przycisk minimalizacji chowa okno do zasobnika systemowego (ikona

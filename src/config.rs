@@ -75,6 +75,13 @@ pub struct Config {
     /// Tryby LED sprzed wyłączenia: (adres SMBus, tryb bezpośredni, tryb).
     #[serde(default)]
     pub leds_saved: Vec<(u8, u8, u8)>,
+    /// Taśma LED Skydimo (USB): sterowanie włączone, kolor i jasność (0-100 %).
+    #[serde(default)]
+    pub skydimo_on: bool,
+    #[serde(default = "white")]
+    pub skydimo_color: [u8; 3],
+    #[serde(default = "full")]
+    pub skydimo_brightness: u8,
     /// Cena energii za kWh do kosztu sesji w zakładce POWER (0 = nie pokazuj).
     #[serde(default = "default_price")]
     pub energy_price: f32,
@@ -85,6 +92,14 @@ pub struct Config {
     pub active: String,
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
+}
+
+fn white() -> [u8; 3] {
+    [255, 255, 255]
+}
+
+fn full() -> u8 {
+    100
 }
 
 fn default_price() -> f32 {
@@ -109,6 +124,9 @@ impl Default for Config {
             gpu_fans_direct: true,
             leds_off: false,
             leds_saved: Vec::new(),
+            skydimo_on: false,
+            skydimo_color: white(),
+            skydimo_brightness: full(),
             energy_price: default_price(),
             energy_currency: default_currency(),
             active: String::new(),

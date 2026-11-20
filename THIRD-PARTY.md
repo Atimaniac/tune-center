@@ -40,6 +40,10 @@ Tune Center korzysta z poniższych składników. Są dołączane bez zmian.
 - ryzen_monitor (https://github.com/hattedsquirrel/ryzen_monitor) i rigstats
   (https://github.com/dvalfrid/rigstats): położenie limitów PPT, TDC i EDC
   w tabeli PM procesorów Ryzen 5000 i 9000.
+- OpenRGB (https://gitlab.com/CalcProgrammer1/OpenRGB, GPL-2.0-or-later):
+  protokół taśm LED Skydimo (zapytanie "Moni-A", tabela modeli i liczby diod,
+  ramka Adalight, podtrzymanie). Użyte jako odniesienie; kod nie został
+  skopiowany. Port szeregowy: crate serialport (MPL-2.0).
 - LibreHardwareMonitor (MPL-2.0): układ struktur NVAPI do odczytu i
   sterowania wentylatorami karty (ClientFanCoolers) oraz czujnika hotspot.
 - AMD Display Library SDK (https://github.com/GPUOpen-LibrariesAndSDKs/display-library):

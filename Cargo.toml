@@ -1,6 +1,6 @@
 [package]
 name = "tunecenter"
-version = "0.19.1"
+version = "0.19.2"
 edition = "2021"
 description = "Tune Center: karta graficzna (Nvidia, AMD), wentylatory, czujniki i pobor mocy w jednym oknie (Windows)"
 
@@ -21,6 +21,8 @@ rfd = "0.15"
 # Rozpakowywanie zrzutów shaderów Dagor Engine (zstd ze słownikiem).
 zstd = "0.13"
 lz4_flex = "0.11"
+# Port szeregowy taśmy LED Skydimo (CH340, protokół Adalight).
+serialport = { version = "4", default-features = false }
 # Direct3D 12: root signature i potoki przy kompilacji shaderów z góry.
 windows = { version = "0.62", features = [
     "Win32_Foundation",

@@ -31,6 +31,7 @@ mod power_tab;
 mod rebar;
 mod sensors;
 mod shaders;
+mod skydimo;
 mod theme;
 mod tray;
 mod update;
@@ -208,6 +209,8 @@ struct App {
     leds: leds::Control,
     leds_status: Option<(String, bool)>,
     leds_started: bool,
+    /// Taśma LED Skydimo (USB).
+    skydimo: skydimo::Control,
     /// Temperatury dysków odczytywane przez API Windows.
     disks: disks::Disks,
     /// Licznik energii zakładki POWER.
@@ -259,6 +262,19 @@ impl App {
         // Wentylatory kart graficznych: najpierw sterownik karty. Proces
         // czujników dowiaduje się, których kart ma nie dotykać.
         let board: gpu_fans::TempBoard = Arc::default();
+        // Taśma Skydimo: kolor z ustawień od razu po starcie (także z autostartu).
+        let skydimo = {
+            let c = &fans.config;
+            let ctx = cc.egui_ctx.clone();
+            skydimo::Control::start(
+                skydimo::Setting {
+                    on: c.skydimo_on,
+                    color: c.skydimo_color,
+                    brightness: c.skydimo_brightness,
+                },
+                move || ctx.request_repaint(),
+            )
+        };
         let gpu_fans = if fans.config.gpu_fans_direct && !demo {
             let ctx = cc.egui_ctx.clone();
             gpu_fans::GpuFans::start(fans.config.fans().clone(), board.clone(), move || {
@@ -314,6 +330,7 @@ impl App {
             leds: leds::Control::default(),
             leds_status: None,
             leds_started: false,
+            skydimo,
             meter,
             gpu_power,
             meter_tick: Instant::now(),
@@ -544,6 +561,8 @@ impl App {
                 ui.label(RichText::new(text).size(12.0).color(if *error { warn() } else { accent() }));
             }
 
+            self.skydimo_ui(ui);
+
             let mut check = self.fans.config.check_updates;
             if ui
                 .checkbox(&mut check, crate::i18n::tr("Sprawdzaj aktualizacje (przy starcie i co 15 minut)", "Check for updates (at startup and every 15 minutes)"))
@@ -585,6 +604,74 @@ impl App {
                 ),
             );
         });
+    }
+
+    /// Ustawienie taśmy Skydimo z konfiguracji.
+    fn skydimo_setting(&self) -> skydimo::Setting {
+        let c = &self.fans.config;
+        skydimo::Setting {
+            on: c.skydimo_on,
+            color: c.skydimo_color,
+            brightness: c.skydimo_brightness,
+        }
+    }
+
+    /// OPTIONS: taśma LED Skydimo - włączenie, kolor, jasność i stan połączenia.
+    fn skydimo_ui(&mut self, ui: &mut egui::Ui) {
+        let mut changed = false;
+        let cfg = &mut self.fans.config;
+        changed |= ui
+            .checkbox(
+                &mut cfg.skydimo_on,
+                crate::i18n::tr(
+                    "Podświetlenie Skydimo (taśma LED na USB)",
+                    "Skydimo lighting (USB LED strip)",
+                ),
+            )
+            .changed();
+        ui.add_enabled_ui(cfg.skydimo_on, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(crate::i18n::tr("Kolor:", "Color:"));
+                changed |= egui::color_picker::color_edit_button_srgb(ui, &mut cfg.skydimo_color)
+                    .changed();
+                ui.add_space(12.0);
+                ui.label(crate::i18n::tr("Jasność:", "Brightness:"));
+                changed |= ui
+                    .add(egui::Slider::new(&mut cfg.skydimo_brightness, 0..=100).suffix(" %"))
+                    .changed();
+            });
+        });
+        if changed {
+            self.fans.config.save();
+            self.skydimo.set(self.skydimo_setting());
+        }
+        option_note(
+            ui,
+            crate::i18n::tr(
+                "Jeden kolor na całej taśmie (protokół Adalight przez USB CH340, VID 1A86 PID 7523). Program wysyła kolor co sekundę - taśma bez danych gaśnie, więc świeci, dopóki Tune Center działa (także po starcie z Windows). Aplikacja SkyDimo musi być zamknięta, bo zajmuje port. Odznaczenie gasi taśmę i zwalnia port.",
+                "One color on the whole strip (Adalight protocol over USB CH340, VID 1A86 PID 7523). The program sends the color every second - the strip turns off without data, so it stays lit while Tune Center runs (also when started with Windows). The SkyDimo app must be closed because it holds the port. Unticking turns the strip off and frees the port.",
+            ),
+        );
+        let (text, error) = match self.skydimo.status() {
+            skydimo::Status::Off => return,
+            skydimo::Status::Searching => (
+                crate::i18n::tr("Łączenie z taśmą...", "Connecting to the strip...").to_owned(),
+                false,
+            ),
+            skydimo::Status::Connected { port, model, leds } => (
+                crate::trf!(
+                    "Połączono: {port}, model {model}, {leds} diod.",
+                    "Connected: {port}, model {model}, {leds} LEDs."
+                ),
+                false,
+            ),
+            skydimo::Status::Error(e) => (e, true),
+        };
+        ui.label(
+            RichText::new(text)
+                .size(12.0)
+                .color(if error { warn() } else { accent() }),
+        );
     }
 
     /// Zakładka ABOUT: wersja, opis i użyte składniki.
