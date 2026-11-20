@@ -34,6 +34,7 @@ mod shaders;
 mod skydimo;
 mod theme;
 mod tray;
+mod tune;
 mod update;
 
 use std::sync::{Arc, Mutex};
@@ -62,17 +63,19 @@ enum Tab {
     Fans,
     Sensors,
     Power,
+    Tune,
     Options,
     About,
 }
 
 /// Zakładki w kolejności przycisków w nagłówku.
-const TABS: [(Tab, &str, Icon); 7] = [
+const TABS: [(Tab, &str, Icon); 8] = [
     (Tab::Nvidia, "NVIDIA", Icon::Gpu),
     (Tab::Cpu, "CPU", Icon::Cpu),
     (Tab::Fans, "FAN", Icon::Fan),
     (Tab::Sensors, "SENSORS", Icon::Sensors),
     (Tab::Power, "POWER", Icon::Power),
+    (Tab::Tune, "TUNE", Icon::Gauge),
     (Tab::Options, "OPTIONS", Icon::Options),
     (Tab::About, "ABOUT", Icon::About),
 ];
@@ -84,13 +87,13 @@ const TAB_SKEW: f32 = 10.0;
 /// tło i ciemnoniebieską obwódkę, aktywny świeci jasnym błękitem i ma
 /// poświatę pod spodem.
 fn tab_button(ui: &mut egui::Ui, label: &str, icon: Icon, selected: bool) -> egui::Response {
-    let font = theme::tab_font(13.0);
+    let font = theme::tab_font(12.5);
     let text_width = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
         .size()
         .x;
-    let size = egui::vec2(text_width + 26.0 + 2.0 * TAB_SKEW + 12.0, 38.0);
+    let size = egui::vec2(text_width + 22.0 + 2.0 * TAB_SKEW + 2.0, 38.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -159,20 +162,20 @@ fn tab_button(ui: &mut egui::Ui, label: &str, icon: Icon, selected: bool) -> egu
                 1.0,
             );
         }
-        let content = text_width + 25.0;
+        let content = text_width + 22.0;
         let x = rect.center().x - content / 2.0;
         let icon_color = if selected { theme::glow() } else { text };
         icons::paint(
             p,
             egui::Rect::from_center_size(
-                egui::pos2(x + 9.0, rect.center().y),
-                egui::vec2(18.0, 18.0),
+                egui::pos2(x + 8.0, rect.center().y),
+                egui::vec2(16.0, 16.0),
             ),
             icon,
             icon_color,
         );
         p.text(
-            egui::pos2(x + 25.0, rect.center().y),
+            egui::pos2(x + 22.0, rect.center().y),
             Align2::LEFT_CENTER,
             label,
             font,
@@ -211,6 +214,8 @@ struct App {
     leds_started: bool,
     /// Taśma LED Skydimo (USB).
     skydimo: skydimo::Control,
+    /// Zakładka TUNE (opóźnienia i DPC).
+    tune: tune::Tune,
     /// Temperatury dysków odczytywane przez API Windows.
     disks: disks::Disks,
     /// Licznik energii zakładki POWER.
@@ -331,6 +336,12 @@ impl App {
             leds_status: None,
             leds_started: false,
             skydimo,
+            tune: {
+                let ctx = cc.egui_ctx.clone();
+                tune::Tune::new(cpu::cpu_info().name.contains("X3D"), move || {
+                    ctx.request_repaint()
+                })
+            },
             meter,
             gpu_power,
             meter_tick: Instant::now(),
@@ -857,7 +868,7 @@ impl eframe::App for App {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(2.0, 8.0);
                     let (logo_rect, _) =
-                        ui.allocate_exact_size(egui::vec2(80.0, 80.0), Sense::hover());
+                        ui.allocate_exact_size(egui::vec2(76.0, 76.0), Sense::hover());
                     theme::radial_glow(
                         ui.painter(),
                         logo_rect.center(),
@@ -866,16 +877,16 @@ impl eframe::App for App {
                     );
                     egui::Image::from_texture(egui::load::SizedTexture::new(
                         self.logo.id(),
-                        egui::vec2(80.0, 80.0),
+                        egui::vec2(76.0, 76.0),
                     ))
                     .paint_at(ui, logo_rect);
-                    ui.add_space(12.0);
+                    ui.add_space(8.0);
                     ui.label(
                         RichText::new("TUNE CENTER")
-                            .font(theme::tab_font(23.0))
+                            .font(theme::tab_font(22.0))
                             .color(theme::wordmark()),
                     );
-                    ui.add_space(18.0);
+                    ui.add_space(10.0);
                     let tabs_x = ui.cursor().left();
                     for (tab, label, icon) in TABS {
                         if tab_button(ui, label, icon, self.tab == tab).clicked() {
@@ -1167,6 +1178,7 @@ impl eframe::App for App {
                     &self.disks.list(),
                     &self.sensor_hist,
                 ),
+                Tab::Tune => self.tune.ui(ui, self.elevated),
                 Tab::Power => power_tab::ui(
                     ui,
                     &self.meter,

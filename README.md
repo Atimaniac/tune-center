@@ -19,6 +19,8 @@ przełącza się przyciskami w nagłówku, obok logo:
 - **SENSORS** - najważniejsze temperatury z wykresami z ostatnich 2 minut.
 - **POWER** - aktualny pobór mocy procesora i karty graficznej, suma
   oraz licznik energii zużytej w bieżącej sesji.
+- **TUNE** - ustawienia Windows wpływające na opóźnienia i DPC, z kopią
+  oryginalnych wartości i przywracaniem.
 - **OPTIONS** - uruchamianie z Windows, minimalizowanie do zasobnika
   i jasny motyw.
 - **ABOUT** - wersja programu, opis i użyte składniki.
@@ -464,6 +466,33 @@ na całej taśmie (wybór koloru) i jasność 0-100 %. Program pyta taśmę o mo
 sekundę - bez danych taśma gaśnie. Ustawienie działa od startu programu, także
 z autostartem Windows. Aplikacja SkyDimo musi być zamknięta (zajmuje port;
 warto wyłączyć jej autostart). Odznaczenie gasi taśmę i zwalnia port.
+
+## TUNE - opóźnienia i DPC
+
+Ustawienia Windows, które wpływają na opóźnienie wejścia i czasy DPC. Każda
+pozycja pokazuje stan odczytany z systemu; zaznaczenie ustawia wartość
+zalecaną, odznaczenie przywraca oryginał. Przed pierwszą zmianą pozycji
+oryginalna wartość trafia do `tune-backup.json` obok programu, a każdy zapis
+jest sprawdzany odczytem. "Przywróć ustawienia Windows" cofa wszystko.
+Oznaczenie RESTART: zmiana działa po ponownym uruchomieniu komputera.
+
+Sprawdzone (Microsoft, producenci sprzętu):
+- Memory Integrity i Virtual Machine Platform wyłączone (Microsoft: kilka %
+  w grach; mniej ochrony jądra, bez WSL i maszyn wirtualnych).
+- Karta sieciowa: Interrupt Moderation i Energy Efficient Ethernet wyłączone
+  (karta restartuje się na kilka sekund).
+- Plan zasilania: USB Selective Suspend i PCI Express Link State Power
+  Management wyłączone; plan Ultimate Performance (nie dla Ryzen X3D).
+- Tryb gry Windows.
+
+Do przetestowania na własnym sprzęcie (porównaj LatencyMon przed i po):
+- Tryb MSI przerwań dla karty graficznej, sieci, audio i USB.
+- Globalna rozdzielczość timera (`GlobalTimerResolutionRequests`).
+- `Win32PrioritySeparation` = 0x26, `SystemResponsiveness` = 10.
+
+Celowo pominięte: `bcdedit useplatformclock/disabledynamictick` (sprzeczne
+wyniki, problemy z myszą) i `NetworkThrottlingIndex` (więcej przerwań).
+Większość pozycji wymaga uprawnień administratora.
 
 ## Minimalizowanie do zasobnika
 
