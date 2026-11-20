@@ -397,8 +397,8 @@ pub enum Group {
 /// Stan pozycji odczytany z systemu.
 #[derive(Clone, PartialEq, Debug)]
 pub enum State {
-    /// Zalecana wartość jest ustawiona.
-    Optimized,
+    /// Zalecana wartość jest ustawiona (z opisem bieżącej).
+    Optimized(String),
     /// Wartość domyślna / inna niż zalecana (z opisem bieżącej).
     Default(String),
     /// Pozycja nie dotyczy tego komputera (z powodem).
@@ -524,12 +524,67 @@ const REG_TWEAKS: &[RegTweak] = &[
     },
 ];
 
+/// Opis bieżącej wartości pozycji z rejestru, np. "Win32PrioritySeparation = 0x26
+/// (38)" albo "brak wpisu - Windows używa 20".
+#[cfg(windows)]
+fn reg_value_text(t: &RegTweak, raw: Option<u32>) -> String {
+    let num = |v: u32| {
+        if t.key == "priority" {
+            format!("0x{v:X} ({v})")
+        } else {
+            v.to_string()
+        }
+    };
+    // Znaczenie wartości tam, gdzie to włącz / wyłącz.
+    let meaning = |v: u32| match (t.key, v) {
+        ("hvci", 0) => crate::i18n::tr(" - wyłączona", " - off"),
+        ("hvci", _) => crate::i18n::tr(" - włączona", " - on"),
+        ("game_mode", 0) => crate::i18n::tr(" - wyłączony", " - off"),
+        ("game_mode", _) => crate::i18n::tr(" - włączony", " - on"),
+        ("timer", 0) => crate::i18n::tr(" - wyłączona", " - off"),
+        ("timer", _) => crate::i18n::tr(" - włączona", " - on"),
+        _ => "",
+    };
+    match (raw, t.absent) {
+        (Some(v), _) => format!("{} = {}{}", t.value, num(v), meaning(v)),
+        (None, Some(d)) => crate::trf!(
+            "brak wpisu {} - Windows używa {}{}",
+            "no {} entry - Windows uses {}{}",
+            t.value,
+            num(d),
+            meaning(d)
+        ),
+        (None, None) => crate::trf!("brak wpisu {}", "no {} entry", t.value),
+    }
+}
+
 #[cfg(windows)]
 fn reg_state(t: &RegTweak, path: &str) -> State {
-    match reg::get_dword(t.root, path, t.value).or(t.absent) {
-        Some(v) if v == t.optimized => State::Optimized,
-        Some(v) => State::Default(format!("{} = {v}", t.value)),
-        None => State::Default(crate::i18n::tr("brak wartości", "no value").into()),
+    let raw = reg::get_dword(t.root, path, t.value);
+    let text = reg_value_text(t, raw);
+    match raw.or(t.absent) {
+        Some(v) if v == t.optimized => State::Optimized(text),
+        _ => State::Default(text),
+    }
+}
+
+/// Wartość ustawienia planu zasilania po ludzku.
+fn power_text(key: &str, v: u32) -> String {
+    let meaning = match (key, v) {
+        (_, 0) => crate::i18n::tr("wyłączone", "off"),
+        ("pcie_aspm", 1) => crate::i18n::tr("umiarkowane oszczędzanie", "moderate power savings"),
+        ("pcie_aspm", 2) => crate::i18n::tr("maksymalne oszczędzanie", "maximum power savings"),
+        _ => crate::i18n::tr("włączone", "on"),
+    };
+    crate::trf!("{meaning} (indeks {v})", "{meaning} (index {v})")
+}
+
+/// Wartość słowa kluczowego karty sieciowej po ludzku (0 / 1).
+fn on_off(v: &str) -> String {
+    match v {
+        "0" => crate::trf!("{v} - wyłączone", "{v} - off"),
+        "1" => crate::trf!("{v} - włączone", "{v} - on"),
+        _ => v.to_owned(),
     }
 }
 
@@ -840,7 +895,7 @@ fn read_all(cpu_x3d: bool) -> Vec<Item> {
         restart: true,
         state: match vmp_enabled() {
             Ok(Some(true)) => State::Default(text("włączona", "enabled")),
-            Ok(Some(false)) => State::Optimized,
+            Ok(Some(false)) => State::Optimized(text("wyłączona", "disabled")),
             Ok(None) => State::Unsupported(text("funkcja niedostępna w tym systemie", "feature not available on this system")),
             Err(e) => State::Unknown(e),
         },
@@ -869,10 +924,15 @@ fn read_all(cpu_x3d: bool) -> Vec<Item> {
                 "karta sieciowa nie ma tego ustawienia",
                 "the network adapter has no such setting",
             )),
-            Ok(v) if v.iter().all(|n| n.value == *optimized) => State::Optimized,
+            Ok(v) if v.iter().all(|n| n.value == *optimized) => State::Optimized(
+                v.iter()
+                    .map(|n| format!("{}: {}", n.name, on_off(&n.value)))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
             Ok(v) => State::Default(
                 v.iter()
-                    .map(|n| format!("{}: {}", n.name, n.value))
+                    .map(|n| format!("{}: {}", n.name, on_off(&n.value)))
                     .collect::<Vec<_>>()
                     .join(", "),
             ),
@@ -907,8 +967,8 @@ fn read_all(cpu_x3d: bool) -> Vec<Item> {
             )
         };
         let state = match power::read_ac(&power::Guid::parse(sub), &power::Guid::parse(setting)) {
-            Some(0) => State::Optimized,
-            Some(v) => State::Default(crate::trf!("indeks {v}", "index {v}")),
+            Some(0) => State::Optimized(power_text(key, 0)),
+            Some(v) => State::Default(power_text(key, v)),
             // Część planów (np. po zmianach producenta płyty) nie ma tego ustawienia.
             None => State::Unsupported(text(
                 "aktywny plan zasilania nie ma tego ustawienia",
@@ -935,7 +995,7 @@ fn read_all(cpu_x3d: bool) -> Vec<Item> {
         group: Group::Proven,
         restart: false,
         state: match power::active() {
-            Some(g) if is_ultimate(&g) => State::Optimized,
+            Some(g) if is_ultimate(&g) => State::Optimized(power::name(&g)),
             Some(g) => State::Default(power::name(&g)),
             None => State::Unknown(text("nie udało się odczytać planu zasilania", "could not read the power plan")),
         },
@@ -964,7 +1024,10 @@ fn read_all(cpu_x3d: bool) -> Vec<Item> {
     for d in devices::list() {
         let path = devices::msi_path(&d.id);
         let state = match reg::get_dword(reg::HKLM, &path, "MSISupported") {
-            Some(1) => State::Optimized,
+            Some(1) => State::Optimized(text(
+                "MSISupported = 1 - MSI włączone",
+                "MSISupported = 1 - MSI on",
+            )),
             Some(v) => State::Default(format!("MSISupported = {v}")),
             None => State::Default(text(
                 "tryb przerwań wg sterownika",
@@ -1448,10 +1511,10 @@ fn item_ui(
 
     let mut change = None;
     let (badge, color, detail) = match &item.state {
-        State::Optimized => (
+        State::Optimized(v) => (
             crate::i18n::tr("ZALECANE", "RECOMMENDED"),
             theme::ok(),
-            None,
+            Some(v.clone()),
         ),
         State::Default(v) => (
             crate::i18n::tr("DOMYŚLNE", "DEFAULT"),
@@ -1469,9 +1532,9 @@ fn item_ui(
             Some(v.clone()),
         ),
     };
-    let toggleable = matches!(item.state, State::Optimized | State::Default(_));
+    let toggleable = matches!(item.state, State::Optimized(_) | State::Default(_));
     ui.horizontal(|ui| {
-        let mut on = item.state == State::Optimized;
+        let mut on = matches!(item.state, State::Optimized(_));
         let enabled = idle && allowed && toggleable;
         if ui
             .add_enabled(
@@ -1509,10 +1572,16 @@ fn item_ui(
                 );
             }
             if let Some(d) = detail {
+                // Bieżąca wartość wyraźnie, przy każdej pozycji.
+                let label = if toggleable {
+                    crate::i18n::tr("Obecnie ustawione:", "Currently set:")
+                } else {
+                    crate::i18n::tr("Stan:", "Status:")
+                };
                 ui.label(
-                    RichText::new(crate::trf!("Teraz: {d}", "Now: {d}"))
-                        .size(11.5)
-                        .color(theme::muted()),
+                    RichText::new(format!("{label} {d}"))
+                        .size(12.5)
+                        .color(theme::accent()),
                 );
             }
             if let Some(w) = &item.warning {
