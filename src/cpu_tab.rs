@@ -653,7 +653,7 @@ fn monitor_section(ui: &mut egui::Ui, readings: Option<&crate::cpu::monitor::Rea
         },
     );
     // Kafelek na rdzeń: temperatura, zegar i VID.
-    theme::card_grid(ui, &r.cores, 128.0, 10.0, 10, 10, 10, |ui, _, c, _| {
+    theme::card_grid(ui, &r.cores, 150.0, 10.0, 10, 10, 10, |ui, _, c, _| {
         let color = if c.efficient {
             E_CORE_TEXT
         } else {

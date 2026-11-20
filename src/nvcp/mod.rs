@@ -111,6 +111,20 @@ pub struct NvcpTab {
 }
 
 impl NvcpTab {
+    /// Podzakładka z argumentu `--page` (np. 3d, dlss, display, color, gsync, custom, shaders).
+    pub fn open_page(&mut self, name: &str) {
+        self.page = match name {
+            "3d" => Page::Settings3d,
+            "dlss" => Page::Dlss,
+            "display" => Page::Display,
+            "color" => Page::Color,
+            "gsync" => Page::Gsync,
+            "custom" => Page::Custom,
+            "shaders" => Page::Shaders,
+            _ => Page::Overclock,
+        };
+    }
+
     pub fn new() -> Self {
         Self {
             api: None,

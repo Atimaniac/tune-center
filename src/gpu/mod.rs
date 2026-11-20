@@ -184,6 +184,16 @@ fn fmt<T: std::fmt::Display>(v: Option<T>, unit: &str) -> String {
 }
 
 impl GpuTab {
+    /// Podzakładka Overclock z argumentu `--page` (info, clocks, curve).
+    pub fn open_page(&mut self, name: &str) {
+        match name {
+            "clocks" => self.tab = Tab::Clocks,
+            "curve" => self.tab = Tab::Curve,
+            "info" => self.tab = Tab::Info,
+            _ => {}
+        }
+    }
+
     /// `demo_flag`: wymusza symulowaną kartę (parametr `--demo`).
     pub fn new(demo_flag: bool) -> Self {
         let (backend, demo, status): (Box<dyn Backend>, bool, String) = if demo_flag {

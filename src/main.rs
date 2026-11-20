@@ -317,7 +317,7 @@ impl App {
             updates.start(move || ctx.request_repaint());
         }
 
-        Self {
+        let mut app = Self {
             tab: Tab::Nvidia,
             gpu: GpuTab::new(demo),
             nvcp: nvcp::NvcpTab::new(),
@@ -350,6 +350,37 @@ impl App {
             update_checked: Instant::now(),
             sensor_hist: history::History::default(),
             power_hist: history::History::default(),
+        };
+        app.open_from_args();
+        app
+    }
+
+    /// `--tab <nvidia|cpu|fan|sensors|power|tune|options|about>` i
+    /// `--page <info|clocks|curve|3d|dlss|display|color|gsync|custom|shaders>`:
+    /// program otwiera się na wskazanej zakładce (np. ze skrótu na pulpicie).
+    fn open_from_args(&mut self) {
+        let args: Vec<String> = std::env::args().collect();
+        let value = |flag: &str| {
+            args.iter()
+                .position(|a| a == flag)
+                .and_then(|i| args.get(i + 1))
+                .map(|v| v.to_lowercase())
+        };
+        if let Some(tab) = value("--tab") {
+            self.tab = match tab.as_str() {
+                "cpu" => Tab::Cpu,
+                "fan" => Tab::Fans,
+                "sensors" => Tab::Sensors,
+                "power" => Tab::Power,
+                "tune" => Tab::Tune,
+                "options" => Tab::Options,
+                "about" => Tab::About,
+                _ => Tab::Nvidia,
+            };
+        }
+        if let Some(page) = value("--page") {
+            self.nvcp.open_page(&page);
+            self.gpu.open_page(&page);
         }
     }
 

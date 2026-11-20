@@ -1380,58 +1380,55 @@ impl Tune {
             self.scroll_top = false;
             scroll = scroll.vertical_scroll_offset(0.0);
         }
-        scroll
-            .id_salt("tune_scroll")
-            .show(ui, |ui| {
-                for (group, title, icon) in [
-                    (
-                        Group::Proven,
-                        crate::i18n::tr(
-                            "Sprawdzone (Microsoft, producenci sprzętu)",
-                            "Proven (Microsoft, hardware vendors)",
-                        ),
-                        Icon::Check,
+        scroll.id_salt("tune_scroll").show(ui, |ui| {
+            for (group, title, icon) in [
+                (
+                    Group::Proven,
+                    crate::i18n::tr(
+                        "Sprawdzone (Microsoft, producenci sprzętu)",
+                        "Proven (Microsoft, hardware vendors)",
                     ),
-                    (
-                        Group::Test,
-                        crate::i18n::tr(
-                            "Do przetestowania na Twoim sprzęcie",
-                            "To test on your hardware",
-                        ),
-                        Icon::Gauge,
+                    Icon::Check,
+                ),
+                (
+                    Group::Test,
+                    crate::i18n::tr(
+                        "Do przetestowania na Twoim sprzęcie",
+                        "To test on your hardware",
                     ),
-                ] {
-                    let items: Vec<&Item> =
-                        snap.items.iter().filter(|i| i.group == group).collect();
-                    if items.is_empty() {
-                        continue;
-                    }
-                    theme::card(12, 16).show(ui, |ui| {
-                        ui.set_width(width);
-                        theme::subheading(ui, icon, title);
-                        let mut msi_note = false;
-                        for item in items {
-                            // Opis trybu MSI raz, nad listą urządzeń.
-                            if item.key.starts_with("msi:") && !msi_note {
-                                msi_note = true;
-                                ui.add_space(6.0);
-                                theme::info(ui, item.desc);
-                            }
-                            ui.add_space(6.0);
-                            if let Some(c) = item_ui(
-                                ui,
-                                item,
-                                idle,
-                                elevated || item.key == "game_mode",
-                                snap.busy.as_deref(),
-                            ) {
-                                change = Some(c);
-                            }
-                        }
-                    });
-                    ui.add_space(12.0);
+                    Icon::Gauge,
+                ),
+            ] {
+                let items: Vec<&Item> = snap.items.iter().filter(|i| i.group == group).collect();
+                if items.is_empty() {
+                    continue;
                 }
-            });
+                theme::card(12, 16).show(ui, |ui| {
+                    ui.set_width(width);
+                    theme::subheading(ui, icon, title);
+                    let mut msi_note = false;
+                    for item in items {
+                        // Opis trybu MSI raz, nad listą urządzeń.
+                        if item.key.starts_with("msi:") && !msi_note {
+                            msi_note = true;
+                            ui.add_space(6.0);
+                            theme::info(ui, item.desc);
+                        }
+                        ui.add_space(6.0);
+                        if let Some(c) = item_ui(
+                            ui,
+                            item,
+                            idle,
+                            elevated || item.key == "game_mode",
+                            snap.busy.as_deref(),
+                        ) {
+                            change = Some(c);
+                        }
+                    }
+                });
+                ui.add_space(12.0);
+            }
+        });
         if let Some((key, on)) = change {
             self.set(&key, on);
         }

@@ -1,56 +1,60 @@
-# Składniki innych autorów
+# Third-party components
 
-Tune Center korzysta z poniższych składników. Są dołączane bez zmian.
+Tune Center uses the components below. They are included unchanged.
 
-## PawnIO.Modules - IntelMSR.bin, RyzenSMU.bin, AMDFamily17.bin
+## PawnIO.Modules – IntelMSR.bin, RyzenSMU.bin, AMDFamily17.bin, SmbusI801.bin
 
-- Źródło: https://github.com/namazso/PawnIO.Modules
-- Autor: namazso
-- Licencja: LGPL-2.1-or-later
-- Pliki w `modules\` to oficjalne, podpisane moduły pobrane z wydania
-  projektu. Ich kod źródłowy (`*.p`) jest dostępny pod adresem wyżej.
+- Source: https://github.com/namazso/PawnIO.Modules
+- Author: namazso
+- License: LGPL-2.1-or-later
+- The files in `modules\` are the official, signed modules from the project's
+  releases. Their source code (`*.p`) is available at the address above.
 
-## PawnIO (sterownik i PawnIOLib.dll)
+## PawnIO (driver and PawnIOLib.dll)
 
-- Źródło: https://github.com/namazso/PawnIO, https://pawnio.eu
-- Licencja: GPL-2.0
-- Nie jest dołączany; instaluje się go osobno (instalator Tune Center może
-  to zrobić przez winget).
+- Source: https://github.com/namazso/PawnIO, https://pawnio.eu
+- License: GPL-2.0
+- Not bundled; it is installed separately (the Tune Center installer can do
+  it through winget).
 
 ## LibreHardwareMonitorLib
 
-- Źródło: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
-- Licencja: MPL-2.0
-- Używany przez `sensor-bridge.exe` do odczytu czujników i sterowania
-  wentylatorami.
+- Source: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+- License: MPL-2.0
+- Used by `sensor-bridge.exe` to read sensors and control fans.
 
-## Audiowide (czcionka interfejsu)
+## serialport (Rust crate)
 
-- Plik: `assets/Audiowide-Regular.ttf`, wbudowany w `tunecenter.exe`
-- Autor: Astigmatic (Brian J. Bonislawsky)
-- Licencja: SIL Open Font License 1.1
+- Source: https://github.com/serialport/serialport-rs
+- License: MPL-2.0
+- Serial port access for the Skydimo LED strip.
 
-## Odniesienia użyte przy pisaniu kodu
+## Audiowide (interface font)
 
-- PowerMonkey (https://github.com/psyq321/PowerMonkey, Apache-2.0): układ pól
-  i numery poleceń skrzynki OC procesorów Intel (MSR 0x150).
-- ZenStates-Core (https://github.com/irusanov/ZenStates-Core, GPL-3.0): numery
-  poleceń SMU procesorów Ryzen, kodowanie maski rdzenia i adresy bezpieczników
-  z mapą rdzeni. Użyte jako odniesienie; kod nie został skopiowany.
-- ryzen_monitor (https://github.com/hattedsquirrel/ryzen_monitor) i rigstats
-  (https://github.com/dvalfrid/rigstats): położenie limitów PPT, TDC i EDC
-  w tabeli PM procesorów Ryzen 5000 i 9000.
+- File: `assets/Audiowide-Regular.ttf`, embedded in `tunecenter.exe`
+- Author: Astigmatic (Brian J. Bonislawsky)
+- License: SIL Open Font License 1.1
+
+## References used while writing the code
+
+No code was copied from these projects; they were used as documentation.
+
+- PowerMonkey (https://github.com/psyq321/PowerMonkey, Apache-2.0): field
+  layout and command numbers of the Intel OC mailbox (MSR 0x150).
+- ZenStates-Core (https://github.com/irusanov/ZenStates-Core, GPL-3.0): Ryzen
+  SMU command numbers, core mask encoding and core fuse addresses.
+- ryzen_monitor (https://github.com/hattedsquirrel/ryzen_monitor) and rigstats
+  (https://github.com/dvalfrid/rigstats): position of the PPT, TDC and EDC
+  limits in the PM table of Ryzen 5000 and 9000.
 - OpenRGB (https://gitlab.com/CalcProgrammer1/OpenRGB, GPL-2.0-or-later):
-  protokół taśm LED Skydimo (zapytanie "Moni-A", tabela modeli i liczby diod,
-  ramka Adalight, podtrzymanie). Użyte jako odniesienie; kod nie został
-  skopiowany. Port szeregowy: crate serialport (MPL-2.0).
-- LibreHardwareMonitor (MPL-2.0): układ struktur NVAPI do odczytu i
-  sterowania wentylatorami karty (ClientFanCoolers) oraz czujnika hotspot.
+  Skydimo LED strip protocol ("Moni-A" query, model table, Adalight frame,
+  keep-alive).
+- LibreHardwareMonitor (MPL-2.0): NVAPI structure layouts for reading and
+  controlling graphics card fans (ClientFanCoolers) and the hotspot sensor.
 - AMD Display Library SDK (https://github.com/GPUOpen-LibrariesAndSDKs/display-library):
-  struktury i wywołania Overdrive 8 dla kart Radeon.
-- NVIDIA NVAPI SDK (https://github.com/NVIDIA/nvapi, MIT): identyfikatory
-  funkcji, struktury i wartości ustawień sterownika (`nvapi.h`,
-  `nvapi_interface.h`, `NvApiDriverSettings.h`) oraz przykłady
-  DisplayConfiguration, DisplayColorControl i CustomTiming - podstawa
-  zakładki NVIDIA. Kod SDK nie jest dołączany; program woła sterownik przez
-  `nvapi64.dll`.
+  Overdrive 8 structures and calls for Radeon cards.
+- NVIDIA NVAPI SDK (https://github.com/NVIDIA/nvapi, MIT): function IDs,
+  structures and driver setting values (`nvapi.h`, `nvapi_interface.h`,
+  `NvApiDriverSettings.h`) and the DisplayConfiguration, DisplayColorControl
+  and CustomTiming samples – the basis of the NVIDIA tab. The SDK code is not
+  bundled; the program calls the driver through `nvapi64.dll`.
