@@ -428,6 +428,11 @@ struct Backup {
 }
 
 fn backup_path() -> Option<std::path::PathBuf> {
+    // TC_TUNE_BACKUP: inny plik kopii (np. zmiany zrobione testem dla
+    // zainstalowanego programu).
+    if let Ok(p) = std::env::var("TC_TUNE_BACKUP") {
+        return Some(p.into());
+    }
     Some(
         std::env::current_exe()
             .ok()?
@@ -570,6 +575,20 @@ fn reg_state(t: &RegTweak, path: &str) -> State {
 
 /// Wartość ustawienia planu zasilania po ludzku.
 fn power_text(key: &str, v: u32) -> String {
+    if key.starts_with("cpu_parking") {
+        return if v >= 100 {
+            crate::i18n::tr(
+                "100% rdzeni zawsze aktywnych - bez parkowania",
+                "100% of cores always active - no parking",
+            )
+            .to_owned()
+        } else {
+            crate::trf!(
+                "co najmniej {v}% rdzeni aktywnych - reszta może być parkowana",
+                "at least {v}% of cores active - the rest may be parked"
+            )
+        };
+    }
     let meaning = match (key, v) {
         (_, 0) => crate::i18n::tr("wyłączone", "off"),
         ("pcie_aspm", 1) => crate::i18n::tr("umiarkowane oszczędzanie", "moderate power savings"),
@@ -822,20 +841,256 @@ fn vmp_enabled() -> Result<Option<bool>, String> {
     Ok(state.map(|s| s.starts_with("enable")))
 }
 
+// ---- sterownik NVIDIA (profil globalny DRS, publiczne NVAPI)
+
+/// Pozycja sterownika: klucz, pary (ustawienie, wartość zalecana); pierwsza
+/// para decyduje o stanie. `0` w wartości FPS = wyliczana z odświeżania.
+#[cfg(windows)]
+const NV_TWEAKS: &[(&str, &[(u32, u32)])] = &[
+    // V-Sync: włączona (VSYNCMODE = FORCEON, bez adaptacyjnej - TEAR_DISABLE).
+    (
+        "nv_vsync",
+        &[(0x00A8_79CF, 0x4781_4940), (0x005A_375C, 0x9686_1077)],
+    ),
+    // Limit klatek (FRL_FPS) poniżej odświeżania monitora.
+    ("nv_fps_cap", &[(0x1083_5002, 0)]),
+    // Low Latency Mode "On" = maks. 1 klatka przygotowana (PRERENDERLIMIT).
+    ("nv_low_latency", &[(0x007B_A09E, 1)]),
+    // Tryb zarządzania energią: maksymalna wydajność (PREFERRED_PSTATE).
+    ("nv_power", &[(0x1057_EB71, 1)]),
+];
+
+/// Odświeżanie głównego monitora (Hz).
+#[cfg(windows)]
+fn refresh_hz() -> Option<u32> {
+    #[link(name = "user32")]
+    extern "system" {
+        fn EnumDisplaySettingsW(device: *const u16, mode: u32, devmode: *mut u8) -> i32;
+    }
+    // DEVMODEW: 220 B, dmSize na 68, dmDisplayFrequency na 184.
+    let mut dm = [0u8; 220];
+    dm[68..70].copy_from_slice(&220u16.to_le_bytes());
+    let ok = unsafe { EnumDisplaySettingsW(std::ptr::null(), 0xFFFF_FFFF, dm.as_mut_ptr()) };
+    let hz = u32::from_le_bytes(dm[184..188].try_into().ok()?);
+    (ok != 0 && hz > 1).then_some(hz)
+}
+
+/// Limit FPS dla G-SYNC: ok. 3,5% poniżej odświeżania (co najmniej 3 FPS),
+/// żeby liczba klatek nie dobijała do odświeżania (wtedy G-SYNC przestaje działać).
+pub fn fps_cap(hz: u32) -> u32 {
+    (hz * 965 / 1000).min(hz.saturating_sub(3))
+}
+
+#[cfg(windows)]
+fn nv_pairs(key: &str) -> Option<Vec<(u32, u32)>> {
+    let (_, pairs) = NV_TWEAKS.iter().find(|(k, _)| *k == key)?;
+    Some(
+        pairs
+            .iter()
+            .map(|&(id, v)| {
+                if key == "nv_fps_cap" {
+                    (id, refresh_hz().map(fps_cap).unwrap_or(0))
+                } else {
+                    (id, v)
+                }
+            })
+            .collect(),
+    )
+}
+
+#[cfg(windows)]
+fn nv_drs() -> Result<crate::nvcp::drs::Drs, String> {
+    let api = crate::nvcp::api::Api::load()?;
+    crate::nvcp::drs::Drs::open(Arc::new(api))
+}
+
+/// Opis wartości ustawienia sterownika.
+fn nv_text(key: &str, v: Option<u32>) -> String {
+    let Some(v) = v else {
+        return text("domyślne sterownika", "driver default");
+    };
+    match (key, v) {
+        ("nv_vsync", 0x4781_4940) => text("włączona", "on"),
+        ("nv_vsync", 0x0841_6747) => text("wyłączona", "off"),
+        ("nv_vsync", 0x6092_5292) => text("ustawienie aplikacji", "application setting"),
+        ("nv_vsync", _) => text("adaptacyjna / szybka", "adaptive / fast"),
+        ("nv_fps_cap", 0) => text("wyłączony", "off"),
+        ("nv_fps_cap", v) => format!("{v} FPS"),
+        ("nv_low_latency", 0) => text("ustawienie aplikacji (Off)", "application setting (Off)"),
+        ("nv_low_latency", 1) => text("On - 1 klatka", "On - 1 frame"),
+        ("nv_low_latency", v) => crate::trf!("{v} klatki", "{v} frames"),
+        ("nv_power", 0) => text("normalny (adaptacyjny)", "normal (adaptive)"),
+        ("nv_power", 1) => text("maksymalna wydajność", "prefer maximum performance"),
+        ("nv_power", 3) => text("stała wydajność", "prefer consistent performance"),
+        ("nv_power", 5) => text("optymalne zużycie energii", "optimal power"),
+        (_, v) => format!("0x{v:X}"),
+    }
+}
+
+#[cfg(windows)]
+fn nvidia_items() -> Vec<Item> {
+    let drs = match nv_drs() {
+        Ok(d) => d,
+        Err(_) => return Vec::new(), // bez karty / sterownika NVIDIA pozycji nie pokazujemy
+    };
+    let hz = refresh_hz();
+    let mut out = Vec::new();
+    for (key, _) in NV_TWEAKS {
+        let pairs = nv_pairs(key).unwrap_or_default();
+        let Some(&(id, want)) = pairs.first() else {
+            continue;
+        };
+        let current = drs
+            .read_any(&crate::nvcp::drs::Target::Global, id)
+            .ok()
+            .flatten()
+            .and_then(|r| r.value)
+            // Brak wpisu w profilu globalnym = wartość domyślna sterownika.
+            .or_else(|| drs.defaults(id).map(|(d, _)| d));
+        let shown = nv_text(key, current);
+        let state = if *key == "nv_fps_cap" && want == 0 {
+            State::Unsupported(text(
+                "nie udało się odczytać odświeżania monitora",
+                "could not read the monitor refresh rate",
+            ))
+        } else if current == Some(want) {
+            State::Optimized(shown)
+        } else {
+            State::Default(shown)
+        };
+        let (name, desc, group) = match *key {
+            "nv_vsync" => (
+                text("NVIDIA: V-Sync włączona (z G-SYNC)", "NVIDIA: V-Sync on (with G-SYNC)"),
+                crate::i18n::tr(
+                    "Z G-SYNC / FreeSync: V-Sync w sterowniku włączona, w grze wyłączona - bez rwania obrazu przy skokach FPS (zalecenie Blur Busters / NVIDIA). Profil globalny.",
+                    "With G-SYNC / FreeSync: V-Sync on in the driver and off in the game - no tearing on FPS spikes (Blur Busters / NVIDIA recommendation). Global profile.",
+                ),
+                Group::Proven,
+            ),
+            "nv_fps_cap" => (
+                crate::trf!(
+                    "NVIDIA: limit klatek {} FPS (odświeżanie {} Hz)",
+                    "NVIDIA: frame cap {} FPS ({} Hz refresh)",
+                    want,
+                    hz.unwrap_or(0)
+                ),
+                crate::i18n::tr(
+                    "Limit nieco poniżej odświeżania trzyma FPS w zakresie G-SYNC - bez kolejki klatek V-Sync i jej opóźnienia. Gry z Reflex ustawiają podobny limit same.",
+                    "A cap slightly below the refresh rate keeps FPS inside the G-SYNC range - no V-Sync frame queue and its latency. Games with Reflex set a similar cap themselves.",
+                ),
+                Group::Proven,
+            ),
+            "nv_low_latency" => (
+                text("NVIDIA: Low Latency Mode On", "NVIDIA: Low Latency Mode On"),
+                crate::i18n::tr(
+                    "Procesor przygotowuje najwyżej 1 klatkę naprzód - mniejsze opóźnienie wejścia w grach bez Reflex (w grach z Reflex włącz Reflex).",
+                    "The CPU prepares at most 1 frame ahead - lower input latency in games without Reflex (in games with Reflex, turn Reflex on).",
+                ),
+                Group::Proven,
+            ),
+            _ => (
+                text("NVIDIA: tryb energii - maksymalna wydajność", "NVIDIA: power mode - prefer maximum performance"),
+                crate::i18n::tr(
+                    "Karta trzyma wysokie zegary - bez krótkich spadków przy zmianie stanu P. Kosztem jest wyższy pobór na pulpicie (profil globalny).",
+                    "The card keeps high clocks - no short dips on P-state changes. The cost is higher power draw on the desktop (global profile).",
+                ),
+                Group::Test,
+            ),
+        };
+        out.push(Item {
+            key: (*key).into(),
+            name,
+            desc,
+            group,
+            restart: false,
+            state,
+            warning: (*key == "nv_power").then(|| {
+                text(
+                    "Wyższy pobór mocy karty w spoczynku.",
+                    "Higher idle power draw of the card.",
+                )
+            }),
+        });
+    }
+    out
+}
+
+#[cfg(windows)]
+fn nv_set(key: &str, on: bool) -> Result<(), String> {
+    use crate::nvcp::drs::Target;
+    let pairs = nv_pairs(key).ok_or("?")?;
+    let mut drs = nv_drs()?;
+    if on {
+        if pairs.iter().any(|&(_, v)| v == 0) && key == "nv_fps_cap" {
+            return Err(text(
+                "nie udało się odczytać odświeżania monitora",
+                "could not read the monitor refresh rate",
+            ));
+        }
+        let current: Vec<(u32, Option<u32>)> = pairs
+            .iter()
+            .map(|&(id, _)| {
+                (
+                    id,
+                    drs.read_any(&Target::Global, id)
+                        .ok()
+                        .flatten()
+                        .and_then(|r| r.value),
+                )
+            })
+            .collect();
+        remember(key, serde_json::to_value(&current).unwrap_or_default());
+        // set_many zapisuje kopię bazy DRS przed pierwszą zmianą i sprawdza odczytem.
+        drs.set_many(&Target::Global, &pairs)
+    } else {
+        let orig: Vec<(u32, Option<u32>)> = original(key)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_else(|| pairs.iter().map(|&(id, _)| (id, None)).collect());
+        for (id, value) in orig {
+            match value {
+                Some(v) => drs.set_many(&Target::Global, &[(id, v)])?,
+                None => drs.restore(&Target::Global, &[id])?,
+            }
+        }
+        forget(key);
+        Ok(())
+    }
+}
+
 // ---- plan zasilania
 
 #[cfg(windows)]
-const POWER_TWEAKS: &[(&str, &str, &str)] = &[
-    // (klucz, podgrupa, ustawienie); wartość zalecana 0 = wyłączone
+const POWER_TWEAKS: &[(&str, &str, &str, u32, u32)] = &[
+    // (klucz, podgrupa, ustawienie, wartość zalecana, domyślna Windows gdy brak kopii)
     (
         "usb_suspend",
         "2a737441-1930-4402-8d77-b2bebba308a3",
         "48e6b7a6-50f5-4782-a5d4-53bb8f07e226",
+        0,
+        1,
     ),
     (
         "pcie_aspm",
         "501a4d13-42af-4429-9fd1-a8139f2c5c96",
         "ee12f906-d277-404b-b6da-e5fa1a576df5",
+        0,
+        1,
+    ),
+    // Parkowanie rdzeni: minimalny % rdzeni bez parkowania (100 = bez parkowania).
+    // CPMINCORES - rdzenie wydajne (P), CPMINCORES1 - drugi typ (rdzenie E).
+    (
+        "cpu_parking_p",
+        "54533251-82be-4824-96c1-47b60b740d00",
+        "0cc5b647-c1df-4637-891a-dec35c318583",
+        100,
+        10,
+    ),
+    (
+        "cpu_parking_e",
+        "54533251-82be-4824-96c1-47b60b740d00",
+        "0cc5b647-c1df-4637-891a-dec35c318584",
+        100,
+        0,
     ),
 ];
 
@@ -948,26 +1203,39 @@ fn read_all(cpu_x3d: bool) -> Vec<Item> {
             warning: None,
         });
     }
-    for (key, sub, setting) in POWER_TWEAKS {
-        let (name, desc) = if *key == "usb_suspend" {
-            (
+    for (key, sub, setting, optimized, _) in POWER_TWEAKS {
+        let (name, desc) = match *key {
+            "usb_suspend" => (
                 text("Zasilanie: USB Selective Suspend wyłączone", "Power: USB Selective Suspend off"),
                 crate::i18n::tr(
                     "Porty USB nie usypiają urządzeń (mysz, klawiatura, interfejs audio) - bez opóźnień przy wybudzaniu. Dotyczy aktywnego planu zasilania (zasilanie sieciowe).",
                     "USB ports do not suspend devices (mouse, keyboard, audio interface) - no wake-up delays. Applies to the active power plan (AC power).",
                 ),
-            )
-        } else {
-            (
+            ),
+            "pcie_aspm" => (
                 text("Zasilanie: PCI Express Link State Power Management wyłączone", "Power: PCI Express Link State Power Management off"),
                 crate::i18n::tr(
                     "Łącza PCIe (karta graficzna, NVMe, sieć) nie przechodzą w stany oszczędzania - bez opóźnień przy powrocie do pracy. Dotyczy aktywnego planu zasilania.",
                     "PCIe links (graphics card, NVMe, network) do not enter power saving states - no delays when resuming. Applies to the active power plan.",
                 ),
-            )
+            ),
+            "cpu_parking_p" => (
+                text("Procesor: parkowanie rdzeni P wyłączone", "CPU: P-core parking off"),
+                crate::i18n::tr(
+                    "Windows nie usypia (nie parkuje) rdzeni wydajnych - przy nagłym obciążeniu nie trzeba ich wybudzać, co wygładza czasy klatek. Kilka W więcej w spoczynku. Dotyczy aktywnego planu zasilania.",
+                    "Windows does not park the performance cores - they do not have to wake up on a sudden load, which smooths frame times. A few W more at idle. Applies to the active power plan.",
+                ),
+            ),
+            _ => (
+                text("Procesor: parkowanie rdzeni E wyłączone", "CPU: E-core parking off"),
+                crate::i18n::tr(
+                    "To samo dla rdzeni energooszczędnych (procesory hybrydowe Intel 12.-14. gen.). Na procesorach bez rdzeni E ustawienie nic nie zmienia.",
+                    "The same for the efficient cores (Intel 12th-14th gen hybrid CPUs). On CPUs without E-cores the setting changes nothing.",
+                ),
+            ),
         };
         let state = match power::read_ac(&power::Guid::parse(sub), &power::Guid::parse(setting)) {
-            Some(0) => State::Optimized(power_text(key, 0)),
+            Some(v) if v == *optimized => State::Optimized(power_text(key, v)),
             Some(v) => State::Default(power_text(key, v)),
             // Część planów (np. po zmianach producenta płyty) nie ma tego ustawienia.
             None => State::Unsupported(text(
@@ -1019,6 +1287,7 @@ fn read_all(cpu_x3d: bool) -> Vec<Item> {
         state: reg_state(t, t.path),
         warning: None,
     });
+    items.extend(nvidia_items());
 
     // --- grupa B
     for d in devices::list() {
@@ -1131,12 +1400,27 @@ fn set(key: &str, on: bool) -> Result<(), String> {
         }
         return Ok(());
     }
-    if let Some((_, sub, setting)) = POWER_TWEAKS.iter().find(|(k, _, _)| *k == key) {
+    if let Some((_, sub, setting, optimized, default)) =
+        POWER_TWEAKS.iter().find(|(k, ..)| *k == key)
+    {
         let (sub, setting) = (power::Guid::parse(sub), power::Guid::parse(setting));
         if on {
             remember(key, serde_json::json!(power::read_ac(&sub, &setting)));
-            power::write_ac(&sub, &setting, 0)?;
-            if power::read_ac(&sub, &setting) != Some(0) {
+            if let Err(e) = power::write_ac(&sub, &setting, *optimized) {
+                // Błąd 13: definicja ustawienia bez zakresu (ValueMin/ValueMax) - bywa
+                // usunięty przez programy do "optymalizacji". Uzupełniamy standardowy
+                // zakres 0-100 % i próbujemy ponownie.
+                if !(e.ends_with(": 13") && key.starts_with("cpu_parking")) {
+                    return Err(e);
+                }
+                let (_, sub_s, set_s, ..) = POWER_TWEAKS.iter().find(|(k, ..)| *k == key).unwrap();
+                let def =
+                    format!(r"SYSTEM\CurrentControlSet\Control\Power\PowerSettings\{sub_s}\{set_s}");
+                reg::set_dword(reg::HKLM, &def, "ValueMin", Some(0))?;
+                reg::set_dword(reg::HKLM, &def, "ValueMax", Some(100))?;
+                power::write_ac(&sub, &setting, *optimized)?;
+            }
+            if power::read_ac(&sub, &setting) != Some(*optimized) {
                 return Err(text(
                     "plan zasilania nie przyjął wartości",
                     "the power plan did not accept the value",
@@ -1146,11 +1430,14 @@ fn set(key: &str, on: bool) -> Result<(), String> {
             let orig: Option<u32> = original(key)
                 .and_then(|v| serde_json::from_value(v).ok())
                 .flatten();
-            // Domyślnie Windows ma oba ustawienia włączone (1 = włączone / umiarkowane).
-            power::write_ac(&sub, &setting, orig.unwrap_or(1))?;
+            // Bez kopii: wartość domyślna Windows dla tego ustawienia.
+            power::write_ac(&sub, &setting, orig.unwrap_or(*default))?;
             forget(key);
         }
         return Ok(());
+    }
+    if key.starts_with("nv_") {
+        return nv_set(key, on);
     }
     match key {
         "vmp" => {
@@ -1609,5 +1896,27 @@ mod hardware {
             "przed {before:?}, po przywróceniu {:?}",
             super::reg::get_dword(t.root, t.path, t.value)
         );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod apply {
+    /// Stosuje zalecane wartości wybranych pozycji (ZMIENIA SYSTEM):
+    /// `TC_TUNE_KEYS=a,b TC_TUNE_BACKUP=<plik> cargo test tune_apply -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn tune_apply() {
+        let keys = std::env::var("TC_TUNE_KEYS").expect("TC_TUNE_KEYS");
+        for key in keys.split(',') {
+            match super::set(key, true) {
+                Ok(()) => println!("OK   {key}"),
+                Err(e) => println!("BŁĄD {key}: {e}"),
+            }
+        }
+        for i in super::read_all(false) {
+            if keys.split(',').any(|k| k == i.key) {
+                println!("{:<45} {:?}", i.key, i.state);
+            }
+        }
     }
 }

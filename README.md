@@ -72,7 +72,7 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 - CPU and GPU power with LOW/MEDIUM/HIGH load against the power limit, session energy and cost (price per kWh in OPTIONS).
 
 ### TUNE – latency and DPC
-Windows settings recommended by Microsoft and hardware vendors (Memory Integrity, Virtual Machine Platform, NIC interrupt moderation and EEE, USB selective suspend, PCIe link power management, Ultimate Performance plan, Game Mode) plus settings to test on your own hardware (MSI interrupt mode per device, global timer resolution, Win32PrioritySeparation, SystemResponsiveness). The original values are backed up before the first change.
+Windows and driver settings recommended by Microsoft, NVIDIA and hardware vendors (Memory Integrity, Virtual Machine Platform, NIC interrupt moderation and EEE, USB selective suspend, PCIe link power management, CPU core parking off, Ultimate Performance plan, Game Mode, NVIDIA V-Sync + frame cap below the refresh rate for G-SYNC, Low Latency Mode) plus settings to test on your own hardware (NVIDIA maximum performance power mode, MSI interrupt mode per device, global timer resolution, Win32PrioritySeparation, SystemResponsiveness). Every option shows its current value; the original values are backed up before the first change.
 
 ### OPTIONS
 Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), light theme, GPU fans through the driver, update checks, turn off RAM RGB (G.Skill Trident Z RGB / ENE), Skydimo LED strip color and brightness, energy price.

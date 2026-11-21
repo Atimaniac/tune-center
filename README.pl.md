@@ -484,8 +484,13 @@ Sprawdzone (Microsoft, producenci sprzętu):
 - Plan zasilania: USB Selective Suspend i PCI Express Link State Power
   Management wyłączone; plan Ultimate Performance (nie dla Ryzen X3D).
 - Tryb gry Windows.
+- Procesor: parkowanie rdzeni P i E wyłączone (bez wybudzania rdzeni przy
+  nagłym obciążeniu; brakujący zakres ustawienia w rejestrze jest uzupełniany).
+- NVIDIA (profil globalny): V-Sync włączona i limit klatek nieco poniżej
+  odświeżania (dla G-SYNC), Low Latency Mode On.
 
 Do przetestowania na własnym sprzęcie (porównaj LatencyMon przed i po):
+- NVIDIA: tryb energii „maksymalna wydajność” (wyższy pobór w spoczynku).
 - Tryb MSI przerwań dla karty graficznej, sieci, audio i USB.
 - Globalna rozdzielczość timera (`GlobalTimerResolutionRequests`).
 - `Win32PrioritySeparation` = 0x26, `SystemResponsiveness` = 10.
