@@ -31,6 +31,7 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 - 🌀 **Fans** – motherboard and GPU fans: auto, fixed or temperature curve, with profiles that switch automatically while a game runs.
 - 🌡️ **Sensors & power** – key temperatures and CPU/GPU power with 2-minute charts, session energy and its cost.
 - 🛠️ **TUNE** – Windows latency and DPC settings with a backup of the original values and one-click restore.
+- ⏱️ **BENCH** – CPU-Z-style single-thread and multi-thread score with result history, plus a stress test that verifies every calculation (catches unstable undervolts) and stops at a temperature limit.
 - 💡 **Lighting** – turn off RAM RGB, drive a Skydimo LED strip.
 - 🔄 **Auto-update** – checks GitHub every 15 minutes and updates silently with one click; also notifies you about new NVIDIA Game Ready drivers and installs just the driver with one click.
 
@@ -77,8 +78,11 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 ### TUNE – latency and DPC
 Windows and driver settings recommended by Microsoft, NVIDIA and hardware vendors (Memory Integrity, Virtual Machine Platform, NIC interrupt moderation and EEE, USB selective suspend, PCIe link power management, CPU core parking off, Ultimate Performance plan, Game Mode, NVIDIA V-Sync + frame cap below the refresh rate for G-SYNC, Low Latency Mode) plus settings to test on your own hardware (NVIDIA maximum performance power mode, MSI interrupt mode per device, global timer resolution, Win32PrioritySeparation, SystemResponsiveness). Every option shows its current value; the original values are backed up before the first change.
 
-### OPTIONS
-Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), light theme, GPU fans through the driver, update checks, turn off RAM RGB (G.Skill Trident Z RGB / ENE), Skydimo LED strip color and brightness, energy price.
+### BENCH
+Single-thread and multi-thread CPU score (10 s each, own scale for before/after comparisons on the same PC) with a history of the last 10 results. Stress test on all threads (AVX2 + FMA when available) for 5–60 minutes or until stopped: live CPU temperature and power charts, automatic stop at 85/90/95 °C, and a count of calculation errors – any error means the CPU settings are unstable.
+
+### OPTIONS and ABOUT
+Both open from the buttons next to *Check for updates* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), light theme, GPU fans through the driver, update checks, turn off RAM RGB (G.Skill Trident Z RGB / ENE), Skydimo LED strip color and brightness, energy price.
 
 ## Installation
 

@@ -8,6 +8,8 @@
 
 mod amd_tab;
 mod autostart;
+mod bench;
+mod bench_tab;
 mod bridge;
 mod config;
 mod cpu;
@@ -67,20 +69,20 @@ enum Tab {
     Sensors,
     Power,
     Tune,
+    Bench,
     Options,
     About,
 }
 
 /// Zakładki w kolejności przycisków w nagłówku.
-const TABS: [(Tab, &str, Icon); 8] = [
+const TABS: [(Tab, &str, Icon); 7] = [
     (Tab::Nvidia, "NVIDIA", Icon::Gpu),
     (Tab::Cpu, "CPU", Icon::Cpu),
     (Tab::Fans, "FAN", Icon::Fan),
     (Tab::Sensors, "SENSORS", Icon::Sensors),
     (Tab::Power, "POWER", Icon::Power),
     (Tab::Tune, "TUNE", Icon::Gauge),
-    (Tab::Options, "OPTIONS", Icon::Options),
-    (Tab::About, "ABOUT", Icon::About),
+    (Tab::Bench, "BENCH", Icon::Bench),
 ];
 
 /// Pochylenie boków przycisku zakładki (piksele).
@@ -89,14 +91,20 @@ const TAB_SKEW: f32 = 10.0;
 /// Przycisk zakładki: równoległobok z ikoną i napisem. Nieaktywny ma ciemne
 /// tło i ciemnoniebieską obwódkę, aktywny świeci jasnym błękitem i ma
 /// poświatę pod spodem.
-fn tab_button(ui: &mut egui::Ui, label: &str, icon: Icon, selected: bool) -> egui::Response {
+fn tab_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    icon: Icon,
+    selected: bool,
+    height: f32,
+) -> egui::Response {
     let font = theme::tab_font(12.5);
     let text_width = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
         .size()
         .x;
-    let size = egui::vec2(text_width + 22.0 + 2.0 * TAB_SKEW + 2.0, 38.0);
+    let size = egui::vec2(text_width + 22.0 + 2.0 * TAB_SKEW + 2.0, height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -219,6 +227,10 @@ struct App {
     skydimo: skydimo::Control,
     /// Zakładka TUNE (opóźnienia i DPC).
     tune: tune::Tune,
+    /// Zakładka BENCH (test wydajności i stress test).
+    bench: bench_tab::BenchTab,
+    /// Temperatura procesora z kafelków SENSORS (co sekundę).
+    cpu_temp: Option<f32>,
     /// Temperatury dysków odczytywane przez API Windows.
     disks: disks::Disks,
     /// Licznik energii zakładki POWER.
@@ -358,6 +370,8 @@ impl App {
                     ctx.request_repaint()
                 })
             },
+            bench: bench_tab::BenchTab::new(),
+            cpu_temp: None,
             meter,
             gpu_power,
             meter_tick: Instant::now(),
@@ -393,6 +407,7 @@ impl App {
                 "sensors" => Tab::Sensors,
                 "power" => Tab::Power,
                 "tune" => Tab::Tune,
+                "bench" => Tab::Bench,
                 "options" => Tab::Options,
                 "about" => Tab::About,
                 _ => Tab::Nvidia,
@@ -1042,6 +1057,15 @@ impl eframe::App for App {
                 .map(|t| (sensors::tile_key(t), t.value))
                 .collect();
             self.sensor_hist.record(&values, now);
+            // BENCH: temperatura i moc procesora (limit i wykres stress testu).
+            self.cpu_temp = key.iter().find(|t| t.title == "Procesor").map(|t| t.value);
+            let cpu_w = self.meter.lock().ok().and_then(|m| {
+                m.rows()
+                    .iter()
+                    .find(|r| r.title == "Procesor")
+                    .map(|r| r.watts)
+            });
+            self.bench.observe(self.cpu_temp, cpu_w);
             if let Ok(m) = self.meter.lock() {
                 let mut values: Vec<(String, f32)> = m
                     .rows()
@@ -1111,7 +1135,7 @@ impl eframe::App for App {
                     ui.add_space(10.0);
                     let tabs_x = ui.cursor().left();
                     for (tab, label, icon) in TABS {
-                        if tab_button(ui, label, icon, self.tab == tab).clicked() {
+                        if tab_button(ui, label, icon, self.tab == tab, 38.0).clicked() {
                             self.tab = tab;
                         }
                     }
@@ -1216,6 +1240,16 @@ impl eframe::App for App {
 
                     // Prawy dolny róg: przycisk i wynik sprawdzania aktualizacji.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Od prawej: ABOUT, OPTIONS, potem "Sprawdź aktualizację"
+                        // (czytane od lewej: aktualizacja, OPTIONS, ABOUT).
+                        for (tab, label, icon) in [
+                            (Tab::About, "ABOUT", Icon::About),
+                            (Tab::Options, "OPTIONS", Icon::Options),
+                        ] {
+                            if tab_button(ui, label, icon, self.tab == tab, 34.0).clicked() {
+                                self.tab = tab;
+                            }
+                        }
                         let state = self.updates.state();
                         let checking = matches!(
                             state,
@@ -1402,6 +1436,14 @@ impl eframe::App for App {
                     &self.sensor_hist,
                 ),
                 Tab::Tune => self.tune.ui(ui, self.elevated),
+                Tab::Bench => {
+                    if self
+                        .bench
+                        .ui(ui, &mut self.fans.config.bench_history, self.cpu_temp)
+                    {
+                        self.fans.config.save();
+                    }
+                }
                 Tab::Power => power_tab::ui(
                     ui,
                     &self.meter,

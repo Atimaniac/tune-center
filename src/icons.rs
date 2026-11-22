@@ -22,6 +22,7 @@ pub enum Icon {
     Swap,
     Gauge,
     Chip,
+    Bench,
 }
 
 /// Rysuje ikonę wpisaną w kwadrat `rect`.
@@ -166,6 +167,15 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             painter.line(vec![p(0.18, -0.3), p(0.36, -0.14), p(0.18, 0.02)], stroke);
             painter.line_segment([p(0.36, 0.16), p(-0.36, 0.16)], stroke);
             painter.line(vec![p(-0.18, 0.0), p(-0.36, 0.16), p(-0.18, 0.32)], stroke);
+        }
+        Icon::Bench => {
+            // Stoper: tarcza, wskazówka, przycisk u góry.
+            painter.circle_stroke(p(0.0, 0.1), s * 0.34, stroke);
+            painter.line_segment([p(0.0, 0.1), p(0.14, -0.06)], stroke);
+            painter.circle_filled(p(0.0, 0.1), w, color);
+            painter.line_segment([p(0.0, -0.24), p(0.0, -0.36)], stroke);
+            painter.line_segment([p(-0.1, -0.38), p(0.1, -0.38)], stroke);
+            painter.line_segment([p(0.26, -0.18), p(0.33, -0.25)], stroke);
         }
         Icon::Gauge => {
             arc(painter, p(0.0, 0.12), s * 0.4, PI, TAU, stroke);

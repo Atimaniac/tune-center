@@ -526,6 +526,22 @@ Celowo pominięte: `bcdedit useplatformclock/disabledynamictick` (sprzeczne
 wyniki, problemy z myszą) i `NetworkThrottlingIndex` (więcej przerwań).
 Większość pozycji wymaga uprawnień administratora.
 
+## BENCH - test wydajności i stress test
+
+- **Wydajność procesora** (w stylu CPU-Z): po 10 s na jednym wątku (rdzenie
+  P - Windows wybiera najszybszy) i na wszystkich wątkach. Skala jest własna,
+  wyniki nie są porównywalne z CPU-Z - służą do porównań na tym samym
+  komputerze, np. przed i po undervoltingu. Historia 10 ostatnich wyników.
+- **Stress test**: pełne obciążenie wszystkich wątków (AVX2 + FMA, gdy
+  procesor je ma) przez 5-60 min albo do zatrzymania, wykresy temperatury i
+  mocy procesora, automatyczne zatrzymanie przy 85/90/95 °C. Każdy wynik
+  obliczeń jest sprawdzany - błąd oznacza niestabilne ustawienia procesora.
+  Limit temperatury wymaga odczytu temperatury procesora (proces czujników,
+  administrator).
+
+OPTIONS i ABOUT otwierają się przyciskami w prawym dolnym rogu, obok
+„Sprawdź aktualizację”.
+
 ## Minimalizowanie do zasobnika
 
 Domyślnie przycisk minimalizacji chowa okno do zasobnika systemowego (ikona

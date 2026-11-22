@@ -97,14 +97,14 @@ fn limit_names(v: u64) -> Vec<&'static str> {
 
 /// Rdzeń fizyczny: maska pierwszego procesora logicznego i klasa wydajności.
 #[derive(Clone, Copy, Debug)]
-struct Topo {
-    mask: usize,
-    class: u8,
+pub(crate) struct Topo {
+    pub mask: usize,
+    pub class: u8,
 }
 
 /// Rdzenie fizyczne z Windows (GetLogicalProcessorInformationEx, grupa 0).
 #[cfg(windows)]
-fn topology() -> Vec<Topo> {
+pub(crate) fn topology() -> Vec<Topo> {
     use windows::Win32::System::SystemInformation::{
         GetLogicalProcessorInformationEx, RelationProcessorCore,
     };
@@ -146,7 +146,7 @@ fn topology() -> Vec<Topo> {
 }
 
 #[cfg(not(windows))]
-fn topology() -> Vec<Topo> {
+pub(crate) fn topology() -> Vec<Topo> {
     Vec::new()
 }
 

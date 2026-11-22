@@ -94,6 +94,9 @@ pub struct Config {
     pub skydimo_color: [u8; 3],
     #[serde(default = "full")]
     pub skydimo_brightness: u8,
+    /// Historia wyników zakładki BENCH (najnowszy pierwszy).
+    #[serde(default)]
+    pub bench_history: Vec<crate::bench::Record>,
     /// Cena energii za kWh do kosztu sesji w zakładce POWER (0 = nie pokazuj).
     #[serde(default = "default_price")]
     pub energy_price: f32,
@@ -146,6 +149,7 @@ impl Default for Config {
             skydimo_on: false,
             skydimo_color: white(),
             skydimo_brightness: full(),
+            bench_history: Vec::new(),
             energy_price: default_price(),
             energy_currency: default_currency(),
             active: String::new(),
