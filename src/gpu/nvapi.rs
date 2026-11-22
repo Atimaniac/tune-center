@@ -305,6 +305,8 @@ pub struct NvApi {
     fan_set_control: Option<FnStruct<FanCoolerControl>>,
     /// Oficjalna biblioteka monitorowania Nvidii: pobór mocy i wentylator.
     nvml: Option<super::nvml::Nvml>,
+    /// Szczegółowe odczyty (PCIe TX/RX z NVML, topologia mocy) - patrz `set_detail`.
+    detail: bool,
     get_clocks: Option<FnStruct<ClockFreqs>>,
     get_usages: Option<FnStruct<Usages>>,
     get_voltage: Option<FnStruct<VoltageStatus>>,
@@ -447,6 +449,7 @@ impl NvApi {
                 fan_get_control: q(query, ID_FAN_COOLERS_GET_CONTROL),
                 fan_set_control: q(query, ID_FAN_COOLERS_SET_CONTROL),
                 nvml: super::nvml::Nvml::load(),
+                detail: true,
                 get_clocks: q(query, ID_GET_ALL_CLOCK_FREQUENCIES),
                 get_usages: q(query, ID_GET_DYNAMIC_PSTATES_INFO_EX),
                 get_voltage: q(query, ID_GET_CURRENT_VOLTAGE),
@@ -546,6 +549,20 @@ impl Backend for NvApi {
         self.names.clone()
     }
 
+    fn set_detail(&mut self, on: bool) {
+        self.detail = on;
+    }
+
+    /// Tylko jeden odczyt NVAPI (GetThermalSettings) zamiast pełnego `monitor`.
+    fn temperature(&mut self, gpu: usize) -> Option<i32> {
+        let h = self.handle(gpu).ok()?;
+        let f = self.get_thermal?;
+        let mut t: Thermal = unsafe { zeroed() };
+        t.version = ver::<Thermal>(2);
+        (unsafe { f(h, THERMAL_TARGET_ALL, &mut t) } == 0 && t.count > 0)
+            .then(|| t.sensors[0].current)
+    }
+
     fn monitor(&mut self, gpu: usize) -> Monitor {
         let mut m = Monitor::default();
         let Ok(h) = self.handle(gpu) else { return m };
@@ -605,7 +622,7 @@ impl Backend for NvApi {
 
         if let Some(nvml) = &self.nvml {
             let name = self.names.get(gpu).map(String::as_str).unwrap_or("");
-            let r = nvml.read(gpu, name);
+            let r = nvml.read(gpu, name, self.detail);
             m.power_w = r.power_w;
             m.fan_pct = r.fan_pct;
             let d = &mut m.details;
@@ -630,7 +647,8 @@ impl Backend for NvApi {
 
         // Moc samego układu GPU: udział domeny GPU względem całej karty z
         // topologii mocy, przeliczony na waty poboru całej karty.
-        if let (Some(f), Some(board_w)) = (self.get_topology, m.power_w) {
+        // Topologia mocy kosztuje ok. 11 ms CPU - tylko w widoku Informacje.
+        if let (Some(f), Some(board_w), true) = (self.get_topology, m.power_w, self.detail) {
             let mut t: PowerTopology = unsafe { zeroed() };
             t.version = ver::<PowerTopology>(1);
             if unsafe { f(h, &mut t) } == 0 {
@@ -869,7 +887,7 @@ mod hardware {
             println!("czas odczytu {:?}", t.elapsed());
             if let Some(n) = &api.nvml {
                 let t = std::time::Instant::now();
-                n.read(0, "");
+                n.read(0, "", true);
                 println!("  w tym NVML {:?}", t.elapsed());
             }
             let d = &m.details;

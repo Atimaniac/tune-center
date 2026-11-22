@@ -572,7 +572,7 @@ ustawienia od nowa.
 
 Okno schowane w zasobniku nie jest rysowane i praktycznie nie obciąża
 procesora (wcześniejsze wersje z eframe 0.29 zajmowały wtedy cały rdzeń).
-Animacja wentylatorów w zakładce FAN jest ograniczona do ok. 30 klatek/s.
+Animacja wentylatorów w zakładce FAN jest ograniczona do 20 klatek/s.
 
 Windows może schować nową ikonę pod strzałką "^" przy zegarze; można ją
 stamtąd przeciągnąć na pasek.

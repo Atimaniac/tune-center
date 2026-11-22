@@ -207,7 +207,9 @@ impl Nvml {
             .then(|| f64::from_bits(v.value))
     }
 
-    pub fn read(&self, index: usize, name: &str) -> Reading {
+    /// `detail`: także przepływ PCIe TX/RX (NVML mierzy go przez ok. 20 ms na
+    /// wywołanie) - tylko gdy widok Informacje jest otwarty.
+    pub fn read(&self, index: usize, name: &str, detail: bool) -> Reading {
         let Some(dev) = self.device(index, name) else {
             return Reading::default();
         };
@@ -256,8 +258,16 @@ impl Nvml {
             mem_total_mb: memory.as_ref().map(|m| (m.total >> 20) as u32),
             mem_temp_c,
             // KB/s; licznik 0 = TX, 1 = RX.
-            pcie_tx_mbs: arg(self.pcie, 0).map(|kb| kb as f32 / 1000.0),
-            pcie_rx_mbs: arg(self.pcie, 1).map(|kb| kb as f32 / 1000.0),
+            pcie_tx_mbs: if detail {
+                arg(self.pcie, 0).map(|kb| kb as f32 / 1000.0)
+            } else {
+                None
+            },
+            pcie_rx_mbs: if detail {
+                arg(self.pcie, 1).map(|kb| kb as f32 / 1000.0)
+            } else {
+                None
+            },
             pcie_gen: value(self.pcie_gen),
             pcie_width: value(self.pcie_width),
             mem_ctrl_pct: utilization.map(|(_, mem)| mem),
@@ -345,5 +355,117 @@ mod field_probe {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod timing {
+    use super::*;
+
+    /// Czas (ściana) i CPU wątku dla każdego odczytu NVML:
+    /// `cargo test nvml_timing --release -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn nvml_timing() {
+        fn cpu() -> f64 {
+            use windows::Win32::Foundation::FILETIME;
+            use windows::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+            let (mut a, mut b, mut k, mut u) = (
+                FILETIME::default(),
+                FILETIME::default(),
+                FILETIME::default(),
+                FILETIME::default(),
+            );
+            unsafe {
+                let _ = GetThreadTimes(GetCurrentThread(), &mut a, &mut b, &mut k, &mut u);
+            }
+            let t = |f: FILETIME| {
+                ((f.dwHighDateTime as u64) << 32 | f.dwLowDateTime as u64) as f64 / 1e4
+            };
+            t(k) + t(u)
+        }
+        let n = Nvml::load().expect("NVML");
+        let dev = n
+            .device(0, "")
+            .or_else(|| n.device(0, "NVIDIA GeForce RTX 5070"))
+            .expect("karta");
+        let value = |f: Option<FnValue>| {
+            let mut v = 0u32;
+            f.map(|f| unsafe { f(dev, &mut v) })
+        };
+        let pair = |f: Option<FnPair>| {
+            let (mut a, mut b) = (0u32, 0u32);
+            f.map(|f| unsafe { f(dev, &mut a, &mut b) })
+        };
+        let arg = |f: Option<FnArg>, x: u32| {
+            let mut v = 0u32;
+            f.map(|f| unsafe { f(dev, x, &mut v) })
+        };
+        let mut run = |name: &str, g: &mut dyn FnMut()| {
+            let (t0, c0) = (std::time::Instant::now(), cpu());
+            for _ in 0..10 {
+                g();
+            }
+            println!(
+                "{name:<12} {:7.2} ms ściana  {:7.2} ms CPU (na wywołanie)",
+                t0.elapsed().as_secs_f64() * 100.0,
+                (cpu() - c0) / 10.0
+            );
+        };
+        run("power", &mut || {
+            value(n.power);
+        });
+        run("limit", &mut || {
+            value(n.default_limit);
+        });
+        run("memory", &mut || {
+            if let Some(f) = n.memory {
+                let mut m = Memory::default();
+                unsafe { f(dev, &mut m) };
+            }
+        });
+        run("mem temp", &mut || {
+            if let Some(f) = n.fields {
+                let mut v = FieldValue {
+                    field_id: FIELD_MEMORY_TEMP,
+                    ..Default::default()
+                };
+                unsafe { f(dev, 1, &mut v) };
+            }
+        });
+        run("reasons", &mut || {
+            if let Some(f) = n.reasons {
+                let mut v = 0u64;
+                unsafe { f(dev, &mut v) };
+            }
+        });
+        run("util", &mut || {
+            pair(n.utilization);
+        });
+        run("pcie tx", &mut || {
+            arg(n.pcie, 0);
+        });
+        run("pcie rx", &mut || {
+            arg(n.pcie, 1);
+        });
+        run("pcie gen", &mut || {
+            value(n.pcie_gen);
+            value(n.pcie_width);
+        });
+        run("encoder", &mut || {
+            pair(n.encoder);
+        });
+        run("decoder", &mut || {
+            pair(n.decoder);
+        });
+        run("clock", &mut || {
+            arg(n.clock, 3);
+        });
+        run("pstate", &mut || {
+            value(n.pstate);
+        });
+        run("fan", &mut || {
+            value(n.fan);
+        });
     }
 }

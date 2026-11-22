@@ -1535,7 +1535,7 @@ impl Tune {
         let (tx, rx) = channel();
         let shared = Arc::new(Mutex::new(Snapshot::default()));
         let s = shared.clone();
-        std::thread::spawn(move || worker(rx, s, cpu_x3d, repaint));
+        crate::spawn("tune", move || worker(rx, s, cpu_x3d, repaint));
         Self {
             tx,
             shared,

@@ -220,6 +220,10 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     ctx.global_style_mut(|style| {
         style.spacing.button_padding = vec2(10.0, 5.0);
         style.spacing.interact_size.y = 26.0;
+        // Stałe paski przewijania zamiast „pływających”: animacja ich pojawiania
+        // się rysowała okno ~18 razy/s, gdy kursor stał nad przewijaną listą
+        // (pomiar: NVIDIA > Ustawienia 3D 15-29% rdzenia bez ruchu myszy).
+        style.spacing.scroll = egui::style::ScrollStyle::solid();
     });
 }
 

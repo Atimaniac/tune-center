@@ -107,6 +107,14 @@ pub trait Backend {
         Vendor::Nvidia
     }
     fn monitor(&mut self, gpu: usize) -> Monitor;
+    /// Sama temperatura karty (°C) - tańsza od pełnego `monitor`, wołana co
+    /// sekundę przez sterowanie wentylatorami karty.
+    fn temperature(&mut self, gpu: usize) -> Option<i32> {
+        self.monitor(gpu).temp_c
+    }
+    /// Szczegółowe odczyty (PCIe TX/RX, moc układu GPU) - kosztowne, potrzebne
+    /// tylko w widoku NVIDIA > Overclock > Informacje.
+    fn set_detail(&mut self, _on: bool) {}
     /// Stan wentylatora karty; `None`, gdy sterownik go nie podaje.
     fn fan(&mut self, _gpu: usize) -> Option<FanStatus> {
         None
@@ -301,6 +309,17 @@ impl Backend for Multi {
         match self.route(gpu) {
             Ok((b, g)) => b.monitor(g),
             Err(_) => Monitor::default(),
+        }
+    }
+
+    fn temperature(&mut self, gpu: usize) -> Option<i32> {
+        let (b, g) = self.route(gpu).ok()?;
+        b.temperature(g)
+    }
+
+    fn set_detail(&mut self, on: bool) {
+        for b in self.parts.iter_mut() {
+            b.set_detail(on);
         }
     }
 

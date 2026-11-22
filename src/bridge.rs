@@ -303,7 +303,7 @@ fn start_child(
         if let Ok(mut b) = buf.lock() {
             b.clear();
         }
-        std::thread::spawn(move || {
+        crate::spawn("bridge-stderr", move || {
             for line in BufReader::new(err).lines().map_while(Result::ok) {
                 if let Ok(mut b) = buf.lock() {
                     if b.len() >= STDERR_LINES {
@@ -365,7 +365,7 @@ impl Backend {
         }));
 
         let thread_inner = inner.clone();
-        std::thread::spawn(move || {
+        crate::spawn("bridge", move || {
             let mut stdout = stdout;
             let mut restarts = 0u32;
             loop {

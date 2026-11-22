@@ -74,7 +74,7 @@ impl GpuFans {
 
         let thread_shared = shared.clone();
         let thread_stop = stop.clone();
-        let thread = std::thread::spawn(move || {
+        let thread = crate::spawn("gpu-fans", move || {
             run(thread_shared, thread_stop, board, ready_tx, wake);
         });
 
@@ -183,7 +183,7 @@ fn run(
         let mut card_temps = Vec::new();
         for card in &cards {
             let status = backend.fan(card.index).unwrap_or_default();
-            let temp = backend.monitor(card.index).temp_c.map(|t| t as f32);
+            let temp = backend.temperature(card.index).map(|t| t as f32);
             card_temps.push(temp);
             fans.push(Fan {
                 id: card.id.clone(),

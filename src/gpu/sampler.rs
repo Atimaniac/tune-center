@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::backend::{Backend, Demo, Monitor};
 
@@ -33,6 +33,9 @@ pub struct Sampler {
     pub samples: Arc<Mutex<Samples>>,
     gpu: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
+    /// Ostatnie wyświetlenie widoku Informacje - szczegółowe (kosztowne)
+    /// odczyty tylko, gdy był widoczny w ciągu ostatnich 3 s.
+    detail: Arc<Mutex<Option<Instant>>>,
 }
 
 impl Sampler {
@@ -41,7 +44,8 @@ impl Sampler {
         let samples = Arc::new(Mutex::new(Samples::default()));
         let gpu = Arc::new(AtomicUsize::new(0));
         let stop = Arc::new(AtomicBool::new(false));
-        let (s, g, st) = (samples.clone(), gpu.clone(), stop.clone());
+        let detail: Arc<Mutex<Option<Instant>>> = Arc::default();
+        let (s, g, st, d) = (samples.clone(), gpu.clone(), stop.clone(), detail.clone());
         std::thread::Builder::new()
             .name("gpu-sampler".into())
             .spawn(move || {
@@ -54,6 +58,11 @@ impl Sampler {
                 let mut current = usize::MAX;
                 while !st.load(Ordering::Relaxed) {
                     let index = g.load(Ordering::Relaxed);
+                    let want = d
+                        .lock()
+                        .map(|t| t.is_some_and(|t| t.elapsed() < Duration::from_secs(3)))
+                        .unwrap_or(true);
+                    backend.set_detail(want);
                     let m = backend.monitor(index);
                     {
                         let mut s = s.lock().unwrap();
@@ -71,7 +80,19 @@ impl Sampler {
                 }
             })
             .ok();
-        Self { samples, gpu, stop }
+        Self {
+            samples,
+            gpu,
+            stop,
+            detail,
+        }
+    }
+
+    /// Widok Informacje jest na ekranie - włącza szczegółowe odczyty.
+    pub fn want_detail(&self) {
+        if let Ok(mut t) = self.detail.lock() {
+            *t = Some(Instant::now());
+        }
     }
 
     pub fn set_gpu(&self, index: usize) {

@@ -698,7 +698,7 @@ impl GpuTab {
         ui.label(crate::i18n::tr("Profil:", "Profile:"));
 
         let pulse = if self.save_mode {
-            // Pulsowanie wymaga ciągłego odświeżania (~30 klatek/s wystarcza).
+            // Pulsowanie wymaga ciągłego odświeżania (20 klatek/s wystarcza).
             ui.ctx().request_repaint_after(crate::ANIMATION_FRAME);
             let t = ui.input(|i| i.time);
             0.5 + 0.5 * (t * 6.0).sin() as f32
@@ -965,6 +965,7 @@ impl GpuTab {
         ui.add_space(4.0);
         {
             let samples = self.sampler.samples.lock().unwrap();
+            self.sampler.want_detail();
             self.sensors.ui(ui, &samples, snap);
         }
         ui.ctx().request_repaint_after(Duration::from_millis(1000));
@@ -1234,5 +1235,49 @@ impl GpuTab {
                 }
                 Tab::Curve => self.tab_curve(ui),
             });
+    }
+}
+
+#[cfg(test)]
+mod monitor_timing {
+    /// Koszt pełnego odczytu karty i samej temperatury:
+    /// `cargo test gpu_monitor_timing --release -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn gpu_monitor_timing() {
+        fn cpu() -> f64 {
+            use windows::Win32::Foundation::FILETIME;
+            use windows::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+            let (mut a, mut b, mut k, mut u) = (
+                FILETIME::default(),
+                FILETIME::default(),
+                FILETIME::default(),
+                FILETIME::default(),
+            );
+            unsafe {
+                let _ = GetThreadTimes(GetCurrentThread(), &mut a, &mut b, &mut k, &mut u);
+            }
+            let t = |f: FILETIME| {
+                ((f.dwHighDateTime as u64) << 32 | f.dwLowDateTime as u64) as f64 / 1e4
+            };
+            t(k) + t(u)
+        }
+        let mut b = super::load_drivers().expect("sterownik");
+        let _ = b.monitor(0);
+        for name in ["monitor", "temperature", "fan"] {
+            let (t0, c0) = (std::time::Instant::now(), cpu());
+            for _ in 0..10 {
+                match name {
+                    "monitor" => drop(b.monitor(0)),
+                    "temperature" => drop(b.temperature(0)),
+                    _ => drop(b.fan(0)),
+                }
+            }
+            println!(
+                "{name:<12} {:7.2} ms ściana  {:7.2} ms CPU (na wywołanie)",
+                t0.elapsed().as_secs_f64() * 100.0,
+                (cpu() - c0) / 10.0
+            );
+        }
     }
 }

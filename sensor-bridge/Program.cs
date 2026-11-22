@@ -21,6 +21,8 @@ var restored = false;
 var gate = new object();
 
 Computer? computer = null;
+// Czas ostatniego odczytu każdego podzespołu (patrz Interval).
+var lastUpdate = new Dictionary<string, DateTime>();
 
 void Restore()
 {
@@ -119,9 +121,19 @@ void Emit(Computer computer, bool isAdmin)
     var speeds = new List<object>();
     var powers = new List<object>();
 
+    var now = DateTime.UtcNow;
     foreach (var hw in AllHardware(computer))
     {
-        hw.Update();
+        // Wolno zmieniające się podzespoły rzadziej (pomiar: karta w LHM
+        // 63 ms / 31 ms CPU na odczyt - Tune Center czyta ją też wprost ze
+        // sterownika co sekundę; dyski 9 ms; moduły RAM po 3 ms przez SMBus).
+        // Między odczytami czujniki zachowują ostatnią wartość.
+        var key = hw.Identifier.ToString();
+        if (!lastUpdate.TryGetValue(key, out var last) || now - last >= Interval(hw.HardwareType))
+        {
+            hw.Update();
+            lastUpdate[key] = now;
+        }
 
         foreach (var s in hw.Sensors)
         {
@@ -189,6 +201,15 @@ void Emit(Computer computer, bool isAdmin)
     stdout.WriteLine(JsonSerializer.Serialize(new { temps, fans, speeds, powers, admin = isAdmin }));
     stdout.Flush();
 }
+
+static TimeSpan Interval(HardwareType type) => type switch
+{
+    HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel => TimeSpan.FromSeconds(5),
+    HardwareType.Memory => TimeSpan.FromSeconds(5),
+    HardwareType.Storage => TimeSpan.FromSeconds(10),
+    // Procesor, płyta główna (Super I/O - wentylatory), kontrolery: co sekundę.
+    _ => TimeSpan.Zero,
+};
 
 static bool Handle(Computer computer, string line)
 {

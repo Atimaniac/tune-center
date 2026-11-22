@@ -26,7 +26,7 @@ impl Disks {
     pub fn start() -> Self {
         let list = Arc::new(Mutex::new(Vec::new()));
         let shared = list.clone();
-        std::thread::spawn(move || loop {
+        crate::spawn("disks", move || loop {
             let found = imp::read_all();
             if let Ok(mut guard) = shared.lock() {
                 *guard = found;

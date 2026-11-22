@@ -59,9 +59,9 @@ use theme::{accent, muted, warn};
 /// logo z makiety; ikona okna i zasobnika zostaje przy `icon-128.rgba`).
 const LOGO_SIZE: usize = 160;
 
-/// Odstęp między klatkami animacji (~30 klatek/s): kręcące się wentylatory,
+/// Odstęp między klatkami animacji (20 klatek/s): kręcące się wentylatory,
 /// pulsujące numery profili GPU.
-pub const ANIMATION_FRAME: Duration = Duration::from_millis(33);
+pub const ANIMATION_FRAME: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -1569,14 +1569,15 @@ impl eframe::App for App {
         self.fans
             .tick(self.bridge.as_ref().ok(), self.gpu_fans.as_ref());
 
-        // Animacja wentylatorów wymaga ciągłego odświeżania, ale ~30 klatek/s
-        // wystarcza (kąt liczony z `dt`); bez limitu okno rysowało tyle klatek,
-        // ile pozwalał monitor (ponad 200/s i cały rdzeń procesora).
-        // Pozostałym zakładkom wystarczy odświeżenie dwa razy na sekundę.
+        // Animacja wentylatorów wymaga ciągłego odświeżania, ale 20 klatek/s
+        // wystarcza (kąt liczony z `dt`; pomiar: 30 klatek/s = 11% rdzenia).
+        // Bez limitu okno rysowało tyle klatek, ile pozwalał monitor. Pozostałym
+        // zakładkom wystarczy raz na sekundę - nowe odczyty i ruch myszy i tak
+        // budzą okno.
         if self.tab == Tab::Fans {
             ctx.request_repaint_after(ANIMATION_FRAME);
         } else {
-            ctx.request_repaint_after(Duration::from_millis(500));
+            ctx.request_repaint_after(Duration::from_secs(1));
         }
     }
 
@@ -1650,4 +1651,16 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
+}
+
+/// Wątek z nazwą (widoczną w narzędziach diagnostycznych i przy pomiarach CPU).
+pub fn spawn<F, T>(name: &str, f: F) -> std::thread::JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(f)
+        .expect("nie udało się uruchomić wątku")
 }

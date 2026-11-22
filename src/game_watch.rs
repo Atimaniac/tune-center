@@ -124,7 +124,7 @@ impl Watcher {
         let rules = Arc::new(Mutex::new(rules));
         let active = Arc::new(Mutex::new(None));
         let (r, a) = (rules.clone(), active.clone());
-        std::thread::spawn(move || loop {
+        crate::spawn("game-watch", move || loop {
             let current = {
                 let rules = r.lock().map(|r| r.clone()).unwrap_or_default();
                 if rules.is_empty() {

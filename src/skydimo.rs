@@ -128,7 +128,7 @@ impl Control {
         let (tx, rx) = channel();
         let status = Arc::new(Mutex::new(Status::Off));
         let st = status.clone();
-        std::thread::spawn(move || worker(rx, initial, st, repaint));
+        crate::spawn("skydimo", move || worker(rx, initial, st, repaint));
         Self { tx, status }
     }
 
