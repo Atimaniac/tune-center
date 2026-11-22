@@ -132,7 +132,7 @@ pub(crate) fn topology() -> Vec<Topo> {
             if group == 0 && mask != 0 {
                 // Pierwszy procesor logiczny rdzenia.
                 out.push(Topo {
-                    mask: mask & mask.wrapping_neg(),
+                    mask: mask.isolate_lowest_one(),
                     class,
                 });
             }

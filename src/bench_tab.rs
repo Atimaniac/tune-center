@@ -39,6 +39,9 @@ pub struct BenchTab {
     gpu_saved: bool,
     /// Okno z wynikiem testu karty (stan z chwili zakończenia).
     popup: Option<gpu_bench::State>,
+    /// Wynik ostatniego testu jest pierwszy w historii - porównania z najlepszym
+    /// pomijają go (inaczej test porównywałby się sam ze sobą).
+    just_saved: bool,
     cpu: crate::cpu::CpuInfo,
 }
 
@@ -57,6 +60,7 @@ impl BenchTab {
             saved: true,
             gpu_saved: true,
             popup: None,
+            just_saved: false,
             cpu: crate::cpu::cpu_info(),
         }
     }
@@ -77,6 +81,7 @@ impl BenchTab {
     pub fn start_gpu(&mut self, wake: impl Fn() + Send + Sync + 'static) {
         self.gpu_saved = false;
         self.popup = None;
+        self.just_saved = false;
         self.gpu.start(wake);
     }
 
@@ -109,11 +114,18 @@ impl BenchTab {
             changed = true;
         }
         // Zakończony test karty: historia (tylko pełne 2 min) i okno z wynikiem.
-        if !self.gpu_saved && matches!(gstate.phase, gpu_bench::Phase::Done(_)) {
+        // Przy resecie sterownika (TDR) okno też się pokazuje - to wynik testu.
+        if !self.gpu_saved
+            && matches!(
+                gstate.phase,
+                gpu_bench::Phase::Done(_) | gpu_bench::Phase::Failed(_)
+            )
+        {
             self.gpu_saved = true;
             if gstate.phase == gpu_bench::Phase::Done(true) {
                 if let Some(r) = gpu_record(&gstate) {
                     h.gpu.insert(0, r);
+                    self.just_saved = true;
                     h.gpu.truncate(HISTORY);
                     changed = true;
                 }
@@ -160,7 +172,7 @@ impl BenchTab {
                 let two = full >= 980.0;
                 // Szerokość treści karty (bez marginesów i obwódki).
                 let w = if two { (full - GAP) / 2.0 } else { full } - 2.0 * PAD - 4.0;
-                let best = self.gpu_best(h.gpu);
+                let best = self.gpu_best(&h.gpu[usize::from(self.just_saved).min(h.gpu.len())..]);
                 if two {
                     ui.horizontal_top(|ui| {
                         ui.spacing_mut().item_spacing.x = GAP;
@@ -190,7 +202,8 @@ impl BenchTab {
                 }
             });
 
-        self.popup_ui(ui.ctx(), best_gpu(h.gpu));
+        let skip = usize::from(self.just_saved).min(h.gpu.len());
+        self.popup_ui(ui.ctx(), best_gpu(&h.gpu[skip..]));
         changed
     }
 
@@ -488,6 +501,7 @@ impl BenchTab {
                     if theme::primary_button(ui, Some(Icon::Gpu), tr("Start (2 min)", "Start (2 min)"), !cpu_busy).clicked() {
                         self.gpu_saved = false;
                         self.popup = None;
+                        self.just_saved = false;
                         let ctx = ui.ctx().clone();
                         self.gpu.start(move || ctx.request_repaint());
                     }
@@ -525,7 +539,9 @@ impl BenchTab {
                         ui.label(RichText::new(tr("pamięć", "memory")).color(muted()));
                     }
                 });
-                let (verdict, color) = if s.errors() == 0 {
+                let (verdict, color) = if let gpu_bench::Phase::Failed(e) = &s.phase {
+                    (crate::trf!("PRZERWANY - {e}", "ABORTED - {e}"), theme::hot())
+                } else if s.errors() == 0 {
                     (
                         tr("STABILNA - bez błędów obliczeń i pamięci", "STABLE - no calculation or memory errors").to_owned(),
                         theme::ok(),

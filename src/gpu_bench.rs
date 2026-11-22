@@ -482,6 +482,10 @@ fn run(
         let query: ID3D11Query = q.ok_or("brak zapytania")?;
 
         ctx.CSSetUnorderedAccessViews(0, 3, Some(uavs.as_ptr()), None);
+        // Licznik błędów pamięci: zawartość nowego bufora nie jest gwarantowana.
+        if let Some(v) = &uavs[2] {
+            ctx.ClearUnorderedAccessViewUint(v, &[0; 4]);
+        }
         ctx.CSSetConstantBuffers(0, Some(&[Some(cb.clone())]));
         let count = MEM_BYTES / 16;
         let set = |seed: u32, iters: u32| {
@@ -587,6 +591,21 @@ fn run(
                 .filter(|(a, b)| a != b)
                 .count() as u64;
             let mem_bad = read_u32s(&err, &err_read, 1).first().copied().unwrap_or(0) as u64;
+            // Reset sterownika (TDR) po niestabilnym podkręceniu: urządzenie
+            // przestaje działać, a odczyty są puste - to też wynik testu.
+            if let Err(e) = device.GetDeviceRemovedReason() {
+                return Err(crate::trf!(
+                    "sterownik karty zresetował się w trakcie testu ({e}) - ustawienia karty są niestabilne",
+                    "the graphics driver reset during the test ({e}) - the card settings are unstable"
+                ));
+            }
+            if result.len() != threads as usize {
+                return Err(crate::i18n::tr(
+                    "nie udało się odczytać wyników z karty",
+                    "could not read results from the card",
+                )
+                .to_owned());
+            }
             if start.elapsed() >= WARMUP {
                 alu_time += at;
                 alu_flops += threads as f64 * iters as f64 * 16.0 * 4.0 * 2.0;
@@ -603,7 +622,7 @@ fn run(
                     s.bandwidth = Some(mem_bytes / mem_time / 1e9);
                 }
             }
-            if round % 4 == 0 {
+            if round.is_multiple_of(4) {
                 wake();
             }
         };

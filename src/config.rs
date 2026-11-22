@@ -251,7 +251,17 @@ impl Config {
 
     pub fn delete_active(&mut self) {
         if self.profiles.len() > 1 {
-            self.profiles.remove(&self.active);
+            let removed = self.active.clone();
+            self.profiles.remove(&removed);
+            // Gry z usuniętym profilem wracają do profilu globalnego (gry
+            // dodane ręcznie zostają na liście, wykryte - znikają z reguł).
+            for g in &mut self.game_profiles {
+                if g.profile == removed {
+                    g.profile.clear();
+                }
+            }
+            self.game_profiles
+                .retain(|g| !g.profile.is_empty() || g.path.to_lowercase().ends_with(".exe"));
             self.repair();
         }
     }

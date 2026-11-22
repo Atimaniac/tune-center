@@ -51,7 +51,6 @@ pub const FLAG_DENY_HULL: u32 = 0x4;
 pub const FLAG_DENY_DOMAIN: u32 = 0x8;
 pub const FLAG_DENY_GEOMETRY: u32 = 0x10;
 pub const FLAG_DENY_PIXEL: u32 = 0x20;
-pub const FLAG_ALLOW_STREAM_OUTPUT: u32 = 0x40;
 pub const FLAG_RESOURCE_HEAP_INDEXED: u32 = 0x400;
 pub const FLAG_SAMPLER_HEAP_INDEXED: u32 = 0x800;
 

@@ -440,80 +440,6 @@ pub static GSYNC_ITEMS: &[Item] = &[
     },
 ];
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    #[test]
-    fn every_item_has_options_and_texts() {
-        for item in ITEMS.iter().chain(GSYNC_ITEMS).chain(SHADER_ITEMS) {
-            assert!(!item.pl.is_empty() && !item.en.is_empty());
-            assert!(!item.ids().is_empty(), "{}", item.pl);
-            if let Kind::Choice(opts) = &item.kind {
-                assert!(opts.len() >= 2, "{}", item.pl);
-                for opt in opts.iter() {
-                    assert!(!opt.writes.is_empty(), "{} / {}", item.pl, opt.pl);
-                }
-            }
-            if let Kind::Number { min, max, .. } = &item.kind {
-                assert!(min < max);
-            }
-        }
-    }
-
-    #[test]
-    fn composite_vsync_options_are_distinguished() {
-        let Kind::Choice(opts) = &ITEMS[0].kind else {
-            panic!()
-        };
-        let read = |pairs: &[(u32, u32)]| {
-            let map: HashMap<u32, u32> = pairs.iter().copied().collect();
-            current_option(opts, |id| map.get(&id).copied())
-        };
-        assert_eq!(
-            read(&[(VSYNCMODE, VSYNC_PASSIVE), (VSYNCTEARCONTROL, TEAR_DISABLE)]),
-            Some(0)
-        );
-        assert_eq!(
-            read(&[(VSYNCMODE, VSYNC_FORCEON), (VSYNCTEARCONTROL, TEAR_DISABLE)]),
-            Some(2)
-        );
-        assert_eq!(
-            read(&[(VSYNCMODE, VSYNC_FORCEON), (VSYNCTEARCONTROL, TEAR_ENABLE)]),
-            Some(3)
-        );
-        assert_eq!(read(&[(VSYNCMODE, VSYNC_VIRTUAL)]), Some(5));
-        // Nieznane połączenie nie udaje żadnej opcji.
-        assert_eq!(read(&[(VSYNCMODE, 0x1234)]), None);
-    }
-
-    #[test]
-    fn anisotropic_app_wins_over_level() {
-        let aniso = ITEMS
-            .iter()
-            .find(|i| i.en == "Anisotropic filtering")
-            .unwrap();
-        let Kind::Choice(opts) = &aniso.kind else {
-            panic!()
-        };
-        let map: HashMap<u32, u32> = [(ANISO_MODE_SELECTOR, 0), (ANISO_MODE_LEVEL, 16)].into();
-        assert_eq!(current_option(opts, |id| map.get(&id).copied()), Some(0));
-        let map: HashMap<u32, u32> = [(ANISO_MODE_SELECTOR, 1), (ANISO_MODE_LEVEL, 16)].into();
-        assert_eq!(current_option(opts, |id| map.get(&id).copied()), Some(5));
-    }
-
-    #[test]
-    fn ids_cover_all_written_settings() {
-        let vsync = &ITEMS[0];
-        assert_eq!(vsync.ids(), {
-            let mut v = vec![VSYNCMODE, VSYNCTEARCONTROL];
-            v.sort_unstable();
-            v
-        });
-    }
-}
-
 // ------------------------------ DLSS --------------------------------------
 //
 // Nadpisania DLSS takie jak w NVIDIA App. Identyfikatory i wartości z
@@ -756,3 +682,77 @@ pub const DLSS_ITEMS: &[Item] = &[
         ]),
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn every_item_has_options_and_texts() {
+        for item in ITEMS.iter().chain(GSYNC_ITEMS).chain(SHADER_ITEMS) {
+            assert!(!item.pl.is_empty() && !item.en.is_empty());
+            assert!(!item.ids().is_empty(), "{}", item.pl);
+            if let Kind::Choice(opts) = &item.kind {
+                assert!(opts.len() >= 2, "{}", item.pl);
+                for opt in opts.iter() {
+                    assert!(!opt.writes.is_empty(), "{} / {}", item.pl, opt.pl);
+                }
+            }
+            if let Kind::Number { min, max, .. } = &item.kind {
+                assert!(min < max);
+            }
+        }
+    }
+
+    #[test]
+    fn composite_vsync_options_are_distinguished() {
+        let Kind::Choice(opts) = &ITEMS[0].kind else {
+            panic!()
+        };
+        let read = |pairs: &[(u32, u32)]| {
+            let map: HashMap<u32, u32> = pairs.iter().copied().collect();
+            current_option(opts, |id| map.get(&id).copied())
+        };
+        assert_eq!(
+            read(&[(VSYNCMODE, VSYNC_PASSIVE), (VSYNCTEARCONTROL, TEAR_DISABLE)]),
+            Some(0)
+        );
+        assert_eq!(
+            read(&[(VSYNCMODE, VSYNC_FORCEON), (VSYNCTEARCONTROL, TEAR_DISABLE)]),
+            Some(2)
+        );
+        assert_eq!(
+            read(&[(VSYNCMODE, VSYNC_FORCEON), (VSYNCTEARCONTROL, TEAR_ENABLE)]),
+            Some(3)
+        );
+        assert_eq!(read(&[(VSYNCMODE, VSYNC_VIRTUAL)]), Some(5));
+        // Nieznane połączenie nie udaje żadnej opcji.
+        assert_eq!(read(&[(VSYNCMODE, 0x1234)]), None);
+    }
+
+    #[test]
+    fn anisotropic_app_wins_over_level() {
+        let aniso = ITEMS
+            .iter()
+            .find(|i| i.en == "Anisotropic filtering")
+            .unwrap();
+        let Kind::Choice(opts) = &aniso.kind else {
+            panic!()
+        };
+        let map: HashMap<u32, u32> = [(ANISO_MODE_SELECTOR, 0), (ANISO_MODE_LEVEL, 16)].into();
+        assert_eq!(current_option(opts, |id| map.get(&id).copied()), Some(0));
+        let map: HashMap<u32, u32> = [(ANISO_MODE_SELECTOR, 1), (ANISO_MODE_LEVEL, 16)].into();
+        assert_eq!(current_option(opts, |id| map.get(&id).copied()), Some(5));
+    }
+
+    #[test]
+    fn ids_cover_all_written_settings() {
+        let vsync = &ITEMS[0];
+        assert_eq!(vsync.ids(), {
+            let mut v = vec![VSYNCMODE, VSYNCTEARCONTROL];
+            v.sort_unstable();
+            v
+        });
+    }
+}

@@ -119,7 +119,7 @@ fn performance_mask() -> usize {
 }
 
 #[cfg(windows)]
-fn pin(mask: usize) {
+fn pin(mask: usize, n: usize) {
     use windows::Win32::System::Threading::{
         GetCurrentThread, SetThreadAffinityMask, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
     };
@@ -128,12 +128,16 @@ fn pin(mask: usize) {
         if mask != 0 {
             SetThreadAffinityMask(GetCurrentThread(), mask);
         }
-        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+        // Wyższy priorytet tylko dla testu jednego wątku: przy wszystkich wątkach
+        // zagłodziłby okno programu (pasek postępu stałby w miejscu).
+        if n == 1 {
+            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+        }
     }
 }
 
 #[cfg(not(windows))]
-fn pin(_mask: usize) {}
+fn pin(_mask: usize, _n: usize) {}
 
 pub fn threads() -> usize {
     std::thread::available_parallelism().map_or(1, |n| n.get())
@@ -418,7 +422,7 @@ fn measure(
         .map(|(t, c)| {
             let (c, done, stop) = (c.clone(), done.clone(), stop.clone());
             std::thread::spawn(move || {
-                pin(mask);
+                pin(mask, n);
                 let mut seed = (t as u64) << 32;
                 while !done.load(Relaxed) && !stop.load(Relaxed) {
                     unit(seed);

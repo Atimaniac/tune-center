@@ -310,9 +310,15 @@ pub fn decompress(
             Some(o) => o.decompress(src, size),
             // Bez biblioteki z gry: otwarty dekompresor (crate oozextract).
             None => {
+                // Jeden dekompresor na wątek (bufory po kilkaset KB - bez
+                // przydzielania ich dla każdego z dziesiątek tysięcy shaderów).
+                thread_local! {
+                    static OOZ: std::cell::RefCell<oozextract::Extractor> =
+                        std::cell::RefCell::new(oozextract::Extractor::new());
+                }
                 let mut out = vec![0u8; size];
-                let n = oozextract::Extractor::new()
-                    .read_from_slice(src, &mut out)
+                let n = OOZ
+                    .with(|x| x.borrow_mut().read_from_slice(src, &mut out))
                     .map_err(|e| format!("Oodle: {e:?}"))?;
                 if n != size {
                     return Err(format!("Oodle: rozpakowano {n} z {size} B"));
