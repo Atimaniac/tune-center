@@ -58,6 +58,7 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 - **3D settings** and **DLSS** – the NVIDIA Control Panel / NVIDIA App options, globally or per game, with a backup before the first change.
 - **Display, Color and HDR, G-SYNC, Custom resolutions** – resolution and refresh rate (with 15 s confirmation), color depth, HDR, VRR, custom timings.
 - **Shader compilation** – detects games from Steam, Epic, GOG, Ubisoft, EA and Xbox; pre-compiles shaders for Unity (DX11) and Dagor Engine (DX11/DX12) games; *Clean shaders* removes the game's NVIDIA and Windows (D3DSCache) shader caches.
+- **OLED fix** – one-click `vrrFrameSplitBehavior` driver tweak: with G-SYNC the driver keeps a 1× frame multiplier down to 48 FPS instead of doubling (e.g. 60 FPS → 120 Hz), which removes VRR brightness flicker on OLED monitors; re-applied automatically after a clean driver install.
 - **System** – Hardware-accelerated GPU scheduling (HAGS) toggle and Resizable BAR status.
 - **Driver updates** – checks the NVIDIA server for the latest Game Ready driver for your card (at startup and every 6 hours) and installs just the driver (with HDMI audio and PhysX, without NVIDIA App and telemetry) silently with one click.
 - AMD Radeon cards: clock limits, sensors and fans.

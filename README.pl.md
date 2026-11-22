@@ -194,6 +194,13 @@ nieudokumentowanych. Działa niezależnie od trybu `--demo`.
   HDR10 włącz/wyłącz, gdy monitor go obsługuje.
 - **G-SYNC** - tryb G-SYNC (pełny ekran / pełny ekran i okno), wskaźnik na
   ekranie, G-SYNC Compatible dla monitora i bieżący stan VRR.
+- **OLED fix** - ukryta wartość sterownika `vrrFrameSplitBehavior` w kluczu
+  karty (`HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-…}\000N`).
+  0x80010055 = najniższy mnożnik klatek przy VRR (1× aż do 48 FPS zamiast
+  podwajania np. 60 FPS → 120 Hz, które na OLED daje migotanie jasności);
+  0x80000032 = zachowanie NVIDIA, ale rzadsze przełączanie. „Wyłącz” usuwa
+  wpis. Działa po restarcie; program przywraca wpis po czystej instalacji
+  sterownika. Wymaga administratora.
 - **Rozdzielczości niestandardowe** - lista, usuwanie i dodawanie (taktowanie
   CVT z ograniczonym wygaszaniem liczy sterownik).
 

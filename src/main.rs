@@ -28,6 +28,7 @@ mod leds;
 mod logo_tool;
 mod nvcp;
 mod nvdriver;
+mod oled_fix;
 mod power;
 mod power_tab;
 mod rebar;
@@ -341,7 +342,8 @@ impl App {
             minimize: args.iter().any(|a| a == "--minimized"),
             elevated: elevation::is_elevated(),
             autostart: autostart::is_enabled(),
-            notice,
+            // OLED fix: przywrócenie wpisu usuniętego przez instalację sterownika.
+            notice: notice.or_else(oled_fix::reapply),
             tray,
             logo,
             gpu_fans,

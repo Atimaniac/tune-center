@@ -50,6 +50,8 @@ enum Page {
     Custom,
     /// Kompilacja shaderów z góry (crate::shaders).
     Shaders,
+    /// Migotanie OLED przy VRR (crate::oled_fix).
+    OledFix,
 }
 
 /// Zmiana ekranu czekająca na potwierdzenie.
@@ -108,6 +110,8 @@ pub struct NvcpTab {
     pending: Option<Pending>,
     /// Podzakładka Shader compilation.
     shaders: crate::shaders::ShaderTab,
+    /// Podzakładka OLED fix (vrrFrameSplitBehavior).
+    oled: crate::oled_fix::Panel,
 }
 
 impl NvcpTab {
@@ -121,6 +125,7 @@ impl NvcpTab {
             "gsync" => Page::Gsync,
             "custom" => Page::Custom,
             "shaders" => Page::Shaders,
+            "oled" => Page::OledFix,
             _ => Page::Overclock,
         };
     }
@@ -163,6 +168,7 @@ impl NvcpTab {
             custom_hz: 60.0,
             pending: None,
             shaders: crate::shaders::ShaderTab::new(),
+            oled: Default::default(),
         }
     }
 
@@ -227,6 +233,7 @@ impl NvcpTab {
                             tr("Rozdzielczości niestandardowe", "Custom resolutions"),
                         ),
                         (Page::Shaders, "Shader compilation"),
+                        (Page::OledFix, "OLED fix"),
                     ] {
                         if crate::theme::sub_tab(ui, label, self.page == page).clicked() {
                             self.page = page;
@@ -300,6 +307,7 @@ impl NvcpTab {
                             Page::Gsync => self.gsync_ui(ui, &api),
                             Page::Custom => self.custom_ui(ui, &api),
                             Page::Shaders => self.shaders_ui(ui, &api),
+                            Page::OledFix => self.oled.ui(ui, self.driver.as_deref()),
                         });
                 });
         }

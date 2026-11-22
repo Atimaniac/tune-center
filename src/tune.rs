@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 // ------------------------------------------------------------------ rejestr
 
 #[cfg(windows)]
-mod reg {
+pub(crate) mod reg {
     pub type Hkey = isize;
     pub const HKLM: Hkey = 0x8000_0002u32 as i32 as isize;
     pub const HKCU: Hkey = 0x8000_0001u32 as i32 as isize;
