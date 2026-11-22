@@ -1,6 +1,6 @@
 [package]
 name = "tunecenter"
-version = "0.23.0"
+version = "0.24.0"
 edition = "2021"
 description = "Tune Center: karta graficzna (Nvidia, AMD), wentylatory, czujniki i pobor mocy w jednym oknie (Windows)"
 
@@ -27,6 +27,7 @@ serialport = { version = "4", default-features = false }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D_Fxc",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Direct3D12",
     "Win32_Graphics_Dxgi",

@@ -831,6 +831,11 @@ impl GpuTab {
         })
     }
 
+    /// Bieżące odczyty wybranej karty (zegary, temperatura, moc).
+    pub fn monitor(&self) -> &backend::Monitor {
+        &self.monitor
+    }
+
     /// Najnowszy odczyt karty z wątku czujników.
     pub fn poll(&mut self) {
         if let Some(m) = self.sampler.latest() {

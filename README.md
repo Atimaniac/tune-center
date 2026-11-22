@@ -31,7 +31,7 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 - 🌀 **Fans** – motherboard and GPU fans: auto, fixed or temperature curve, with profiles that switch automatically while a game runs.
 - 🌡️ **Sensors & power** – key temperatures and CPU/GPU power with 2-minute charts, session energy and its cost.
 - 🛠️ **TUNE** – Windows latency and DPC settings with a backup of the original values and one-click restore.
-- ⏱️ **BENCH** – CPU-Z-style single-thread and multi-thread score with result history, plus a stress test that verifies every calculation (catches unstable undervolts) and stops at a temperature limit.
+- ⏱️ **BENCH** – CPU-Z-style single-thread and multi-thread score, a CPU stress test that verifies every calculation (catches unstable undervolts) and stops at a temperature limit, and a 2-minute graphics card stability test with a result window, clock/temperature/power charts and a comparable score.
 - 💡 **Lighting** – turn off RAM RGB, drive a Skydimo LED strip.
 - 🔄 **Auto-update** – checks GitHub every 15 minutes and updates silently with one click; also notifies you about new NVIDIA Game Ready drivers and installs just the driver with one click.
 
@@ -81,14 +81,16 @@ Windows and driver settings recommended by Microsoft, NVIDIA and hardware vendor
 ### BENCH
 Single-thread and multi-thread CPU score (10 s each, own scale for before/after comparisons on the same PC) with a history of the last 10 results. Stress test on all threads (AVX2 + FMA when available) for 5–60 minutes or until stopped: live CPU temperature and power charts, automatic stop at 85/90/95 °C, and a count of calculation errors – any error means the CPU settings are unstable.
 
+**Graphics card stability** – 2 minutes of full load through Direct3D 11: FP32 math on the whole GPU, a power-heavy mixed memory + math pass and write/read checks of 512 MB of video memory. Every calculation and memory read is verified, so an unstable overclock or undervolt shows up as errors. When the test ends, a window shows the score (GFLOPS FP32 and memory GB/s), STABLE / UNSTABLE, the comparison with your best result, and average/min/max with 2-minute charts of core clock, memory clock, temperature and power draw. Results are kept in the history.
+
 ### OPTIONS and ABOUT
-Both open from the buttons next to *Check for updates* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), light theme, GPU fans through the driver, update checks, turn off RAM RGB (G.Skill Trident Z RGB / ENE), Skydimo LED strip color and brightness, energy price.
+Both open from the buttons next to *UPDATE* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), light theme, GPU fans through the driver, update checks, turn off RAM RGB (G.Skill Trident Z RGB / ENE), Skydimo LED strip color and brightness, energy price.
 
 ## Installation
 
 1. Download **`TuneCenter-Setup.exe`** from the [latest release](https://github.com/Atimaniac/tune-center/releases/latest).
 2. Run it. The installer offers to install the **.NET 8 Runtime** and the **PawnIO** driver (both through winget) if they are missing.
-3. Start Tune Center. Later updates install from the app with one click (*Check for updates*, bottom right).
+3. Start Tune Center. Later updates install from the app with one click (*UPDATE*, bottom right).
 
 Running as administrator is optional – the GPU, NVIDIA settings, shader compilation, disks and GPU power work without it. CPU tuning, CPU temperature and power, motherboard fans and some TUNE items need administrator rights (a button in the status bar restarts the app elevated).
 

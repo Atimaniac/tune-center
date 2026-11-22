@@ -20,6 +20,7 @@ mod elevation;
 mod fans;
 mod game_watch;
 mod gpu;
+mod gpu_bench;
 mod gpu_fans;
 mod hags;
 mod history;
@@ -386,6 +387,12 @@ impl App {
             power_hist: history::History::default(),
         };
         app.open_from_args();
+        // Weryfikacja bez klikania: test karty od razu po starcie.
+        if std::env::args().any(|a| a == "--bench-gpu") {
+            app.tab = Tab::Bench;
+            let ctx = cc.egui_ctx.clone();
+            app.bench.start_gpu(move || ctx.request_repaint());
+        }
         app
     }
 
@@ -1065,7 +1072,16 @@ impl eframe::App for App {
                     .find(|r| r.title == "Procesor")
                     .map(|r| r.watts)
             });
-            self.bench.observe(self.cpu_temp, cpu_w);
+            let m = self.gpu.monitor();
+            let gpu = gpu_bench::Sample {
+                core_mhz: m.core_mhz,
+                mem_mhz: m.mem_mhz,
+                temp: m.details.core_precise_c.or(m.temp_c.map(|t| t as f32)),
+                watts: m.power_w,
+            };
+            let limit = m.details.limit.clone();
+            self.bench
+                .observe(self.cpu_temp, cpu_w, gpu, limit.as_deref());
             if let Ok(m) = self.meter.lock() {
                 let mut values: Vec<(String, f32)> = m
                     .rows()
@@ -1257,13 +1273,11 @@ impl eframe::App for App {
                                 | update::State::Downloading { .. }
                                 | update::State::Launched
                         );
-                        if theme::primary_button(
-                            ui,
-                            Some(Icon::Download),
-                            crate::i18n::tr("Sprawdź aktualizację", "Check for updates"),
-                            !checking,
-                        )
-                        .clicked()
+                        // UPDATE: ten sam styl co zakładki; podświetlony w trakcie sprawdzania.
+                        if tab_button(ui, "UPDATE", Icon::Download, checking, 34.0)
+                            .on_hover_text(crate::i18n::tr("Sprawdź aktualizację", "Check for updates"))
+                            .clicked()
+                            && !checking
                         {
                             self.update_asked = true;
                             let ctx = ctx.clone();
@@ -1437,10 +1451,14 @@ impl eframe::App for App {
                 ),
                 Tab::Tune => self.tune.ui(ui, self.elevated),
                 Tab::Bench => {
-                    if self
-                        .bench
-                        .ui(ui, &mut self.fans.config.bench_history, self.cpu_temp)
-                    {
+                    if self.bench.ui(
+                        ui,
+                        bench_tab::Histories {
+                            cpu: &mut self.fans.config.bench_history,
+                            gpu: &mut self.fans.config.gpu_bench_history,
+                        },
+                        self.cpu_temp,
+                    ) {
                         self.fans.config.save();
                     }
                 }

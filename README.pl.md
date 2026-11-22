@@ -538,9 +538,18 @@ Większość pozycji wymaga uprawnień administratora.
   obliczeń jest sprawdzany - błąd oznacza niestabilne ustawienia procesora.
   Limit temperatury wymaga odczytu temperatury procesora (proces czujników,
   administrator).
+- **Stabilność karty graficznej**: 2 minuty pełnego obciążenia przez
+  Direct3D 11 - obliczenia FP32 na całym rdzeniu, przebieg mieszany
+  (pamięć + obliczenia, największy pobór mocy) i zapis/odczyt 512 MB pamięci
+  karty. Każdy wynik obliczeń i każdy odczyt pamięci jest sprawdzany - błędy
+  oznaczają niestabilne podkręcenie albo undervolting. Po teście pokazuje się
+  okno z wynikiem (GFLOPS FP32 i GB/s pamięci), oceną STABILNA/NIESTABILNA,
+  porównaniem z najlepszym wynikiem oraz średnią/min./maks. i wykresami z
+  2 minut: zegar rdzenia, zegar pamięci, temperatura, pobór mocy. Wyniki
+  pełnych testów trafiają do historii.
 
 OPTIONS i ABOUT otwierają się przyciskami w prawym dolnym rogu, obok
-„Sprawdź aktualizację”.
+UPDATE.
 
 ## Minimalizowanie do zasobnika
 
@@ -605,7 +614,7 @@ wcześniej gry.
 
 ## Aktualizacje
 
-Przycisk "Sprawdź aktualizację" jest w prawym dolnym rogu okna. Program pyta
+Przycisk UPDATE (sprawdzenie aktualizacji) jest w prawym dolnym rogu okna. Program pyta
 GitHub o najnowsze wydanie repozytorium `Atimaniac/tune-center` i porównuje
 jego znacznik z własną wersją. Gdy jest nowsza, w tym samym miejscu pojawia
 się przycisk "Zainstaluj X" i odnośnik "co nowego" do strony wydania.
