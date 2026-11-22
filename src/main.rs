@@ -16,6 +16,7 @@ mod curve;
 mod disks;
 mod elevation;
 mod fans;
+mod game_watch;
 mod gpu;
 mod gpu_fans;
 mod hags;
@@ -26,6 +27,7 @@ mod leds;
 #[cfg(test)]
 mod logo_tool;
 mod nvcp;
+mod nvdriver;
 mod power;
 mod power_tab;
 mod rebar;
@@ -232,6 +234,13 @@ struct App {
     update_asked: bool,
     /// Ostatnie sprawdzenie aktualizacji (automatycznie co 15 minut).
     update_checked: Instant,
+    /// Aktualizacja sterownika NVIDIA i czas ostatniego sprawdzenia.
+    nvdriver: nvdriver::Checker,
+    nvdriver_checked: Option<Instant>,
+    /// Użytkownik sam kliknął "Sprawdź teraz" - pokazujemy też błędy.
+    nvdriver_asked: bool,
+    /// Start programu (opóźnienie pierwszego sprawdzenia sterownika).
+    started: Instant,
     /// Historia temperatur zakładki SENSORS (120 s).
     sensor_hist: history::History,
     /// Historia mocy zakładki POWER (120 s).
@@ -242,7 +251,12 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let args: Vec<String> = std::env::args().collect();
         // Wczytanie ustawień ustala też język interfejsu.
-        let fans = FansTab::new();
+        let mut fans = FansTab::new();
+        {
+            // Profile gier: obserwator procesów przełącza profil wentylatorów.
+            let ctx = cc.egui_ctx.clone();
+            fans.start_games(move || ctx.request_repaint());
+        }
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, fans.config.light_theme);
         autostart::migrate();
@@ -348,6 +362,10 @@ impl App {
             updates,
             update_asked: false,
             update_checked: Instant::now(),
+            nvdriver: nvdriver::Checker::new(),
+            nvdriver_checked: None,
+            nvdriver_asked: false,
+            started: Instant::now(),
             sensor_hist: history::History::default(),
             power_hist: history::History::default(),
         };
@@ -386,6 +404,175 @@ impl App {
 
     /// Sprawdzanie aktualizacji co 15 minut (gdy włączone w OPTIONS), także
     /// przy oknie w zasobniku. Wynik pokazuje pasek stanu.
+    /// Pasek stanu: dostępny sterownik NVIDIA i postęp instalacji.
+    fn nvdriver_status(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        use nvdriver::State;
+        let (text, color) = match self.nvdriver.state() {
+            State::Available { installed, latest } => {
+                theme::vsep(ui, 18.0);
+                ui.label(
+                    RichText::new(crate::trf!(
+                        "Nowy sterownik NVIDIA {} (masz {installed})",
+                        "New NVIDIA driver {} (you have {installed})",
+                        latest.version
+                    ))
+                    .size(12.5)
+                    .color(accent()),
+                );
+                let button = egui::Button::new(
+                    RichText::new(crate::trf!("Zainstaluj {}", "Install {}", latest.version))
+                        .size(12.0),
+                );
+                if ui
+                    .add(button)
+                    .on_hover_text(crate::trf!(
+                        "Pobiera paczkę ({}) z serwera NVIDIA i instaluje sam sterownik (grafika, audio HDMI, PhysX - bez NVIDIA App) w trybie cichym, bez restartu. Ekran mignie kilka razy - zamknij wcześniej gry.",
+                        "Downloads the package ({}) from the NVIDIA server and silently installs the driver only (graphics, HDMI audio, PhysX - no NVIDIA App), without a restart. The screen will flicker a few times - close games first.",
+                        latest.size
+                    ))
+                    .clicked()
+                {
+                    let ctx = ctx.clone();
+                    self.nvdriver.install(move || ctx.request_repaint());
+                }
+                ui.hyperlink_to(
+                    RichText::new(crate::i18n::tr("co nowego", "what's new")).size(12.0),
+                    latest.details,
+                );
+                return;
+            }
+            State::Downloading { version, mb } => (
+                crate::trf!(
+                    "Pobieranie sterownika {version}: {mb} MB",
+                    "Downloading driver {version}: {mb} MB"
+                ),
+                muted(),
+            ),
+            State::Extracting { version } => (
+                crate::trf!(
+                    "Rozpakowywanie sterownika {version}...",
+                    "Unpacking driver {version}..."
+                ),
+                muted(),
+            ),
+            State::Installing { version } => (
+                crate::trf!(
+                    "Instalacja sterownika {version} - ekran może mignąć...",
+                    "Installing driver {version} - the screen may flicker..."
+                ),
+                warn(),
+            ),
+            State::Done { version } => (
+                crate::trf!(
+                    "Zainstalowano sterownik NVIDIA {version}.",
+                    "NVIDIA driver {version} installed."
+                ),
+                accent(),
+            ),
+            State::Failed(e) if self.nvdriver_asked => (
+                crate::trf!("Sterownik NVIDIA: {e}", "NVIDIA driver: {e}"),
+                warn(),
+            ),
+            _ => return,
+        };
+        theme::vsep(ui, 18.0);
+        ui.label(RichText::new(text).size(12.5).color(color));
+        ctx.request_repaint_after(Duration::from_millis(500));
+    }
+
+    /// OPTIONS: sprawdzanie sterownika NVIDIA.
+    fn nvdriver_options(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let mut check = self.fans.config.nv_driver_check;
+        ui.horizontal(|ui| {
+            if ui
+                .checkbox(
+                    &mut check,
+                    crate::i18n::tr(
+                        "Sprawdzaj aktualizacje sterownika NVIDIA (przy starcie i co 6 godzin)",
+                        "Check for NVIDIA driver updates (at startup and every 6 hours)",
+                    ),
+                )
+                .changed()
+            {
+                self.fans.config.nv_driver_check = check;
+                self.fans.config.save();
+            }
+            let name = self.gpu.nvidia_name();
+            if ui
+                .add_enabled(
+                    name.is_some(),
+                    egui::Button::new(crate::i18n::tr("Sprawdź teraz", "Check now")),
+                )
+                .clicked()
+            {
+                if let Some(name) = name {
+                    self.nvdriver_asked = true;
+                    let ctx = ctx.clone();
+                    self.nvdriver.check(name, move || ctx.request_repaint());
+                }
+            }
+        });
+        let state = match self.nvdriver.state() {
+            nvdriver::State::Checking => {
+                crate::i18n::tr("Sprawdzanie...", "Checking...").to_owned()
+            }
+            nvdriver::State::UpToDate { installed } => crate::trf!(
+                "Masz najnowszy sterownik Game Ready ({installed}).",
+                "You have the latest Game Ready driver ({installed})."
+            ),
+            nvdriver::State::Available { latest, .. } => crate::trf!(
+                "Dostępny sterownik {} - przycisk instalacji jest na dole okna.",
+                "Driver {} is available - the install button is at the bottom of the window.",
+                latest.version
+            ),
+            nvdriver::State::Failed(e) => e,
+            _ => String::new(),
+        };
+        option_note(
+            ui,
+            crate::i18n::tr(
+                "Program pyta serwer NVIDIA o najnowszy sterownik Game Ready (WHQL) dla Twojej karty. Instaluje się tylko po kliknięciu: sam sterownik z audio HDMI i PhysX, bez NVIDIA App i telemetrii, w trybie cichym.",
+                "The program asks the NVIDIA server for the latest Game Ready (WHQL) driver for your card. It installs only when you click: the driver with HDMI audio and PhysX, without NVIDIA App and telemetry, silently.",
+            ),
+        );
+        if !state.is_empty() {
+            ui.label(RichText::new(state).size(12.0).color(accent()));
+        }
+    }
+
+    /// Sterownik NVIDIA: pierwsze sprawdzenie 30 s po starcie, potem co 6 h.
+    fn nvdriver_logic(&mut self, ctx: &egui::Context) {
+        const EVERY: Duration = Duration::from_secs(6 * 3600);
+        const FIRST: Duration = Duration::from_secs(30);
+        if !self.fans.config.nv_driver_check {
+            return;
+        }
+        let due = match self.nvdriver_checked {
+            None => self.started.elapsed() >= FIRST,
+            Some(t) => t.elapsed() >= EVERY,
+        };
+        if due {
+            self.nvdriver_checked = Some(Instant::now());
+            if let Some(name) = self.gpu.nvidia_name() {
+                let idle = matches!(
+                    self.nvdriver.state(),
+                    nvdriver::State::Idle
+                        | nvdriver::State::UpToDate { .. }
+                        | nvdriver::State::Failed(_)
+                );
+                if idle {
+                    let ctx = ctx.clone();
+                    self.nvdriver.check(name, move || ctx.request_repaint());
+                }
+            }
+        }
+        let wait = match self.nvdriver_checked {
+            None => FIRST.saturating_sub(self.started.elapsed()),
+            Some(t) => EVERY.saturating_sub(t.elapsed()),
+        };
+        ctx.request_repaint_after(wait);
+    }
+
     fn update_logic(&mut self, ctx: &egui::Context) {
         const EVERY: Duration = Duration::from_secs(15 * 60);
         if !self.fans.config.check_updates {
@@ -604,6 +791,7 @@ impl App {
             }
 
             self.skydimo_ui(ui);
+            self.nvdriver_options(ui, ctx);
 
             let mut check = self.fans.config.check_updates;
             if ui
@@ -815,6 +1003,7 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.leds_logic(ctx);
         self.update_logic(ctx);
+        self.nvdriver_logic(ctx);
         if self.minimize {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             self.minimize = false;
@@ -983,6 +1172,7 @@ impl eframe::App for App {
                     };
                     theme::dot(ui, color);
                     ui.label(RichText::new(text).size(13.0).color(theme::text()));
+                    self.nvdriver_status(ui, &ctx);
                     if let Some(notice) = &self.notice {
                         ui.separator();
                         ui.label(RichText::new(notice).size(12.0).color(warn()));

@@ -801,6 +801,14 @@ impl GpuTab {
 
     /// Domyślny limit mocy karty (TDP) ze sterownika, np. dla plakietki
     /// obciążenia w zakładce POWER.
+    /// Nazwa wybranej karty NVIDIA (do wyszukania sterownika); `None` dla AMD i demo.
+    pub fn nvidia_name(&self) -> Option<String> {
+        if self.demo || self.vendor() != Vendor::Nvidia {
+            return None;
+        }
+        self.gpus.get(self.gpu).cloned()
+    }
+
     pub fn power_limit_w(&self) -> Option<f32> {
         if self.demo {
             return None;

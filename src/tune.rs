@@ -1414,8 +1414,9 @@ fn set(key: &str, on: bool) -> Result<(), String> {
                     return Err(e);
                 }
                 let (_, sub_s, set_s, ..) = POWER_TWEAKS.iter().find(|(k, ..)| *k == key).unwrap();
-                let def =
-                    format!(r"SYSTEM\CurrentControlSet\Control\Power\PowerSettings\{sub_s}\{set_s}");
+                let def = format!(
+                    r"SYSTEM\CurrentControlSet\Control\Power\PowerSettings\{sub_s}\{set_s}"
+                );
                 reg::set_dword(reg::HKLM, &def, "ValueMin", Some(0))?;
                 reg::set_dword(reg::HKLM, &def, "ValueMax", Some(100))?;
                 power::write_ac(&sub, &setting, *optimized)?;

@@ -28,11 +28,11 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 - 🟢 **NVIDIA control panel** – 3D settings (global and per game), **DLSS overrides like the NVIDIA App** (presets, mode, Frame Generation), display, color/HDR, G-SYNC, custom resolutions – using only the public NVAPI SDK.
 - ⚡ **Shader pre-compilation** – compile a game's shaders ahead of time (Unity and Dagor engines) so the first match doesn't stutter, and clean the shader cache with one click.
 - 🧠 **CPU** – Intel PL1/PL2, voltage offsets, IccMax and turbo ratios with an XTU-style live monitor; AMD Ryzen Curve Optimizer per core and PBO limits.
-- 🌀 **Fans** – motherboard and GPU fans: auto, fixed or temperature curve, with profiles.
+- 🌀 **Fans** – motherboard and GPU fans: auto, fixed or temperature curve, with profiles that switch automatically while a game runs.
 - 🌡️ **Sensors & power** – key temperatures and CPU/GPU power with 2-minute charts, session energy and its cost.
 - 🛠️ **TUNE** – Windows latency and DPC settings with a backup of the original values and one-click restore.
 - 💡 **Lighting** – turn off RAM RGB, drive a Skydimo LED strip.
-- 🔄 **Auto-update** – checks GitHub every 15 minutes and updates silently with one click.
+- 🔄 **Auto-update** – checks GitHub every 15 minutes and updates silently with one click; also notifies you about new NVIDIA Game Ready drivers and installs just the driver with one click.
 
 ## Screenshots
 
@@ -59,6 +59,7 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 - **Display, Color and HDR, G-SYNC, Custom resolutions** – resolution and refresh rate (with 15 s confirmation), color depth, HDR, VRR, custom timings.
 - **Shader compilation** – detects games from Steam, Epic, GOG, Ubisoft, EA and Xbox; pre-compiles shaders for Unity (DX11) and Dagor Engine (DX11/DX12) games; *Clean shaders* removes the game's NVIDIA and Windows (D3DSCache) shader caches.
 - **System** – Hardware-accelerated GPU scheduling (HAGS) toggle and Resizable BAR status.
+- **Driver updates** – checks the NVIDIA server for the latest Game Ready driver for your card (at startup and every 6 hours) and installs just the driver (with HDMI audio and PhysX, without NVIDIA App and telemetry) silently with one click.
 - AMD Radeon cards: clock limits, sensors and fans.
 
 ### CPU
@@ -68,6 +69,7 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 
 ### FAN, SENSORS, POWER
 - Motherboard fans (via LibreHardwareMonitor) and GPU fans (directly through the NVIDIA/AMD driver): auto, manual or curve from any temperature sensor; GPU fans return to auto above 88 °C.
+- **Game profiles** – assign a fan profile to any game detected in Steam, Epic, GOG, Ubisoft, EA or Xbox (or any .exe); it switches on while the game runs and the global profile returns when it closes.
 - Key temperatures (CPU, GPU, motherboard, disks, RAM) with NORMAL/HIGH/HOT badges, min/max and charts.
 - CPU and GPU power with LOW/MEDIUM/HIGH load against the power limit, session energy and cost (price per kWh in OPTIONS).
 

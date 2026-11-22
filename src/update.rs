@@ -248,7 +248,7 @@ pub fn parse_release(json: &str) -> Result<Release, String> {
 }
 
 /// `curl.exe` bez okna konsoli.
-fn curl() -> std::process::Command {
+pub fn curl() -> std::process::Command {
     #[allow(unused_mut)]
     let mut cmd = std::process::Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
     #[cfg(windows)]

@@ -26,6 +26,15 @@ pub struct FansTab {
     last_save: Instant,
     angles: HashMap<String, f32>,
     new_profile: String,
+    /// Obserwator procesów gier (profile wentylatorów dla gier).
+    watcher: Option<crate::game_watch::Watcher>,
+    /// Gra, której profil jest teraz zastosowany.
+    game_active: Option<crate::game_watch::Active>,
+    /// Gry wykryte w launcherach (nazwa, folder); `None` = jeszcze szukamy.
+    games: std::sync::Arc<std::sync::Mutex<Option<Vec<(String, String)>>>>,
+    games_started: bool,
+    /// Karta "Profile gier" rozwinięta (domyślnie zwinięta, żeby nie zasłaniać wentylatorów).
+    games_open: bool,
     /// Pokazuj także złącza, na których nic się nie kręci.
     show_idle: bool,
 }
@@ -45,13 +54,82 @@ impl FansTab {
             last_save: Instant::now(),
             angles: HashMap::new(),
             new_profile: String::new(),
+            watcher: None,
+            game_active: None,
+            games: Default::default(),
+            games_started: false,
+            games_open: false,
             show_idle: false,
         }
+    }
+
+    /// Reguły dla obserwatora: gry z przypisanym istniejącym profilem.
+    fn rules(&self) -> Vec<crate::game_watch::Rule> {
+        self.config
+            .game_profiles
+            .iter()
+            .filter(|g| self.config.profiles.contains_key(&g.profile))
+            .map(|g| crate::game_watch::Rule {
+                path: g.path.clone(),
+                name: g.name.clone(),
+                profile: g.profile.clone(),
+            })
+            .collect()
+    }
+
+    /// Uruchamia obserwator gier (raz, przy starcie programu).
+    pub fn start_games(&mut self, wake: impl Fn() + Send + 'static) {
+        self.watcher = Some(crate::game_watch::Watcher::start(self.rules(), wake));
+    }
+
+    /// Przełącza profil, gdy gra z przypisanym profilem startuje albo się kończy.
+    fn apply_game(&mut self) {
+        let Some(w) = &self.watcher else { return };
+        let now = w.active();
+        if now == self.game_active {
+            return;
+        }
+        let profile = match &now {
+            Some(a) if self.config.profiles.contains_key(&a.profile) => a.profile.clone(),
+            _ => self.config.global_profile.clone(),
+        };
+        if self.config.active != profile {
+            self.config.active = profile;
+            self.dirty = true;
+        }
+        self.game_active = now;
+    }
+
+    /// Ustawia profil gry (`None` = profil globalny) i odświeża reguły.
+    fn set_game_profile(&mut self, path: &str, name: &str, profile: Option<String>) {
+        let list = &mut self.config.game_profiles;
+        match profile {
+            Some(p) => match list.iter_mut().find(|g| g.path == path) {
+                Some(g) => g.profile = p,
+                None => list.push(crate::config::GameProfile {
+                    path: path.to_owned(),
+                    name: name.to_owned(),
+                    profile: p,
+                }),
+            },
+            // Gry dodane ręcznie (.exe) zostają na liście z profilem globalnym.
+            None => match list.iter_mut().find(|g| g.path == path) {
+                Some(g) if g.path.to_lowercase().ends_with(".exe") => g.profile = String::new(),
+                _ => list.retain(|g| g.path != path),
+            },
+        }
+        if let Some(w) = &self.watcher {
+            w.set_rules(self.rules());
+        }
+        self.unsaved = true;
+        // Zmiana dotyczy gry, która właśnie działa - przeliczymy profil.
+        self.game_active = None;
     }
 
     /// Przekazuje zmiany do sterowania i zapisuje je (z opóźnieniem) do pliku.
     /// Wywoływane w każdej klatce, niezależnie od otwartej zakładki.
     pub fn tick(&mut self, backend: Option<&Backend>, gpu_fans: Option<&crate::gpu_fans::GpuFans>) {
+        self.apply_game();
         if self.dirty {
             if let Some(backend) = backend {
                 backend.set_fans(self.config.fans().clone());
@@ -69,9 +147,215 @@ impl FansTab {
         }
     }
 
+    /// Profil globalny i informacja, który profil działa teraz.
+    fn global_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(crate::i18n::tr("Profil globalny:", "Global profile:"))
+                    .color(muted()),
+            );
+            let names: Vec<String> = self.config.profiles.keys().cloned().collect();
+            let mut global = self.config.global_profile.clone();
+            egui::ComboBox::from_id_salt("global_profile")
+                .width(170.0)
+                .selected_text(global.clone())
+                .show_ui(ui, |ui| {
+                    for name in &names {
+                        ui.selectable_value(&mut global, name.clone(), name.as_str());
+                    }
+                });
+            if global != self.config.global_profile {
+                self.config.global_profile = global.clone();
+                if self.game_active.is_none() {
+                    self.config.active = global;
+                    self.dirty = true;
+                }
+                self.unsaved = true;
+            }
+            theme::vsep(ui, 20.0);
+            ui.label(
+                RichText::new(crate::i18n::tr("Aktywny teraz:", "Active now:")).color(muted()),
+            );
+            let text = match &self.game_active {
+                Some(g) if g.profile == self.config.active => crate::trf!(
+                    "{} - z gry {}",
+                    "{} - from the game {}",
+                    self.config.active,
+                    g.name
+                ),
+                _ => self.config.active.clone(),
+            };
+            crate::history::badge(ui, &text, accent());
+            if self.game_active.is_some() {
+                ui.label(
+                    RichText::new(crate::i18n::tr(
+                        "po zamknięciu gry wróci profil globalny",
+                        "the global profile returns when the game closes",
+                    ))
+                    .size(12.0)
+                    .color(muted()),
+                );
+            }
+        });
+    }
+
+    /// Lista gier z wyborem profilu.
+    fn games_card(&mut self, ui: &mut egui::Ui) {
+        if !self.games_started {
+            self.games_started = true;
+            let slot = self.games.clone();
+            std::thread::spawn(move || {
+                let list: Vec<(String, String)> = crate::shaders::games::find_all()
+                    .into_iter()
+                    .map(|g| (g.name, g.dir.display().to_string()))
+                    .collect();
+                *slot.lock().unwrap() = Some(list);
+            });
+        }
+        let found = self.games.lock().ok().and_then(|g| g.clone());
+        // Wykryte gry + gry dodane ręcznie (pliki .exe).
+        let mut rows: Vec<(String, String)> = found.clone().unwrap_or_default();
+        for g in &self.config.game_profiles {
+            if !rows.iter().any(|(_, p)| p == &g.path) {
+                rows.push((g.name.clone(), g.path.clone()));
+            }
+        }
+        let names: Vec<String> = self.config.profiles.keys().cloned().collect();
+        let global = crate::i18n::tr("globalny", "global").to_owned();
+        let running = self.game_active.as_ref().map(|a| a.name.clone());
+        let mut change: Option<(String, String, Option<String>)> = None;
+        let mut remove: Option<String> = None;
+
+        let assigned = self
+            .config
+            .game_profiles
+            .iter()
+            .filter(|g| !g.profile.is_empty())
+            .count();
+        let mut open = self.games_open;
+        let width = ui.available_width() - 2.0 * 14.0 - 4.0;
+        theme::card(10, 14).show(ui, |ui| {
+            ui.set_width(width);
+            ui.horizontal(|ui| {
+                theme::subheading(ui, crate::icons::Icon::Fan, crate::i18n::tr("Profile gier", "Game profiles"));
+                let text = match &found {
+                    None => crate::i18n::tr("szukanie gier...", "looking for games...").to_owned(),
+                    Some(l) => crate::trf!(
+                        "wykryte gry: {} (Steam, Epic, GOG, Ubisoft, EA, Xbox), z własnym profilem: {}",
+                        "detected games: {} (Steam, Epic, GOG, Ubisoft, EA, Xbox), with their own profile: {}",
+                        l.len(),
+                        assigned
+                    ),
+                };
+                ui.label(RichText::new(text).size(12.0).color(muted()));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let label = if open {
+                        crate::i18n::tr("Zwiń", "Collapse")
+                    } else {
+                        crate::i18n::tr("Rozwiń", "Expand")
+                    };
+                    if ui.button(label).clicked() {
+                        open = !open;
+                    }
+                });
+            });
+            if !open {
+                return;
+            }
+            theme::info(
+                ui,
+                crate::i18n::tr(
+                    "Gdy gra działa, wentylatory przechodzą na jej profil (gra rozpoznawana po folderze, sprawdzane co 2 s). Po zamknięciu gry wraca profil globalny. Profile tworzysz poniżej: \"Zapisz jako nowy\".",
+                    "While a game runs, the fans switch to its profile (the game is recognized by its folder, checked every 2 s). When the game closes, the global profile returns. Create profiles below with \"Save as new\".",
+                ),
+            );
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical()
+                .id_salt("game_profiles")
+                .max_height(220.0)
+                .show(ui, |ui| {
+                    egui::Grid::new("games").num_columns(4).spacing([14.0, 6.0]).striped(true).show(ui, |ui| {
+                        for (name, path) in &rows {
+                            ui.label(RichText::new(name).color(theme::text()));
+                            ui.allocate_ui_with_layout(egui::vec2(420.0, 18.0), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new(RichText::new(path).size(11.5).color(muted())).truncate()).on_hover_text(path); });
+                            if running.as_deref() == Some(name.as_str()) {
+                                crate::history::badge(ui, crate::i18n::tr("URUCHOMIONA", "RUNNING"), theme::ok());
+                            } else {
+                                ui.allocate_exact_size(egui::vec2(96.0, 18.0), Sense::hover());
+                            }
+                            let current = self
+                                .config
+                                .game_profiles
+                                .iter()
+                                .find(|g| &g.path == path)
+                                .map(|g| g.profile.clone())
+                                .filter(|p| !p.is_empty());
+                            let mut chosen = current.clone();
+                            ui.horizontal(|ui| {
+                                egui::ComboBox::from_id_salt(("game", path))
+                                    .width(150.0)
+                                    .selected_text(chosen.clone().unwrap_or_else(|| global.clone()))
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut chosen, None, global.as_str());
+                                        for n in &names {
+                                            ui.selectable_value(&mut chosen, Some(n.clone()), n.as_str());
+                                        }
+                                    });
+                                if path.to_lowercase().ends_with(".exe")
+                                    && ui.small_button(crate::i18n::tr("Usuń", "Remove")).clicked()
+                                {
+                                    remove = Some(path.clone());
+                                }
+                            });
+                            if chosen != current {
+                                change = Some((path.clone(), name.clone(), chosen));
+                            }
+                            ui.end_row();
+                        }
+                    });
+                });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if theme::primary_button(ui, None, crate::i18n::tr("+ Dodaj grę (.exe)", "+ Add game (.exe)"), true).clicked() {
+                    if let Some(file) = rfd::FileDialog::new().add_filter("exe", &["exe"]).pick_file() {
+                        let name = file
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let first = names.first().cloned();
+                        change = Some((file.display().to_string(), name, first));
+                    }
+                }
+                ui.label(
+                    RichText::new(crate::i18n::tr(
+                        "dla gier spoza wykrytych launcherów",
+                        "for games outside the detected launchers",
+                    ))
+                    .size(12.0)
+                    .color(muted()),
+                );
+            });
+        });
+        self.games_open = open;
+        if let Some((path, name, profile)) = change {
+            self.set_game_profile(&path, &name, profile);
+        }
+        if let Some(path) = remove {
+            self.config.game_profiles.retain(|g| g.path != path);
+            if let Some(w) = &self.watcher {
+                w.set_rules(self.rules());
+            }
+            self.unsaved = true;
+            self.game_active = None;
+        }
+    }
+
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(crate::i18n::tr("Profil:", "Profile:")).color(muted()));
+            ui.label(
+                RichText::new(crate::i18n::tr("Edytowany profil:", "Edited profile:"))
+                    .color(muted()),
+            );
 
             let names: Vec<String> = self.config.profiles.keys().cloned().collect();
             let mut selected = self.config.active.clone();
@@ -119,6 +403,10 @@ impl FansTab {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, snap: Option<&Snapshot>, dt: f32) {
+        self.global_bar(ui);
+        ui.add_space(8.0);
+        self.games_card(ui);
+        ui.add_space(10.0);
         self.toolbar(ui);
         ui.add_space(12.0);
 

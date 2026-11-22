@@ -44,6 +44,15 @@ impl Default for FanConfig {
 
 pub type Fans = HashMap<String, FanConfig>;
 
+/// Profil wentylatorów przypisany grze.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct GameProfile {
+    /// Folder gry (z launchera) albo plik .exe (gra dodana ręcznie).
+    pub path: String,
+    pub name: String,
+    pub profile: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct Profile {
     #[serde(default)]
@@ -69,6 +78,9 @@ pub struct Config {
     /// Sprawdzanie przy starcie, czy jest nowsza wersja programu.
     #[serde(default = "yes")]
     pub check_updates: bool,
+    /// Sprawdzanie nowego sterownika NVIDIA (przy starcie i co 6 h).
+    #[serde(default = "yes")]
+    pub nv_driver_check: bool,
     /// Wyłączone podświetlenie LED (pamięć RAM) - stosowane przy każdym starcie.
     #[serde(default)]
     pub leds_off: bool,
@@ -92,6 +104,12 @@ pub struct Config {
     pub active: String,
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
+    /// Profil wentylatorów poza grami (wraca po zamknięciu gry).
+    #[serde(default)]
+    pub global_profile: String,
+    /// Profile przypisane grom (folder gry albo plik .exe).
+    #[serde(default)]
+    pub game_profiles: Vec<GameProfile>,
 }
 
 fn white() -> [u8; 3] {
@@ -121,6 +139,7 @@ impl Default for Config {
             language: None,
             tray: true,
             check_updates: true,
+            nv_driver_check: true,
             gpu_fans_direct: true,
             leds_off: false,
             leds_saved: Vec::new(),
@@ -131,6 +150,8 @@ impl Default for Config {
             energy_currency: default_currency(),
             active: String::new(),
             profiles: BTreeMap::new(),
+            global_profile: String::new(),
+            game_profiles: Vec::new(),
         };
         cfg.repair();
         cfg
@@ -171,6 +192,8 @@ impl Config {
         crate::i18n::set_english(english);
 
         cfg.repair();
+        // Po starcie obowiązuje profil globalny; profile gier włączy obserwator procesów.
+        cfg.active = cfg.global_profile.clone();
         cfg
     }
 
@@ -195,6 +218,11 @@ impl Config {
         }
         if !self.profiles.contains_key(&self.active) {
             self.active = self.profiles.keys().next().cloned().unwrap_or_default();
+        }
+        // Profil globalny: przy pierwszym uruchomieniu (i po usunięciu profilu) =
+        // bieżący; aktywny po starcie to zawsze globalny (gry przełączą go same).
+        if !self.profiles.contains_key(&self.global_profile) {
+            self.global_profile = self.active.clone();
         }
     }
 

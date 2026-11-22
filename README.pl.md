@@ -15,7 +15,8 @@ przełącza się przyciskami w nagłówku, obok logo:
 - **CPU** - Intel: limity mocy, offsety napięcia i Core IccMax;
   AMD Ryzen: Curve Optimizer dla każdego rdzenia i limity PBO.
 - **FAN** - sterowanie wentylatorami płyty głównej: ręcznie lub krzywą
-  zależną od temperatury, z profilami (dawny FanCtl).
+  zależną od temperatury, z profilami, także automatycznie dla gier
+  (dawny FanCtl).
 - **SENSORS** - najważniejsze temperatury z wykresami z ostatnich 2 minut.
 - **POWER** - aktualny pobór mocy procesora i karty graficznej, suma
   oraz licznik energii zużytej w bieżącej sesji.
@@ -401,6 +402,17 @@ Program startuje wtedy zminimalizowany i od razu stosuje aktywny profil
 wentylatorów. Po przeniesieniu programu do innego katalogu odznacz
 i zaznacz pole ponownie.
 
+### Profile gier
+
+Karta „Profile gier” pokazuje gry wykryte w Steam, Epic, GOG, Ubisoft, EA
+i Xbox; gry spoza launcherów dodaje się przyciskiem „Dodaj grę (.exe)”.
+Każdej grze można przypisać profil wentylatorów („globalny” = bez zmiany).
+Program co 2 s sprawdza uruchomione procesy (gra rozpoznawana po folderze
+albo po wskazanym pliku .exe) i przełącza wentylatory na profil gry, a po
+jej zamknięciu wraca do **profilu globalnego**. Przy kilku grach naraz
+wygrywa ostatnio uruchomiona. Po starcie programu obowiązuje profil
+globalny; „Edytowany profil” służy do zmiany ustawień dowolnego profilu.
+
 ### Puste złącza
 
 Złącza płyty głównej, które pokazują 0 obr./min albo nie mają odczytu, są
@@ -548,6 +560,17 @@ pierwszeństwo, także po aktualizacji).
 
 Przyciski zakładek (GPU, CPU, FAN...) używają czcionki Audiowide wbudowanej w
 program. Cała pozostała treść jest pisana domyślną czcionką interfejsu.
+
+## Aktualizacja sterownika NVIDIA
+
+Program sprawdza na serwerze NVIDIA najnowszy sterownik Game Ready (WHQL)
+dla Twojej karty - 30 s po starcie i potem co 6 godzin (OPTIONS: "Sprawdzaj
+aktualizacje sterownika NVIDIA", "Sprawdź teraz"). Gdy jest nowszy niż
+zainstalowany, na dole okna pojawia się "Nowy sterownik NVIDIA X" i przycisk
+"Zainstaluj X": program pobiera paczkę z download.nvidia.com, rozpakowuje
+tylko sterownik grafiki, audio HDMI i PhysX (bez NVIDIA App i telemetrii) i
+instaluje je w trybie cichym, bez restartu. Ekran mignie kilka razy - zamknij
+wcześniej gry.
 
 ## Aktualizacje
 
