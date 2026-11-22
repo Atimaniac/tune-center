@@ -508,6 +508,10 @@ Sprawdzone (Microsoft, producenci sprzętu):
   w grach; mniej ochrony jądra, bez WSL i maszyn wirtualnych).
 - Karta sieciowa: Interrupt Moderation i Energy Efficient Ethernet wyłączone
   (karta restartuje się na kilka sekund).
+- Karta sieciowa: oszczędzanie energii wyłączone - te ustawienia, które karta
+  ma (Green Ethernet, Gigabit Lite, Advanced EEE, Power Saving Mode, Auto
+  Disable Gigabit, Ultra Low Power Mode, Selective Suspend, wyłączanie karty
+  przez Windows).
 - Plan zasilania: USB Selective Suspend i PCI Express Link State Power
   Management wyłączone; plan Ultimate Performance (nie dla Ryzen X3D).
 - Tryb gry Windows.
@@ -521,6 +525,9 @@ Do przetestowania na własnym sprzęcie (porównaj LatencyMon przed i po):
 - Tryb MSI przerwań dla karty graficznej, sieci, audio i USB.
 - Globalna rozdzielczość timera (`GlobalTimerResolutionRequests`).
 - `Win32PrioritySeparation` = 0x26, `SystemResponsiveness` = 10.
+- Multi-Plane Overlay (MPO) wyłączone (`OverlayTestMode` = 5, jak w poprawce
+  NVIDIA) - przy migotaniu i przycięciach w grach w oknie bez ramki i przy
+  kilku monitorach; nowsze Windows 11 mogą to ignorować; działa po restarcie.
 
 Celowo pominięte: `bcdedit useplatformclock/disabledynamictick` (sprzeczne
 wyniki, problemy z myszą) i `NetworkThrottlingIndex` (więcej przerwań).

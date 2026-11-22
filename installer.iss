@@ -20,7 +20,7 @@
 ; aktualizacji program jest uruchamiany ponownie.
 
 #define AppName "Tune Center"
-#define AppVersion "0.25.3"
+#define AppVersion "0.26.0"
 #define AppGuid "2F9C1B7A-4D3E-4E8B-B1C6-7A5D0E9F3C42"
 #define AppExe "tunecenter.exe"
 

@@ -529,6 +529,15 @@ const REG_TWEAKS: &[RegTweak] = &[
         optimized: 10,
         absent: Some(20),
     },
+    RegTweak {
+        // Wyłączenie Multi-Plane Overlay (wartość z poprawki NVIDIA mpo_disable).
+        key: "mpo",
+        root: reg::HKLM,
+        path: r"SOFTWARE\Microsoft\Windows\Dwm",
+        value: "OverlayTestMode",
+        optimized: 5,
+        absent: None,
+    },
 ];
 
 /// Opis bieżącej wartości pozycji z rejestru, np. "Win32PrioritySeparation = 0x26
@@ -550,6 +559,7 @@ fn reg_value_text(t: &RegTweak, raw: Option<u32>) -> String {
         ("game_mode", _) => crate::i18n::tr(" - włączony", " - on"),
         ("timer", 0) => crate::i18n::tr(" - wyłączona", " - off"),
         ("timer", _) => crate::i18n::tr(" - włączona", " - on"),
+        ("mpo", 5) => crate::i18n::tr(" - MPO wyłączone", " - MPO off"),
         _ => "",
     };
     match (raw, t.absent) {
@@ -561,6 +571,11 @@ fn reg_value_text(t: &RegTweak, raw: Option<u32>) -> String {
             num(d),
             meaning(d)
         ),
+        (None, None) if t.key == "mpo" => crate::i18n::tr(
+            "brak wpisu OverlayTestMode - MPO włączone (domyślnie)",
+            "no OverlayTestMode entry - MPO on (default)",
+        )
+        .to_owned(),
         (None, None) => crate::trf!("brak wpisu {}", "no {} entry", t.value),
     }
 }
@@ -807,6 +822,160 @@ const NIC_TWEAKS: &[(&str, &str, &str)] = &[
     ("nic_moderation", "*InterruptModeration", "0"),
     ("nic_eee", "*EEE", "0"),
 ];
+
+// ---- karta sieciowa: oszczędzanie energii (ustawienia producenta + NDIS)
+
+/// Słowa kluczowe oszczędzania energii w sterownikach kart sieciowych; karta
+/// ma zwykle tylko część z nich. "0" wyłącza każde z nich.
+#[cfg(windows)]
+const NIC_POWER_KEYWORDS: &[(&str, &str)] = &[
+    ("EnableGreenEthernet", "Green Ethernet"),
+    ("GigaLite", "Gigabit Lite"),
+    ("AdvancedEEE", "Advanced EEE"),
+    ("PowerSavingMode", "Power Saving Mode"),
+    ("AutoDisableGigabit", "Auto Disable Gigabit"),
+    ("ULPMode", "Ultra Low Power Mode"),
+    ("*SelectiveSuspend", "Selective Suspend"),
+];
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+struct NicKeyword {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "Keyword")]
+    keyword: String,
+    #[serde(rename = "Value")]
+    value: String,
+}
+
+/// Zarządzanie energią karty w Windows (Get-NetAdapterPowerManagement):
+/// „pozwól komputerowi wyłączać urządzenie” i selektywne wstrzymywanie NDIS.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+struct NicPm {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "Allow")]
+    allow: String,
+    #[serde(rename = "Suspend")]
+    suspend: String,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
+struct NicPower {
+    #[serde(default)]
+    adv: Vec<NicKeyword>,
+    #[serde(default)]
+    pm: Vec<NicPm>,
+}
+
+impl NicPower {
+    /// Wszystko, co karta ma, jest wyłączone ("Unsupported"/"Inactive" się nie liczy).
+    fn off(&self) -> bool {
+        self.adv.iter().all(|k| k.value == "0")
+            && self
+                .pm
+                .iter()
+                .all(|p| p.allow != "Enabled" && p.suspend != "Enabled")
+    }
+
+    fn empty(&self) -> bool {
+        self.adv.is_empty()
+            && self
+                .pm
+                .iter()
+                .all(|p| p.allow == "Unsupported" && p.suspend == "Unsupported")
+    }
+
+    /// Opis bieżących ustawień, np. "Ethernet: Selective Suspend włączone, ...".
+    fn text(&self) -> String {
+        let state = |on: bool| {
+            if on {
+                crate::i18n::tr("włączone", "on")
+            } else {
+                crate::i18n::tr("wyłączone", "off")
+            }
+        };
+        let mut parts = Vec::new();
+        for p in &self.pm {
+            let mut list = Vec::new();
+            if p.allow != "Unsupported" {
+                list.push(crate::trf!(
+                    "wyłączanie przez system {}",
+                    "turn off by the system {}",
+                    state(p.allow == "Enabled")
+                ));
+            }
+            if p.suspend != "Unsupported" && p.suspend != "Inactive" {
+                list.push(format!(
+                    "Selective Suspend {}",
+                    state(p.suspend == "Enabled")
+                ));
+            }
+            for k in self.adv.iter().filter(|k| k.name == p.name) {
+                let label = NIC_POWER_KEYWORDS
+                    .iter()
+                    .find(|(kw, _)| *kw == k.keyword)
+                    .map_or(k.keyword.as_str(), |(_, l)| l);
+                list.push(format!("{label} {}", state(k.value != "0")));
+            }
+            if !list.is_empty() {
+                parts.push(format!("{}: {}", p.name, list.join(", ")));
+            }
+        }
+        parts.join("; ")
+    }
+}
+
+#[cfg(windows)]
+fn nic_power() -> Result<NicPower, String> {
+    let keywords = NIC_POWER_KEYWORDS
+        .iter()
+        .map(|(k, _)| format!("'{k}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let script = format!(
+        "$k = @({keywords}); $a = @(Get-NetAdapter -Physical); \
+         $adv = @($a | ForEach-Object {{ $n = $_.Name; Get-NetAdapterAdvancedProperty -Name $n -AllProperties -ErrorAction SilentlyContinue | Where-Object {{ $k -contains $_.RegistryKeyword }} | ForEach-Object {{ [pscustomobject]@{{ Name = $n; Keyword = $_.RegistryKeyword; Value = ($_.RegistryValue -join '') }} }} }}); \
+         $pm = @($a | Get-NetAdapterPowerManagement -ErrorAction SilentlyContinue | ForEach-Object {{ [pscustomobject]@{{ Name = $_.Name; Allow = [string]$_.AllowComputerToTurnOffDevice; Suspend = [string]$_.SelectiveSuspend }} }}); \
+         ConvertTo-Json -InputObject @{{ adv = $adv; pm = $pm }} -Compress -Depth 4"
+    );
+    let out = powershell(&script)?;
+    serde_json::from_str(out.trim()).map_err(|e| e.to_string())
+}
+
+/// Zapisuje stan `target` (słowa kluczowe i zarządzanie energią) na kartach.
+#[cfg(windows)]
+fn nic_power_write(target: &NicPower) -> Result<(), String> {
+    let q = |s: &str| s.replace('\'', "''");
+    let mut script = String::new();
+    for k in &target.adv {
+        script.push_str(&format!(
+            "Set-NetAdapterAdvancedProperty -Name '{}' -AllProperties -RegistryKeyword '{}' -RegistryValue '{}' -ErrorAction Stop; ",
+            q(&k.name),
+            q(&k.keyword),
+            q(&k.value)
+        ));
+    }
+    for p in &target.pm {
+        let mut args = String::new();
+        if matches!(p.allow.as_str(), "Enabled" | "Disabled") {
+            args.push_str(&format!(" -AllowComputerToTurnOffDevice {}", p.allow));
+        }
+        if matches!(p.suspend.as_str(), "Enabled" | "Disabled") {
+            args.push_str(&format!(" -SelectiveSuspend {}", p.suspend));
+        }
+        if !args.is_empty() {
+            script.push_str(&format!(
+                "Set-NetAdapterPowerManagement -Name '{}'{args} -ErrorAction Stop; ",
+                q(&p.name)
+            ));
+        }
+    }
+    if script.is_empty() {
+        return Ok(());
+    }
+    powershell(&script).map(|_| ())
+}
 
 // ---- funkcja Windows: Virtual Machine Platform (DISM)
 
@@ -1205,6 +1374,29 @@ fn read_all(cpu_x3d: bool) -> Vec<Item> {
             warning: None,
         });
     }
+    items.push(Item {
+        key: "nic_power".into(),
+        name: text(
+            "Karta sieciowa: oszczędzanie energii wyłączone",
+            "Network adapter: power saving off",
+        ),
+        desc: crate::i18n::tr(
+            "Wyłącza oszczędzanie energii, które ma karta: Green Ethernet, Gigabit Lite, Advanced EEE, Power Saving Mode, Auto Disable Gigabit (Realtek), Ultra Low Power Mode (Intel), Selective Suspend oraz wyłączanie karty przez Windows. Wybudzanie karty dodaje opóźnienie do pakietów. Karta restartuje się na 2-3 s.",
+            "Turns off the power saving the adapter has: Green Ethernet, Gigabit Lite, Advanced EEE, Power Saving Mode, Auto Disable Gigabit (Realtek), Ultra Low Power Mode (Intel), Selective Suspend and turning the adapter off by Windows. Waking the adapter adds latency to packets. The adapter restarts for 2-3 s.",
+        ),
+        group: Group::Proven,
+        restart: false,
+        state: match nic_power() {
+            Ok(p) if p.empty() => State::Unsupported(text(
+                "karta sieciowa nie ma ustawień oszczędzania energii",
+                "the network adapter has no power saving settings",
+            )),
+            Ok(p) if p.off() => State::Optimized(p.text()),
+            Ok(p) => State::Default(p.text()),
+            Err(e) => State::Unknown(e),
+        },
+        warning: None,
+    });
     for (key, sub, setting, optimized, _) in POWER_TWEAKS {
         let (name, desc) = match *key {
             "usb_suspend" => (
@@ -1357,6 +1549,25 @@ fn read_all(cpu_x3d: bool) -> Vec<Item> {
         state: reg_state(t, t.path),
         warning: None,
     });
+    let t = reg_item("mpo");
+    items.push(Item {
+        key: t.key.into(),
+        name: text(
+            "Multi-Plane Overlay (MPO) wyłączone",
+            "Multi-Plane Overlay (MPO) off",
+        ),
+        desc: crate::i18n::tr(
+            "Pulpit (DWM) składa obraz bez nakładek sprzętowych. NVIDIA zaleca to przy migotaniu, czarnych mignięciach i przycięciach w grach w oknie bez ramki oraz przy kilku monitorach o różnym odświeżaniu. Działa po restarcie.",
+            "The desktop compositor (DWM) builds the image without hardware overlays. NVIDIA recommends this for flicker, black flashes and stutter in borderless games and with several monitors at different refresh rates. Takes effect after a restart.",
+        ),
+        group: Group::Test,
+        restart: true,
+        state: reg_state(t, t.path),
+        warning: Some(text(
+            "Nieoficjalne ustawienie Microsoftu - nowsze wersje Windows 11 mogą je ignorować. Bez problemów z obrazem lepiej zostawić MPO włączone (mniejsze obciążenie karty).",
+            "Not an official Microsoft setting - newer Windows 11 builds may ignore it. Without display problems it is better to keep MPO on (less GPU load).",
+        )),
+    });
     items
 }
 
@@ -1375,6 +1586,55 @@ fn set(key: &str, on: bool) -> Result<(), String> {
             1,
             on,
         );
+    }
+    if key == "nic_power" {
+        if on {
+            let current = nic_power()?;
+            remember(key, serde_json::to_value(&current).unwrap_or_default());
+            // Zapisujemy tylko to, co jest włączone.
+            let target = NicPower {
+                adv: current
+                    .adv
+                    .iter()
+                    .filter(|k| k.value != "0")
+                    .map(|k| NicKeyword {
+                        value: "0".into(),
+                        ..k.clone()
+                    })
+                    .collect(),
+                pm: current
+                    .pm
+                    .iter()
+                    .map(|p| NicPm {
+                        name: p.name.clone(),
+                        allow: if p.allow == "Enabled" {
+                            "Disabled".into()
+                        } else {
+                            String::new()
+                        },
+                        suspend: if p.suspend == "Enabled" {
+                            "Disabled".into()
+                        } else {
+                            String::new()
+                        },
+                    })
+                    .collect(),
+            };
+            nic_power_write(&target)?;
+            if !nic_power()?.off() {
+                return Err(text(
+                    "karta nie przyjęła wszystkich ustawień",
+                    "the adapter did not accept every setting",
+                ));
+            }
+        } else {
+            let orig: NicPower = original(key)
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
+            nic_power_write(&orig)?;
+            forget(key);
+        }
+        return Ok(());
     }
     if let Some((_, keyword, optimized)) = NIC_TWEAKS.iter().find(|(k, _, _)| *k == key) {
         let current = nic_values(keyword)?;
@@ -1921,5 +2181,27 @@ mod apply {
                 println!("{:<45} {:?}", i.key, i.state);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod mpo_test {
+    /// Zapis MPO (OverlayTestMode = 5) i przywrócenie (usunięcie wpisu):
+    /// `cargo test tune_mpo_roundtrip --release -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn tune_mpo_roundtrip() {
+        let t = super::REG_TWEAKS.iter().find(|t| t.key == "mpo").unwrap();
+        let before = super::reg::get_dword(t.root, t.path, t.value);
+        let backup = std::env::temp_dir().join("tc-mpo-test-backup.json");
+        std::env::set_var("TC_TUNE_BACKUP", &backup);
+        super::set("mpo", true).unwrap();
+        let on = super::reg::get_dword(t.root, t.path, t.value);
+        super::set("mpo", false).unwrap();
+        let after = super::reg::get_dword(t.root, t.path, t.value);
+        let _ = std::fs::remove_file(backup);
+        println!("przed {before:?}, po włączeniu {on:?}, po przywróceniu {after:?}");
+        assert_eq!(on, Some(5));
+        assert_eq!(after, before);
     }
 }
