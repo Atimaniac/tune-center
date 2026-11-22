@@ -12,6 +12,7 @@ pub mod games;
 #[cfg(windows)]
 mod registry;
 pub mod rootsig;
+pub mod state;
 pub mod unity;
 pub mod unreal;
 pub mod unreal_pak;
@@ -23,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use eframe::egui::{self, RichText};
 
 use crate::i18n::tr;
-use crate::theme::{accent, muted, warn};
+use crate::theme::{self, accent, muted, warn};
 use engine::{Engine, Info, ShaderKind};
 use games::Game;
 
@@ -50,6 +51,26 @@ pub struct ShaderTab {
     /// Czyszczenie shaderów gier i gra czekająca na potwierdzenie.
     cleans: std::collections::HashMap<String, warm::Clean>,
     confirm_clean: Option<String>,
+    /// Zapisane wyniki kompilacji (`shader-state.json`).
+    saved: state::Saved,
+    /// Kompilacje w toku: gra → dane do zapisania po zakończeniu.
+    tracking: std::collections::HashMap<String, Track>,
+    /// Kolejka gier do kompilacji (identyfikatory, po kolei).
+    queue: std::collections::VecDeque<String>,
+    /// Ostatni komunikat kolejki (np. gra pominięta, bo była uruchomiona).
+    queue_note: Option<String>,
+    /// Rozmiary pamięci podręcznej gier liczone w tle po kompilacji.
+    sizes: Arc<Mutex<Vec<(String, Option<u64>)>>>,
+    /// Bieżąca wersja sterownika NVIDIA (z `tick`).
+    driver: Option<String>,
+}
+
+/// Kompilacja w toku - dane do zapisu wyniku.
+struct Track {
+    api: Api,
+    exe: String,
+    started: std::time::Instant,
+    stamp: String,
 }
 
 /// Folder pamięci podręcznej shaderów DirectX sterownika Nvidia.
@@ -167,6 +188,210 @@ impl ShaderTab {
             apis: Default::default(),
             cleans: Default::default(),
             confirm_clean: None,
+            saved: state::load(),
+            tracking: Default::default(),
+            queue: Default::default(),
+            queue_note: None,
+            sizes: Arc::default(),
+            driver: None,
+        }
+    }
+
+    /// Uruchamia kompilację gry i zaczyna ją śledzić (wynik trafia do stanu).
+    fn start_compile(
+        &mut self,
+        e: &Entry,
+        api: Api,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<(), String> {
+        let (exe, job, _) = job_for(e, api)?.ok_or_else(|| {
+            tr(
+                "Nie ma czego kompilować dla tego API.",
+                "Nothing to compile for this API.",
+            )
+            .to_owned()
+        })?;
+        #[cfg(windows)]
+        if warm::process_running(&exe) {
+            return Err(crate::trf!(
+                "{} jest uruchomiona - kompilacja po zamknięciu gry.",
+                "{} is running - compiling after the game closes.",
+                e.game.name
+            ));
+        }
+        self.cleans
+            .entry(e.game.id.clone())
+            .or_default()
+            .state
+            .lock()
+            .unwrap()
+            .clone_from(&warm::CleanState::Idle);
+        self.warms
+            .entry(e.game.id.clone())
+            .or_default()
+            .start(&exe, job, wake);
+        self.tracking.insert(
+            e.game.id.clone(),
+            Track {
+                api,
+                exe,
+                started: std::time::Instant::now(),
+                stamp: state::stamp(&e.info),
+            },
+        );
+        Ok(())
+    }
+
+    /// Stan gry na liście (z zapisanego wyniku, sterownika i plików gry).
+    fn status(&self, e: &Entry) -> state::Status {
+        state::status(
+            self.saved.games.get(&e.game.id),
+            &e.info,
+            self.driver.as_deref(),
+        )
+    }
+
+    /// Gry, które da się skompilować i które tego wymagają.
+    fn needing(&self) -> Vec<String> {
+        let scan = self.scan.lock().unwrap();
+        scan.entries
+            .iter()
+            .flatten()
+            .filter(|e| {
+                plan(&e.info).1
+                    && self.status(e).needs_compile()
+                    && !self.tracking.contains_key(&e.game.id)
+                    && !self.queue.contains(&e.game.id)
+            })
+            .map(|e| e.game.id.clone())
+            .collect()
+    }
+
+    /// Dopisuje gry do kolejki (bez powtórzeń i bez gry właśnie kompilowanej).
+    fn enqueue(&mut self, ids: Vec<String>) {
+        for id in ids {
+            if !self.queue.contains(&id) && !self.tracking.contains_key(&id) {
+                self.queue.push_back(id);
+            }
+        }
+    }
+
+    /// Wołane regularnie z `App::logic` (także przy ukrytym oknie): zapis
+    /// wyników zakończonych kompilacji, następna gra z kolejki, automatyczna
+    /// kompilacja po nowym sterowniku.
+    pub fn tick(&mut self, driver: Option<&str>, ctx: &egui::Context) {
+        self.driver = driver.map(state::short_driver);
+
+        // Zakończone kompilacje → zapis wyniku i pomiar pamięci podręcznej gry.
+        let finished: Vec<(String, warm::Progress)> = self
+            .tracking
+            .keys()
+            .filter_map(|id| {
+                let p = self.warms.get(id)?.progress.lock().unwrap().clone();
+                matches!(p.phase, warm::Phase::Done | warm::Phase::Failed(_))
+                    .then(|| (id.clone(), p))
+            })
+            .collect();
+        for (id, p) in finished {
+            let Some(t) = self.tracking.remove(&id) else {
+                continue;
+            };
+            if p.phase != warm::Phase::Done {
+                continue;
+            }
+            self.saved.games.insert(
+                id.clone(),
+                state::Record {
+                    when: crate::bench::now_text(),
+                    driver: self.driver.clone().unwrap_or_default(),
+                    api: if t.api == Api::Dx12 { "DX12" } else { "DX11" }.into(),
+                    ok: p.ok,
+                    failed: p.failed,
+                    secs: t.started.elapsed().as_secs(),
+                    cache_bytes: None,
+                    stamp: t.stamp,
+                },
+            );
+            state::save(&self.saved);
+            let (sizes, exe, ctx2) = (self.sizes.clone(), t.exe, ctx.clone());
+            std::thread::spawn(move || {
+                let bytes = warm::game_cache_bytes(&exe).ok();
+                sizes.lock().unwrap().push((id, bytes));
+                ctx2.request_repaint();
+            });
+        }
+        let measured: Vec<_> = std::mem::take(&mut *self.sizes.lock().unwrap());
+        if !measured.is_empty() {
+            for (id, bytes) in measured {
+                if let Some(r) = self.saved.games.get_mut(&id) {
+                    r.cache_bytes = bytes;
+                }
+            }
+            state::save(&self.saved);
+        }
+
+        // Automatyczna kompilacja po instalacji nowego sterownika.
+        if self.saved.auto_after_driver {
+            if let Some(d) = self.driver.clone() {
+                let scanned = self.scan.lock().unwrap().entries.is_some();
+                if !scanned {
+                    let ctx2 = ctx.clone();
+                    self.rescan(move || ctx2.request_repaint());
+                } else if self.saved.auto_driver != d {
+                    let ids: Vec<String> = {
+                        let scan = self.scan.lock().unwrap();
+                        scan.entries
+                            .iter()
+                            .flatten()
+                            .filter(|e| {
+                                plan(&e.info).1
+                                    && matches!(self.status(e), state::Status::NewDriver { .. })
+                            })
+                            .map(|e| e.game.id.clone())
+                            .collect()
+                    };
+                    self.enqueue(ids);
+                    self.saved.auto_driver = d;
+                    state::save(&self.saved);
+                }
+            }
+        }
+
+        // Następna gra z kolejki, gdy nic się nie kompiluje.
+        if self.tracking.is_empty() {
+            while let Some(id) = self.queue.pop_front() {
+                let entry = {
+                    let scan = self.scan.lock().unwrap();
+                    scan.entries
+                        .iter()
+                        .flatten()
+                        .find(|e| e.game.id == id)
+                        .map(|e| Entry {
+                            game: e.game.clone(),
+                            info: e.info.clone(),
+                        })
+                };
+                let Some(e) = entry else { continue };
+                let choice = self.apis.get(&id).copied().unwrap_or_default();
+                let api = match resolve_api(choice, &api_options(&e.info)) {
+                    Ok(a) => a,
+                    Err(why) => {
+                        self.queue_note = Some(format!("{}: {why}", e.game.name));
+                        continue;
+                    }
+                };
+                let ctx2 = ctx.clone();
+                match self.start_compile(&e, api, move || ctx2.request_repaint()) {
+                    Ok(()) => {
+                        self.queue_note = None;
+                        break;
+                    }
+                    Err(why) => self.queue_note = Some(why),
+                }
+            }
+        }
+        if !self.tracking.is_empty() || !self.queue.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
     }
 
@@ -251,7 +476,19 @@ impl ShaderTab {
             .color(muted()),
         );
         ui.add_space(6.0);
+        self.queue_ui(ui);
+        ui.add_space(6.0);
 
+        // Stan gier liczony przed zablokowaniem listy (status() czyta zapis).
+        let statuses: std::collections::HashMap<String, state::Status> = {
+            let scan = self.scan.lock().unwrap();
+            scan.entries
+                .iter()
+                .flatten()
+                .map(|e| (e.game.id.clone(), self.status(e)))
+                .collect()
+        };
+        let mut request: Option<Api> = None;
         let scan = self.scan.lock().unwrap();
         let Some(entries) = &scan.entries else {
             return;
@@ -263,7 +500,7 @@ impl ShaderTab {
         let filter = self.filter.to_lowercase();
         let mut clicked: Option<String> = None;
         egui::Grid::new("shader_games")
-            .num_columns(6)
+            .num_columns(7)
             .striped(true)
             .spacing([14.0, 6.0])
             .show(ui, |ui| {
@@ -274,6 +511,7 @@ impl ShaderTab {
                     "API",
                     tr("Shadery", "Shaders"),
                     tr("Kompilacja z góry", "Precompile"),
+                    tr("Stan", "Status"),
                 ] {
                     ui.label(RichText::new(h).strong());
                 }
@@ -308,6 +546,61 @@ impl ShaderTab {
                     });
                     let (text, possible) = plan(&e.info);
                     ui.label(RichText::new(text).color(if possible { accent() } else { muted() }));
+                    // Stan: kompilacja w toku, kolejka albo wynik ostatniej kompilacji.
+                    let id = &e.game.id;
+                    let (text, color) = if self.tracking.contains_key(id) {
+                        let p = self
+                            .warms
+                            .get(id)
+                            .map(|w| w.progress.lock().unwrap().clone())
+                            .unwrap_or_default();
+                        let pct = if p.total > 0 {
+                            p.done * 100 / p.total
+                        } else {
+                            0
+                        };
+                        (
+                            crate::trf!("Kompilacja... {pct}%", "Compiling... {pct}%"),
+                            accent(),
+                        )
+                    } else if self.queue.contains(id) {
+                        (tr("W kolejce", "Queued").to_owned(), accent())
+                    } else if !possible {
+                        (String::new(), muted())
+                    } else {
+                        match statuses.get(id) {
+                            Some(state::Status::Fresh) => (
+                                crate::trf!(
+                                    "Skompilowano {}",
+                                    "Compiled {}",
+                                    self.saved
+                                        .games
+                                        .get(id)
+                                        .map(|r| state::short_date(&r.when))
+                                        .unwrap_or_default()
+                                ),
+                                theme::ok(),
+                            ),
+                            Some(state::Status::NewDriver { .. }) => (
+                                tr(
+                                    "Nowy sterownik - skompiluj ponownie",
+                                    "New driver - compile again",
+                                )
+                                .to_owned(),
+                                warn(),
+                            ),
+                            Some(state::Status::GameUpdated) => (
+                                tr(
+                                    "Gra zaktualizowana - skompiluj ponownie",
+                                    "Game updated - compile again",
+                                )
+                                .to_owned(),
+                                warn(),
+                            ),
+                            _ => (tr("Nie kompilowano", "Not compiled").to_owned(), muted()),
+                        }
+                    };
+                    ui.label(RichText::new(text).color(color));
                     ui.end_row();
                 }
             });
@@ -380,6 +673,28 @@ impl ShaderTab {
                         let _ = std::process::Command::new("explorer").arg(&e.game.dir).spawn();
                     }
                 });
+                // Ostatnia kompilacja zapisana w stanie.
+                if let Some(r) = self.saved.games.get(&e.game.id) {
+                    let cache = r
+                        .cache_bytes
+                        .map(engine::human)
+                        .unwrap_or_else(|| tr("liczenie...", "measuring...").to_owned());
+                    ui.label(
+                        RichText::new(crate::trf!(
+                            "Ostatnia kompilacja: {} - sterownik {}, {}, shadery: {} (odrzucone: {}), czas: {} s, pamięć podręczna gry: {}",
+                            "Last compile: {} - driver {}, {}, shaders: {} (rejected: {}), time: {} s, game cache: {}",
+                            r.when,
+                            r.driver,
+                            r.api,
+                            r.ok,
+                            r.failed,
+                            r.secs,
+                            cache
+                        ))
+                        .small()
+                        .color(muted()),
+                    );
+                }
                 compile_ui(
                     ui,
                     e,
@@ -387,8 +702,96 @@ impl ShaderTab {
                     &mut self.apis,
                     &mut self.cleans,
                     &mut self.confirm_clean,
+                    &mut request,
                 );
             });
+        }
+        // Kompilacja z przycisku: przez kolejkę zapisu wyników.
+        let start = request.and_then(|api| {
+            let e = self
+                .selected
+                .as_deref()
+                .and_then(|id| entries.iter().find(|e| e.game.id == id))?;
+            Some((
+                Entry {
+                    game: e.game.clone(),
+                    info: e.info.clone(),
+                },
+                api,
+            ))
+        });
+        drop(scan);
+        if let Some((e, api)) = start {
+            let ctx = ui.ctx().clone();
+            self.queue.retain(|id| *id != e.game.id);
+            if let Err(why) = self.start_compile(&e, api, move || ctx.request_repaint()) {
+                self.queue_note = Some(why);
+            }
+        }
+    }
+
+    /// Kolejka: „Kompiluj wszystkie wymagające”, postęp i automatyczna
+    /// kompilacja po nowym sterowniku.
+    fn queue_ui(&mut self, ui: &mut egui::Ui) {
+        let needing = self.needing();
+        ui.horizontal_wrapped(|ui| {
+            let label = crate::trf!(
+                "Kompiluj wszystkie wymagające ({})",
+                "Compile all that need it ({})",
+                needing.len()
+            );
+            if ui
+                .add_enabled(!needing.is_empty(), egui::Button::new(label))
+                .clicked()
+            {
+                self.enqueue(needing.clone());
+                self.queue_note = None;
+            }
+            if !self.queue.is_empty() || !self.tracking.is_empty() {
+                let now = self.tracking.keys().next().and_then(|id| {
+                    let scan = self.scan.lock().unwrap();
+                    scan.entries
+                        .iter()
+                        .flatten()
+                        .find(|e| &e.game.id == id)
+                        .map(|e| e.game.name.clone())
+                });
+                ui.label(
+                    RichText::new(crate::trf!(
+                        "Teraz: {} - w kolejce: {}",
+                        "Now: {} - queued: {}",
+                        now.unwrap_or_else(|| "-".into()),
+                        self.queue.len()
+                    ))
+                    .color(accent()),
+                );
+                if !self.queue.is_empty()
+                    && ui.button(tr("Wyczyść kolejkę", "Clear queue")).clicked()
+                {
+                    self.queue.clear();
+                }
+            }
+        });
+        let mut auto = self.saved.auto_after_driver;
+        if ui
+            .checkbox(
+                &mut auto,
+                tr(
+                    "Po instalacji nowego sterownika NVIDIA kompiluj ponownie w tle gry, które były skompilowane (sterownik czyści pamięć podręczną shaderów)",
+                    "After a new NVIDIA driver is installed, recompile in the background the games that were compiled (the driver clears its shader cache)",
+                ),
+            )
+            .changed()
+        {
+            self.saved.auto_after_driver = auto;
+            // Bieżący sterownik uznajemy za obsłużony - auto dotyczy następnych.
+            if auto {
+                self.saved.auto_driver = self.driver.clone().unwrap_or_default();
+            }
+            state::save(&self.saved);
+        }
+        if let Some(note) = &self.queue_note {
+            ui.label(RichText::new(note).small().color(warn()));
         }
     }
 }
@@ -447,6 +850,77 @@ fn api_options(info: &Info) -> ApiOptions {
     ApiOptions { dx11, dx12, auto }
 }
 
+/// API kompilacji z wyboru użytkownika (AUTO = API gry, jeśli obsługiwane).
+fn resolve_api(choice: Api, options: &ApiOptions) -> Result<Api, &'static str> {
+    match choice {
+        Api::Auto => options.auto,
+        a => Ok(a),
+    }
+}
+
+/// Zadanie kompilacji gry dla API: (nazwa .exe gry, zadanie, opis).
+/// `Ok(None)` - dla tego API i silnika nie ma czego kompilować.
+fn job_for(e: &Entry, api: Api) -> Result<Option<(String, warm::Job, String)>, &'static str> {
+    let d3d11 = api == Api::Dx11;
+    let dump_of = |k: ShaderKind| e.info.shaders.iter().find(|s| s.kind == k);
+    let dagor_dx12 = (api == Api::Dx12)
+        .then(|| dump_of(ShaderKind::DagorDx12))
+        .flatten();
+    let dagor_dx11 = (d3d11 && e.info.engine == Engine::Dagor)
+        .then(|| dump_of(ShaderKind::DagorDx11))
+        .flatten();
+    let no_exe = tr(
+        "Nie znaleziono pliku .exe gry w win64.",
+        "Game .exe not found in win64.",
+    );
+    Ok(Some(if let Some(dump) = dagor_dx11 {
+        let exe = warm::dagor_game_exe(&e.game.dir).ok_or(no_exe)?;
+        let about = crate::trf!(
+            "Sterownik Nvidia kompiluje wszystkie shadery DirectX 11 ze zrzutu gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
+            "The Nvidia driver compiles every DirectX 11 shader from the game's dump into its cache under the name {exe}, as the game would. The game must be closed."
+        );
+        let job = warm::Job::DagorDx11 {
+            dump: dump.path.clone(),
+        };
+        (exe, job, about)
+    } else if let Some(dump) = dagor_dx12 {
+        let exe = warm::dagor_game_exe(&e.game.dir).ok_or(no_exe)?;
+        let about = crate::trf!(
+            "Sterownik Nvidia kompiluje shadery gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta. Teraz: shadery obliczeniowe (compute); graficzne w następnej wersji.",
+            "The Nvidia driver compiles the game's shaders into its cache under the name {exe}, as the game would. The game must be closed. Now: compute shaders; graphics shaders in the next version."
+        );
+        let job = warm::Job::Dagor {
+            dump: dump.path.clone(),
+            cbv_ranges: warm::dagor_cbv_ranges(&e.game.dir),
+        };
+        (exe, job, about)
+    } else if d3d11 && e.info.engine == Engine::Unity {
+        let (data_dir, exe) = unity::game_layout(&e.game.dir).ok_or(tr(
+            "Nie znaleziono pliku .exe i folderu _Data gry.",
+            "Game .exe and _Data folder not found.",
+        ))?;
+        let about = crate::trf!(
+            "Tune Center wyszukuje w plikach gry wszystkie shadery DirectX 11 (ze wszystkimi wariantami), a sterownik Nvidia kompiluje je do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
+            "Tune Center finds every DirectX 11 shader in the game files (with all variants) and the Nvidia driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
+        );
+        (exe, warm::Job::Unity { data_dir }, about)
+    } else if d3d11 && e.info.engine == Engine::Unreal {
+        let missing = tr(
+            "Nie znaleziono paczki .pak albo pliku *-Shipping.exe gry.",
+            "Game .pak or *-Shipping.exe not found.",
+        );
+        let pak = unreal_pak::find_pak(&e.game.dir).ok_or(missing)?;
+        let exe = warm::unreal_game_exe(&e.game.dir).ok_or(missing)?;
+        let about = crate::trf!(
+            "Tune Center czyta archiwa shaderów DirectX 11 (SM5) z paczki gry, a sterownik Nvidia kompiluje je do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
+            "Tune Center reads the DirectX 11 (SM5) shader archives from the game package and the Nvidia driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
+        );
+        (exe, warm::Job::Unreal { pak }, about)
+    } else {
+        return Ok(None);
+    }))
+}
+
 /// Kompilacja z góry dla wybranej gry: DirectX 11 (Unity, Dagor) albo
 /// DirectX 12 (Dagor, compute), według wyboru API.
 fn compile_ui(
@@ -456,6 +930,7 @@ fn compile_ui(
     choices: &mut std::collections::HashMap<String, Api>,
     cleans: &mut std::collections::HashMap<String, warm::Clean>,
     confirm: &mut Option<String>,
+    request: &mut Option<Api>,
 ) {
     let missing = |ui: &mut egui::Ui, text: &str| {
         ui.label(RichText::new(text).color(warn()));
@@ -516,103 +991,21 @@ fn compile_ui(
             }
         };
     });
-    let api = match *choice {
-        Api::Auto => match options.auto {
-            Ok(a) => a,
-            Err(why) => {
-                missing(ui, why);
-                return;
-            }
-        },
-        a => a,
+    let api = match resolve_api(*choice, &options) {
+        Ok(a) => a,
+        Err(why) => {
+            missing(ui, why);
+            return;
+        }
     };
     let d3d11 = api == Api::Dx11;
-    let dump_of = |k: ShaderKind| e.info.shaders.iter().find(|s| s.kind == k);
-    let dagor_dx12 = (api == Api::Dx12)
-        .then(|| dump_of(ShaderKind::DagorDx12))
-        .flatten();
-    let dagor_dx11 = (d3d11 && e.info.engine == Engine::Dagor)
-        .then(|| dump_of(ShaderKind::DagorDx11))
-        .flatten();
-    let (exe, job, about) = if let Some(dump) = dagor_dx11 {
-        let Some(exe) = warm::dagor_game_exe(&e.game.dir) else {
-            missing(
-                ui,
-                tr(
-                    "Nie znaleziono pliku .exe gry w win64.",
-                    "Game .exe not found in win64.",
-                ),
-            );
+    let (exe, _job, about) = match job_for(e, api) {
+        Ok(Some(j)) => j,
+        Ok(None) => return,
+        Err(why) => {
+            missing(ui, why);
             return;
-        };
-        let about = crate::trf!(
-            "Sterownik Nvidia kompiluje wszystkie shadery DirectX 11 ze zrzutu gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
-            "The Nvidia driver compiles every DirectX 11 shader from the game's dump into its cache under the name {exe}, as the game would. The game must be closed."
-        );
-        (
-            exe,
-            warm::Job::DagorDx11 {
-                dump: dump.path.clone(),
-            },
-            about,
-        )
-    } else if let Some(dump) = dagor_dx12 {
-        let Some(exe) = warm::dagor_game_exe(&e.game.dir) else {
-            missing(
-                ui,
-                tr(
-                    "Nie znaleziono pliku .exe gry w win64.",
-                    "Game .exe not found in win64.",
-                ),
-            );
-            return;
-        };
-        let about = crate::trf!(
-            "Sterownik Nvidia kompiluje shadery gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta. Teraz: shadery obliczeniowe (compute); graficzne w następnej wersji.",
-            "The Nvidia driver compiles the game's shaders into its cache under the name {exe}, as the game would. The game must be closed. Now: compute shaders; graphics shaders in the next version."
-        );
-        let job = warm::Job::Dagor {
-            dump: dump.path.clone(),
-            cbv_ranges: warm::dagor_cbv_ranges(&e.game.dir),
-        };
-        (exe, job, about)
-    } else if d3d11 && e.info.engine == Engine::Unity {
-        let Some((data_dir, exe)) = unity::game_layout(&e.game.dir) else {
-            missing(
-                ui,
-                tr(
-                    "Nie znaleziono pliku .exe i folderu _Data gry.",
-                    "Game .exe and _Data folder not found.",
-                ),
-            );
-            return;
-        };
-        let about = crate::trf!(
-            "Tune Center wyszukuje w plikach gry wszystkie shadery DirectX 11 (ze wszystkimi wariantami), a sterownik Nvidia kompiluje je do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
-            "Tune Center finds every DirectX 11 shader in the game files (with all variants) and the Nvidia driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
-        );
-        (exe, warm::Job::Unity { data_dir }, about)
-    } else if d3d11 && e.info.engine == Engine::Unreal {
-        let (Some(pak), Some(exe)) = (
-            unreal_pak::find_pak(&e.game.dir),
-            warm::unreal_game_exe(&e.game.dir),
-        ) else {
-            missing(
-                ui,
-                tr(
-                    "Nie znaleziono paczki .pak albo pliku *-Shipping.exe gry.",
-                    "Game .pak or *-Shipping.exe not found.",
-                ),
-            );
-            return;
-        };
-        let about = crate::trf!(
-            "Tune Center czyta archiwa shaderów DirectX 11 (SM5) z paczki gry, a sterownik Nvidia kompiluje je do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
-            "Tune Center reads the DirectX 11 (SM5) shader archives from the game package and the Nvidia driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
-        );
-        (exe, warm::Job::Unreal { pak }, about)
-    } else {
-        return;
+        }
     };
     ui.label(
         RichText::new(tr("Kompilacja shaderów", "Shader compilation"))
@@ -634,9 +1027,7 @@ fn compile_ui(
             )
             .clicked()
         {
-            *c.state.lock().unwrap() = warm::CleanState::Idle;
-            let ctx = ui.ctx().clone();
-            w.start(&exe, job, move || ctx.request_repaint());
+            *request = Some(api);
         }
         if ui
             .add_enabled(

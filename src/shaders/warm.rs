@@ -872,6 +872,32 @@ fn clean_game(exe: &str) -> Result<(usize, u64, usize), String> {
         ));
     }
     let dir = super::nvidia_cache_dir().ok_or("brak folderu DXCache")?;
+    let keys = game_cache_keys(exe)?;
+    let (mut files, mut bytes, mut locked) = (0, 0, 0);
+    for e in std::fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !in_family(&name, &keys) {
+            continue;
+        }
+        let len = e.metadata().map(|m| m.len()).unwrap_or(0);
+        match std::fs::remove_file(e.path()) {
+            Ok(()) => {
+                files += 1;
+                bytes += len;
+            }
+            Err(_) => locked += 1,
+        }
+    }
+    clean_d3dscache(exe, &mut files, &mut bytes, &mut locked);
+    Ok((files, bytes, locked))
+}
+
+/// Klucze plików pamięci podręcznej sterownika NVIDIA dla gry: proces
+/// pomiaru uruchomiony pod nazwą jej .exe (patrz `run_cache_probe`).
+fn game_cache_keys(exe: &str) -> Result<Vec<u32>, String> {
     let host = staged_host(exe)?;
     let mut cmd = std::process::Command::new(&host);
     cmd.arg(HOST_ARG_PROBE)
@@ -904,38 +930,45 @@ fn clean_game(exe: &str) -> Result<(usize, u64, usize), String> {
             .to_string(),
         });
     }
-    let (mut files, mut bytes, mut locked) = (0, 0, 0);
-    for e in std::fs::read_dir(&dir)
+    Ok(keys)
+}
+
+/// Rozmiar pamięci podręcznej gry: pliki sterownika NVIDIA (DXCache) i
+/// foldery D3DSCache tej gry. Nic nie usuwa. Gra musi być zamknięta.
+pub fn game_cache_bytes(exe: &str) -> Result<u64, String> {
+    #[cfg(windows)]
+    if process_running(exe) {
+        return Err(crate::i18n::tr("gra jest uruchomiona", "the game is running").into());
+    }
+    let dir = super::nvidia_cache_dir().ok_or("brak folderu DXCache")?;
+    let keys = game_cache_keys(exe)?;
+    let mut bytes: u64 = std::fs::read_dir(&dir)
         .map_err(|e| e.to_string())?
         .flatten()
-    {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if !in_family(&name, &keys) {
-            continue;
-        }
-        let len = e.metadata().map(|m| m.len()).unwrap_or(0);
-        match std::fs::remove_file(e.path()) {
-            Ok(()) => {
-                files += 1;
-                bytes += len;
-            }
-            Err(_) => locked += 1,
-        }
-    }
-    // Pamięć podręczna shaderów Windows (D3DSCache): DirectX 12 gry, kopie
-    // robocze SCSKiller i nasze kompilacje - folder na każdą ścieżkę .exe.
+        .filter(|e| in_family(&e.file_name().to_string_lossy(), &keys))
+        .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+        .sum();
+    bytes += d3dscache_folders(exe)
+        .iter()
+        .map(|d| dir_size(d))
+        .sum::<u64>();
+    Ok(bytes)
+}
+
+/// Pamięć podręczna shaderów Windows (D3DSCache): DirectX 12 gry, kopie
+/// robocze SCSKiller i nasze kompilacje - folder na każdą ścieżkę .exe.
+fn clean_d3dscache(exe: &str, files: &mut usize, bytes: &mut u64, locked: &mut usize) {
     for dir in d3dscache_folders(exe) {
         let size = dir_size(&dir);
         let count = std::fs::read_dir(&dir).map(|r| r.count()).unwrap_or(0);
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => {
-                files += count;
-                bytes += size;
+                *files += count;
+                *bytes += size;
             }
-            Err(_) => locked += count.max(1),
+            Err(_) => *locked += count.max(1),
         }
     }
-    Ok((files, bytes, locked))
 }
 
 // --------------------------- strona interfejsu ------------------------------
@@ -1276,5 +1309,20 @@ mod clean_list {
         for d in super::d3dscache_folders(&exe) {
             println!("{} {} MB", d.display(), super::dir_size(&d) >> 20);
         }
+    }
+}
+
+#[cfg(test)]
+mod cache_size {
+    /// Rozmiar pamięci podręcznej gry bez usuwania:
+    /// `TC_CLEAN_EXE=<exe> cargo test game_cache_size --release -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn game_cache_size() {
+        let exe = std::env::var("TC_CLEAN_EXE").expect("TC_CLEAN_EXE");
+        println!(
+            "{exe}: {:?}",
+            super::game_cache_bytes(&exe).map(|b| b >> 20)
+        );
     }
 }

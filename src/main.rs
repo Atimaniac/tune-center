@@ -1187,7 +1187,7 @@ impl eframe::App for App {
             .tick(self.bridge.as_ref().ok(), self.gpu_fans.as_ref());
         // Niepotwierdzona zmiana ekranu wraca po 15 s, nawet gdy okno jest
         // schowane w zasobniku.
-        self.nvcp.tick();
+        self.nvcp.tick(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

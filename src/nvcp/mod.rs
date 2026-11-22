@@ -193,7 +193,14 @@ impl NvcpTab {
 
     /// Wołane w każdej klatce (także przy oknie w zasobniku): cofa zmianę
     /// ekranu, której nie potwierdzono na czas.
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        // Kolejka kompilacji shaderów (także przy schowanym oknie); wersja
+        // sterownika z NVAPI (wczytywanego raz).
+        if self.api.is_none() {
+            let _ = self.api();
+        }
+        let driver = self.driver.clone();
+        self.shaders.tick(driver.as_deref(), ctx);
         if self
             .pending
             .as_ref()

@@ -238,6 +238,13 @@ udostępnia pobierania gotowych shaderów; Tune Center czyta je z plików gry.
   w procesie nazwanym jak gra, partiami (każda na nowym urządzeniu, z
   czekaniem na zakończenie kompilacji w sterowniku). Pillars of Eternity:
   2640 shaderów; Last Epoch: ok. 196 tys. shaderów, ok. 17 min.
+- **Stan i kolejka (gotowe)**: kolumna „Stan” (Skompilowano dd.mm /
+  Nowy sterownik - skompiluj ponownie / Gra zaktualizowana / Nie
+  kompilowano), szczegóły ostatniej kompilacji (sterownik, API, liczby,
+  czas, rozmiar pamięci podręcznej gry), przycisk „Kompiluj wszystkie
+  wymagające” (kolejka - gry po kolei, uruchomione gry są pomijane) i
+  opcja kompilacji w tle po instalacji nowego sterownika NVIDIA (sterownik
+  czyści swoją pamięć podręczną). Wyniki w `shader-state.json`.
 - **Unreal Engine DirectX 11 (gotowy)**: gry z klasyczną paczką `.pak`
   (wersja 10-11) bez szyfrowania. Tune Center czyta archiwa shaderów SM5
   (`ShaderArchive-*-PCD3D_SM5.ushaderbytecode`) z paczki, rozpakowuje Oodle
