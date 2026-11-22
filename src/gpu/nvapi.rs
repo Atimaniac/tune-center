@@ -795,7 +795,39 @@ impl Backend for NvApi {
             Domain::Memory => CLOCK_DOMAIN_MEMORY,
         };
         p.pstates[0].clocks[0].freq_delta.value = khz;
-        call("NvAPI_GPU_SetPstates20", self.set_pstates, h, &mut *p)
+
+        // Zapis Pstates20 zeruje krzywą V/F (zmierzone na RTX 5070: zmiana
+        // offsetu pamięci wyzerowała wszystkie 63 punkty undervoltingu).
+        // Krzywą odczytujemy przed zapisem i przywracamy, gdy sterownik ją zmienił.
+        let saved = self
+            .read_mask(h)
+            .and_then(|mask| self.read_table(h, mask).map(|t| (mask, t)))
+            .ok();
+        call("NvAPI_GPU_SetPstates20", self.set_pstates, h, &mut *p)?;
+        if let Some((mask, mut table)) = saved {
+            let changed = self.read_table(h, mask).is_ok_and(|now| {
+                (0..128).any(|i| {
+                    mask_bit(&mask, i)
+                        && now.entries[i].freq_delta_khz != table.entries[i].freq_delta_khz
+                })
+            });
+            if changed {
+                call(
+                    "NvAPI_GPU_SetClockBoostTable",
+                    self.set_table,
+                    h,
+                    &mut *table,
+                )
+                .map_err(|e| {
+                    crate::trf!(
+                        "offset zapisany, ale nie udało się przywrócić krzywej V/F: {}",
+                        "offset written, but the V/F curve could not be restored: {}",
+                        e
+                    )
+                })?;
+            }
+        }
+        Ok(())
     }
 
     fn curve(&mut self, gpu: usize) -> Result<Vec<CurvePoint>> {
@@ -1094,5 +1126,91 @@ mod thermal_settings_probe {
             }
             println!();
         }
+    }
+}
+
+#[cfg(test)]
+mod interplay {
+    //! Czy zapis pamięci zmienia krzywą i odwrotnie (zapis z przywróceniem):
+    //! `cargo test nvapi_mem_curve_interplay --release -- --ignored --nocapture`
+    use super::*;
+
+    fn snapshot(api: &mut NvApi) -> (i32, i32, Vec<(usize, i32)>) {
+        let o = api.offsets(0).expect("offsets");
+        let c = api.curve(0).expect("curve");
+        (
+            o.core.map(|x| x.value_khz).unwrap_or(0),
+            o.mem.map(|x| x.value_khz).unwrap_or(0),
+            c.iter().map(|p| (p.index, p.delta_khz)).collect(),
+        )
+    }
+
+    fn diff(a: &[(usize, i32)], b: &[(usize, i32)]) -> usize {
+        a.iter().zip(b).filter(|(x, y)| x.1 != y.1).count()
+    }
+
+    #[test]
+    #[ignore]
+    fn nvapi_mem_curve_interplay() {
+        let mut api = NvApi::load().expect("NVAPI");
+        let wait = || std::thread::sleep(std::time::Duration::from_millis(500));
+        let (core0, mem0, curve0) = snapshot(&mut api);
+        println!(
+            "start: rdzeń {} kHz, pamięć {} kHz, punkty z deltą≠0: {}",
+            core0,
+            mem0,
+            curve0.iter().filter(|p| p.1 != 0).count()
+        );
+
+        // A: zmiana pamięci.
+        api.set_offset(0, Domain::Memory, mem0 - 50_000).unwrap();
+        wait();
+        let (core1, mem1, curve1) = snapshot(&mut api);
+        println!(
+            "A pamięć -50 MHz: pamięć {mem1}, rdzeń {core1}, zmienione punkty krzywej: {}",
+            diff(&curve0, &curve1)
+        );
+        assert!(
+            curve0.iter().any(|p| p.1 != 0),
+            "krzywa bez zmian - test nic nie wykaże"
+        );
+        assert_eq!(diff(&curve0, &curve1), 0, "zapis pamięci zmienił krzywą");
+        api.set_offset(0, Domain::Memory, mem0).unwrap();
+        wait();
+
+        // B: zapis tej samej krzywej.
+        api.set_curve(0, &curve0).unwrap();
+        wait();
+        let (core2, mem2, curve2) = snapshot(&mut api);
+        println!(
+            "B ta sama krzywa: pamięć {mem2}, rdzeń {core2}, zmienione punkty: {}",
+            diff(&curve0, &curve2)
+        );
+
+        // C: zmiana jednego punktu krzywej (-15 MHz).
+        let mut changed = curve0.clone();
+        let k = changed.len() / 2;
+        changed[k].1 -= 15_000;
+        api.set_curve(0, &changed).unwrap();
+        wait();
+        let (core3, mem3, curve3) = snapshot(&mut api);
+        println!(
+            "C punkt {} -15 MHz: pamięć {mem3}, rdzeń {core3}, zmienione punkty: {}",
+            changed[k].0,
+            diff(&curve0, &curve3)
+        );
+        assert_eq!(mem3, mem0, "zapis krzywej zmienił pamięć");
+
+        // Przywrócenie (najpierw pamięć, potem krzywa) i sprawdzenie.
+        api.set_offset(0, Domain::Memory, mem0).unwrap();
+        api.set_curve(0, &curve0).unwrap();
+        wait();
+        let (core9, mem9, curve9) = snapshot(&mut api);
+        println!(
+            "koniec: rdzeń {core9}, pamięć {mem9}, różne punkty od startu: {}",
+            diff(&curve0, &curve9)
+        );
+        assert_eq!(mem9, mem0, "pamięć nie wróciła");
+        assert_eq!(diff(&curve0, &curve9), 0, "krzywa nie wróciła");
     }
 }
