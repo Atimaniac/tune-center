@@ -58,3 +58,14 @@ No code was copied from these projects; they were used as documentation.
   `NvApiDriverSettings.h`) and the DisplayConfiguration, DisplayColorControl
   and CustomTiming samples – the basis of the NVIDIA tab. The SDK code is not
   bundled; the program calls the driver through `nvapi64.dll`.
+- CUE4Parse (https://github.com/FabianFG/CUE4Parse, Apache-2.0): layout of
+  Unreal Engine `.pak` / IoStore containers and shader code archives
+  (`.ushaderbytecode`) used by shader pre-compilation.
+
+## oozextract (Rust crate)
+
+- Source: https://github.com/lvlvllvlvllvlvl/oozextract
+- License: MIT (as published; it is a Rust port of ooz by powzix, which is
+  distributed under the GPL)
+- Decompresses Oodle (Kraken / Mermaid / Selkie / Leviathan) data in Unreal
+  Engine game packages when the game does not ship `oo2core_*.dll`.

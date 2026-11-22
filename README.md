@@ -26,7 +26,7 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 
 - 🎮 **GPU** – core/memory clock offsets, a drag-and-drop **V/F curve editor** for undervolting, 5 profiles, apply on startup.
 - 🟢 **NVIDIA control panel** – 3D settings (global and per game), **DLSS overrides like the NVIDIA App** (presets, mode, Frame Generation), display, color/HDR, G-SYNC, custom resolutions – using only the public NVAPI SDK.
-- ⚡ **Shader pre-compilation** – compile a game's shaders ahead of time (Unity and Dagor engines) so the first match doesn't stutter, and clean the shader cache with one click.
+- ⚡ **Shader pre-compilation** – compile a game's shaders ahead of time (Unity, Unreal Engine and Dagor engines) so the first match doesn't stutter, and clean the shader cache with one click.
 - 🧠 **CPU** – Intel PL1/PL2, voltage offsets, IccMax and turbo ratios with an XTU-style live monitor; AMD Ryzen Curve Optimizer per core and PBO limits.
 - 🌀 **Fans** – motherboard and GPU fans: auto, fixed or temperature curve, with profiles that switch automatically while a game runs.
 - 🌡️ **Sensors & power** – key temperatures and CPU/GPU power with 2-minute charts, session energy and its cost.
@@ -57,7 +57,7 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 - **Info** – GPU-Z style rows: clocks, memory temperature, memory used, GPU / video engine / bus load, encoder, decoder, voltage; less important readings (PCIe TX/RX, power, % TDP) behind a *Hidden* button. Hover any chart for the exact value.
 - **3D settings** and **DLSS** – the NVIDIA Control Panel / NVIDIA App options, globally or per game, with a backup before the first change.
 - **Display, Color and HDR, G-SYNC, Custom resolutions** – resolution and refresh rate (with 15 s confirmation), color depth, HDR, VRR, custom timings.
-- **Shader compilation** – detects games from Steam, Epic, GOG, Ubisoft, EA and Xbox; pre-compiles shaders for Unity (DX11) and Dagor Engine (DX11/DX12) games; *Clean shaders* removes the game's NVIDIA and Windows (D3DSCache) shader caches.
+- **Shader compilation** – detects games from Steam, Epic, GOG, Ubisoft, EA and Xbox; pre-compiles shaders for Unity (DX11), Unreal Engine (DX11, unencrypted `.pak` games such as Palworld) and Dagor Engine (DX11/DX12) games; *Clean shaders* removes the game's NVIDIA and Windows (D3DSCache) shader caches.
 - **OLED fix** – one-click `vrrFrameSplitBehavior` driver tweak: with G-SYNC the driver keeps a 1× frame multiplier down to 48 FPS instead of doubling (e.g. 60 FPS → 120 Hz), which removes VRR brightness flicker on OLED monitors; re-applied automatically after a clean driver install.
 - **System** – Hardware-accelerated GPU scheduling (HAGS) toggle and Resizable BAR status.
 - **Driver updates** – checks the NVIDIA server for the latest Game Ready driver for your card (at startup and every 6 hours) and installs just the driver (with HDMI audio and PhysX, without NVIDIA App and telemetry) silently with one click.

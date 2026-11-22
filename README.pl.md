@@ -238,6 +238,14 @@ udostępnia pobierania gotowych shaderów; Tune Center czyta je z plików gry.
   w procesie nazwanym jak gra, partiami (każda na nowym urządzeniu, z
   czekaniem na zakończenie kompilacji w sterowniku). Pillars of Eternity:
   2640 shaderów; Last Epoch: ok. 196 tys. shaderów, ok. 17 min.
+- **Unreal Engine DirectX 11 (gotowy)**: gry z klasyczną paczką `.pak`
+  (wersja 10-11) bez szyfrowania. Tune Center czyta archiwa shaderów SM5
+  (`ShaderArchive-*-PCD3D_SM5.ushaderbytecode`) z paczki, rozpakowuje Oodle
+  (crate `oozextract`, albo `oo2core_*.dll` z gry) i kompiluje DXBC przez
+  Direct3D 11 pod nazwą `*-Shipping.exe` gry. API gry z `DefaultEngine.ini`
+  w paczce. Palworld: 56 690 shaderów, 5 min, ponownie 25 s. Gry z
+  szyfrowanymi paczkami (np. The Finals) są oznaczone jako nieobsługiwane;
+  IoStore (`.utoc`) i DirectX 12 - w przygotowaniu.
 - **Dagor Engine DirectX 11**: wszystkie shadery ze zrzutu
   `compiledShaders\game.ps50.shdump.bin` (kontenery DXBC) tą samą drogą co
   Unity. Active Matter: 8632 shadery, ok. 90 s.

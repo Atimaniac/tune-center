@@ -436,16 +436,35 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
         let _ = writeln!(o, "{line}");
         let _ = o.flush();
     };
-    // Źródło: "unity <folder _Data>" albo "dagor <zrzut .shdump.bin DX11>".
+    // Źródło: "unity <folder _Data>", "dagor <zrzut .shdump.bin DX11>" albo
+    // "unreal <paczka .pak>" (archiwa shaderów SM5 z paczki).
     let (kind, source) = match (args.first().map(String::as_str), args.get(1)) {
-        (Some(k @ ("unity" | "dagor")), Some(p)) => (k, p.clone()),
+        (Some(k @ ("unity" | "dagor" | "unreal")), Some(p)) => (k, p.clone()),
         (Some(p), None) => ("unity", p.to_owned()),
         _ => {
-            say("fatal użycie: --shader-warm-d3d11 <unity|dagor> <ścieżka>".into());
+            say("fatal użycie: --shader-warm-d3d11 <unity|dagor|unreal> <ścieżka>".into());
             return 2;
         }
     };
     let data_dir = &source;
+    // Unreal: archiwa SM5 (DXBC) wczytane w całości (Palworld: 191 + 9 MB).
+    let unreal_archives: Vec<(super::unreal_pak::Archive, Vec<u8>)> = if kind == "unreal" {
+        match super::unreal_pak::sm5_archives(Path::new(&source)) {
+            Ok(list) => list,
+            Err(e) => {
+                say(format!("fatal {e}"));
+                return 3;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    // (archiwum, shader) w jednej numeracji dla wątków skanujących.
+    let unreal_items: Vec<(usize, usize)> = unreal_archives
+        .iter()
+        .enumerate()
+        .flat_map(|(a, (arch, _))| (0..arch.shaders.len()).map(move |s| (a, s)))
+        .collect();
     let dagor_dump = if kind == "dagor" {
         match super::dagor::Dump::open(Path::new(&source)) {
             Ok(d) => Some(d),
@@ -467,16 +486,19 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
     say(format!("adapter {}", device.adapter));
     let mut device = Some(device);
 
-    let files = if dagor_dump.is_some() {
+    let files = if dagor_dump.is_some() || kind == "unreal" {
         Vec::new()
     } else {
         unity::candidate_files(Path::new(data_dir))
     };
     let scan_total = dagor_dump
         .as_ref()
-        .map_or(files.len(), |d| d.shader_count());
+        .map_or(files.len(), |d| d.shader_count())
+        .max(unreal_items.len());
     say(format!("scan 0 {scan_total}"));
     let next_file = AtomicUsize::new(0);
+    let next_item = AtomicUsize::new(0);
+    let items_done = AtomicUsize::new(0);
     let files_done = AtomicUsize::new(0);
     let found = AtomicUsize::new(0);
     let seen = Mutex::new(std::collections::HashSet::<[u8; 16]>::new());
@@ -510,6 +532,43 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
                     errors.lock().unwrap().push(e);
                 }
                 say(format!("scan {scan_total} {scan_total}"));
+            });
+        }
+        // Unreal: rozpakowanie (Oodle) i wycięcie DXBC, kilka wątków.
+        for _ in 0..if unreal_items.is_empty() { 0 } else { scanners } {
+            let tx = tx.clone();
+            let (items, archives, next_item, items_done, seen, found, errors, say) = (
+                &unreal_items,
+                &unreal_archives,
+                &next_item,
+                &items_done,
+                &seen,
+                &found,
+                &errors,
+                &say,
+            );
+            scope.spawn(move || loop {
+                let i = next_item.fetch_add(1, Relaxed);
+                let Some(&(a, s)) = items.get(i) else { break };
+                let (arch, bytes) = &archives[a];
+                match arch.code(bytes, s, None) {
+                    Ok(code) => unity::carve_dxbc(&code, |d| {
+                        if seen.lock().unwrap().insert(d.digest()) {
+                            found.fetch_add(1, Relaxed);
+                            let _ = tx.send((d.stage, d.code.to_vec()));
+                        }
+                    }),
+                    Err(e) => {
+                        let mut list = errors.lock().unwrap();
+                        if list.len() < 10 {
+                            list.push(e);
+                        }
+                    }
+                }
+                let n = items_done.fetch_add(1, Relaxed) + 1;
+                if n % 500 == 0 || n == items.len() {
+                    say(format!("scan {n} {}", items.len()));
+                }
             });
         }
         for _ in 0..scanners.min(files.len()) {
@@ -915,6 +974,8 @@ pub enum Job {
     Unity { data_dir: PathBuf },
     /// Zrzut shaderów Dagor DirectX 11 (kontenery DXBC).
     DagorDx11 { dump: PathBuf },
+    /// Paczka `.pak` gry Unreal (archiwa shaderów SM5, DirectX 11).
+    Unreal { pak: PathBuf },
 }
 
 /// Uruchomiona kompilacja jednej gry.
@@ -1007,6 +1068,9 @@ impl Warm {
                 Job::Unity { data_dir } => {
                     cmd.arg(HOST_ARG_D3D11).arg("unity").arg(data_dir);
                 }
+                Job::Unreal { pak } => {
+                    cmd.arg(HOST_ARG_D3D11).arg("unreal").arg(pak);
+                }
                 Job::DagorDx11 { dump } => {
                     cmd.arg(HOST_ARG_D3D11).arg("dagor").arg(dump);
                 }
@@ -1075,6 +1139,30 @@ pub fn apply_line(shared: &Arc<Mutex<Progress>>, line: &str) {
         "fatal" => p.phase = Phase::Failed(rest.to_owned()),
         _ => {}
     }
+}
+
+/// Plik .exe gry Unreal: `<Projekt>\Binaries\Win64\*-Shipping.exe` (właściwy
+/// proces gry; plik w głównym folderze to tylko program uruchamiający).
+pub fn unreal_game_exe(dir: &Path) -> Option<String> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|e| !e.file_name().eq_ignore_ascii_case("Engine"))
+        .filter_map(|e| std::fs::read_dir(e.path().join("Binaries").join("Win64")).ok())
+        .flat_map(|list| list.flatten())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let lower = name.to_lowercase();
+            (lower.ends_with(".exe") && !lower.contains("crash")).then(|| {
+                (
+                    lower.contains("-shipping"),
+                    e.metadata().map(|m| m.len()).unwrap_or(0),
+                    name,
+                )
+            })
+        })
+        .max()
+        .map(|(_, _, n)| n)
 }
 
 /// Plik .exe gry Dagor: największy w `win64` bez wariantu "-min-cpu".

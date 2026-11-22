@@ -1,6 +1,6 @@
 [package]
 name = "tunecenter"
-version = "0.21.1"
+version = "0.22.0"
 edition = "2021"
 description = "Tune Center: karta graficzna (Nvidia, AMD), wentylatory, czujniki i pobor mocy w jednym oknie (Windows)"
 
@@ -36,6 +36,7 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+oozextract = "0.5.7"
 
 # Ikona w zasobniku systemowym (tylko Windows).
 [target.'cfg(windows)'.dependencies]

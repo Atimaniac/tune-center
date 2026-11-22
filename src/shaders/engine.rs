@@ -53,6 +53,8 @@ pub struct Info {
     pub shaders: Vec<ShaderFile>,
     /// Recorder SCSKiller (d3d12.dll + scskiller.cfg) w folderze gry.
     pub scskiller_recorder: bool,
+    /// Unreal: paczki szyfrowane (shaderów nie da się odczytać).
+    pub encrypted: bool,
 }
 
 impl Info {
@@ -93,6 +95,7 @@ pub fn inspect(dir: &Path) -> Info {
         anti_cheat: Vec::new(),
         shaders: Vec::new(),
         scskiller_recorder: dir.join("scskiller.cfg").is_file(),
+        encrypted: false,
     };
 
     // Anty-cheat: tylko po nazwach plików i katalogów.
@@ -191,6 +194,25 @@ pub fn inspect(dir: &Path) -> Info {
         .collect();
     if !paks.is_empty() && dir.join("Engine").is_dir() {
         info.engine = Engine::Unreal;
+        // Szyfrowanie: pierwszy kontener gry (global.utoc jest zwykle jawny).
+        info.encrypted = paks
+            .iter()
+            .map(|(p, _, _)| p)
+            .find(|p| {
+                let n = name_of(p);
+                n.ends_with(".utoc") && n != "global.utoc"
+            })
+            .and_then(|p| super::unreal::Toc::open(p).ok())
+            .is_some_and(|t| t.encrypted())
+            || paks.iter().any(|(p, _, _)| {
+                name_of(p).ends_with(".pak") && super::unreal::pak_index_encrypted(p)
+            });
+        // API: DefaultEngine.ini z największej paczki .pak (IoStore jeszcze nie).
+        if !info.encrypted {
+            info.api = super::unreal_pak::find_pak(dir)
+                .and_then(|p| super::unreal_pak::default_api(&p))
+                .map(str::to_owned);
+        }
         for (path, _, len) in paks {
             info.shaders.push(ShaderFile {
                 path: path.clone(),

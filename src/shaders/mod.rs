@@ -13,6 +13,8 @@ pub mod games;
 mod registry;
 pub mod rootsig;
 pub mod unity;
+pub mod unreal;
+pub mod unreal_pak;
 pub mod warm;
 
 use std::path::PathBuf;
@@ -73,6 +75,19 @@ fn dir_size(dir: &std::path::Path) -> u64 {
 }
 
 /// Co Tune Center może zrobić z shaderami tej gry (stan etapów).
+/// Unreal z klasyczną paczką `.pak` (IoStore jeszcze nieobsługiwany).
+fn has_pak(info: &Info) -> bool {
+    info.shaders.iter().any(|s| {
+        s.path
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("pak"))
+    }) && !info.shaders.iter().any(|s| {
+        s.path
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("utoc"))
+    })
+}
+
 pub fn plan(info: &Info) -> (&'static str, bool) {
     let has = |k: ShaderKind| info.shaders.iter().any(|s| s.kind == k);
     match info.engine {
@@ -108,6 +123,20 @@ pub fn plan(info: &Info) -> (&'static str, bool) {
             tr(
                 "DirectX 11: wszystkie shadery z plików gry",
                 "DirectX 11: every shader from the game files",
+            ),
+            true,
+        ),
+        Engine::Unreal if info.encrypted => (
+            tr(
+                "Unreal - paczki gry są szyfrowane, shaderów nie da się odczytać",
+                "Unreal - the game's packages are encrypted, shaders cannot be read",
+            ),
+            false,
+        ),
+        Engine::Unreal if has_pak(info) => (
+            tr(
+                "DirectX 11: shadery SM5 z paczki gry (DX12 w przygotowaniu)",
+                "DirectX 11: SM5 shaders from the game package (DX12 in progress)",
             ),
             true,
         ),
@@ -396,6 +425,13 @@ fn api_options(info: &Info) -> ApiOptions {
                 "Unity on DirectX 12 builds pipelines at run time - they cannot be compiled from the files alone",
             )),
         ),
+        Engine::Unreal if !info.encrypted && has_pak(info) => (
+            Ok(()),
+            Err(tr(
+                "Unreal w DirectX 12: w przygotowaniu (potrzebne potoki i root signature)",
+                "Unreal on DirectX 12: in progress (needs pipelines and root signatures)",
+            )),
+        ),
         _ => {
             let no = tr("ten silnik nie jest obsługiwany", "this engine is not supported");
             (Err(no), Err(no))
@@ -556,6 +592,25 @@ fn compile_ui(
             "Tune Center finds every DirectX 11 shader in the game files (with all variants) and the Nvidia driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
         );
         (exe, warm::Job::Unity { data_dir }, about)
+    } else if d3d11 && e.info.engine == Engine::Unreal {
+        let (Some(pak), Some(exe)) = (
+            unreal_pak::find_pak(&e.game.dir),
+            warm::unreal_game_exe(&e.game.dir),
+        ) else {
+            missing(
+                ui,
+                tr(
+                    "Nie znaleziono paczki .pak albo pliku *-Shipping.exe gry.",
+                    "Game .pak or *-Shipping.exe not found.",
+                ),
+            );
+            return;
+        };
+        let about = crate::trf!(
+            "Tune Center czyta archiwa shaderów DirectX 11 (SM5) z paczki gry, a sterownik Nvidia kompiluje je do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
+            "Tune Center reads the DirectX 11 (SM5) shader archives from the game package and the Nvidia driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
+        );
+        (exe, warm::Job::Unreal { pak }, about)
     } else {
         return;
     };

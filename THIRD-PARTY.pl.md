@@ -56,3 +56,14 @@ Tune Center korzysta z poniższych składników. Są dołączane bez zmian.
   DisplayConfiguration, DisplayColorControl i CustomTiming - podstawa
   zakładki NVIDIA. Kod SDK nie jest dołączany; program woła sterownik przez
   `nvapi64.dll`.
+- CUE4Parse (https://github.com/FabianFG/CUE4Parse, Apache-2.0): układ paczek
+  Unreal Engine `.pak` / IoStore i archiwów shaderów (`.ushaderbytecode`)
+  używany przy kompilacji shaderów z góry.
+
+## oozextract (crate Rust)
+
+- Źródło: https://github.com/lvlvllvlvllvlvl/oozextract
+- Licencja: MIT (tak opublikowana; to port do Rust programu ooz autorstwa
+  powzix, rozpowszechnianego na GPL)
+- Rozpakowuje dane Oodle (Kraken / Mermaid / Selkie / Leviathan) w paczkach
+  gier Unreal Engine, gdy gra nie ma biblioteki `oo2core_*.dll`.
