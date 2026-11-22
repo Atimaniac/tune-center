@@ -89,7 +89,7 @@ Both open from the buttons next to *UPDATE* in the bottom-right corner. Polish /
 ## Installation
 
 1. Download **`TuneCenter-Setup.exe`** from the [latest release](https://github.com/Atimaniac/tune-center/releases/latest).
-2. Run it. The installer offers to install the **.NET 8 Runtime** and the **PawnIO** driver (both through winget) if they are missing.
+2. Run it. The installer offers to install the **.NET 11 Runtime** and the **PawnIO** driver (both through winget) if they are missing.
 3. Start Tune Center. Later updates install from the app with one click (*UPDATE*, bottom right).
 
 Running as administrator is optional – the GPU, NVIDIA settings, shader compilation, disks and GPU power work without it. CPU tuning, CPU temperature and power, motherboard fans and some TUNE items need administrator rights (a button in the status bar restarts the app elevated).
@@ -97,7 +97,7 @@ Running as administrator is optional – the GPU, NVIDIA settings, shader compil
 ### Requirements
 - Windows 10 or 11, 64-bit
 - NVIDIA (GTX/RTX) or AMD Radeon graphics card with a current driver
-- [.NET 8 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) – for the sensor process (installed by the setup)
+- [.NET 11 Runtime](https://dotnet.microsoft.com/download/dotnet/11.0) – for the sensor process (installed by the setup)
 - [PawnIO](https://pawnio.eu) – optional; needed for CPU tuning, CPU sensors and RAM RGB (installed by the setup)
 
 ## ⚠️ Disclaimer
@@ -107,7 +107,7 @@ Tune Center changes clocks, voltages, power limits, fan speeds and system settin
 ## Building from source
 
 ```powershell
-# Rust (stable, MSVC), .NET 8 SDK, Inno Setup 6
+# Rust (stable, MSVC), .NET 11 SDK, Inno Setup 6
 .\build.ps1             # cargo build --release, sensor-bridge, PawnIO modules -> dist\
 .\build-installer.ps1   # installer -> installer-output\TuneCenter-Setup.exe
 ```

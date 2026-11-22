@@ -2,7 +2,9 @@
 ; Budowanie: .\build-installer.ps1  ->  installer-output\TuneCenter-Setup.exe
 ;
 ; Instalator kopiuje zawartosc dist\ i - za zgoda uzytkownika - instaluje
-; brakujace skladniki przez winget: .NET 8 Runtime oraz sterownik PawnIO.
+; brakujace skladniki przez winget: .NET 11 Runtime (zawsze, takze przy cichej
+; aktualizacji z programu - proces czujnikow od 0.25.0 wymaga .NET 11) oraz,
+; za zgoda uzytkownika, sterownik PawnIO.
 ;
 ; Gdy program jest juz zainstalowany, instalator dziala jako aktualizacja:
 ; informuje o wersjach, zamyka dzialajacy program, podmienia pliki w tym samym
@@ -18,7 +20,7 @@
 ; aktualizacji program jest uruchamiany ponownie.
 
 #define AppName "Tune Center"
-#define AppVersion "0.24.1"
+#define AppVersion "0.25.0"
 #define AppGuid "2F9C1B7A-4D3E-4E8B-B1C6-7A5D0E9F3C42"
 #define AppExe "tunecenter.exe"
 
@@ -60,8 +62,6 @@ Name: "pl"; MessagesFile: "compiler:Languages\Polish.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [CustomMessages]
-pl.TaskDotNet=Zainstaluj .NET 8 Runtime (wymagany do odczytu czujnikow)
-en.TaskDotNet=Install .NET 8 Runtime (required for sensor readings)
 pl.TaskPawnIO=Zainstaluj sterownik PawnIO (opcjonalny: temperatura i moc procesora, wentylatory plyty glownej, zakladka CPU)
 en.TaskPawnIO=Install the PawnIO driver (optional: CPU temperature and power, motherboard fans, CPU tab)
 pl.GroupMissing=Brakujace skladniki (pobierane z internetu):
@@ -70,8 +70,8 @@ pl.TaskDesktop=Utworz skrot na pulpicie
 en.TaskDesktop=Create a desktop shortcut
 pl.GroupShortcuts=Skroty:
 en.GroupShortcuts=Shortcuts:
-pl.StatusDotNet=Instalowanie .NET 8 Runtime...
-en.StatusDotNet=Installing .NET 8 Runtime...
+pl.StatusDotNet=Instalowanie .NET 11 Runtime (wymagany do odczytu czujnikow)...
+en.StatusDotNet=Installing .NET 11 Runtime (required for sensor readings)...
 pl.StatusPawnIO=Instalowanie sterownika PawnIO...
 en.StatusPawnIO=Installing the PawnIO driver...
 pl.RunApp=Uruchom {#AppName}
@@ -98,11 +98,10 @@ pl.FinishedTitle=Aktualizacja zakonczona
 en.FinishedTitle=Update complete
 pl.FinishedText={#AppName} zostal zaktualizowany do wersji {#AppVersion}.
 en.FinishedText={#AppName} has been updated to version {#AppVersion}.
-pl.MissingComponents=Nie wykryto ponizszych skladnikow. Bez .NET 8 nie dzialaja czujniki i sterowanie wentylatorami. Bez PawnIO program dziala, ale nie pokazuje temperatury i mocy procesora, nie steruje wentylatorami plyty glownej i nie ma zakladki CPU. Mozna je zainstalowac recznie:
-en.MissingComponents=The components below were not detected. Without .NET 8, sensors and fan control do not work. Without PawnIO the program works, but shows no CPU temperature or power, cannot control motherboard fans and has no CPU tab. You can install them manually:
+pl.MissingComponents=Nie wykryto ponizszych skladnikow. Bez .NET 11 nie dzialaja czujniki i sterowanie wentylatorami. Bez PawnIO program dziala, ale nie pokazuje temperatury i mocy procesora, nie steruje wentylatorami plyty glownej i nie ma zakladki CPU. Mozna je zainstalowac recznie:
+en.MissingComponents=The components below were not detected. Without .NET 11, sensors and fan control do not work. Without PawnIO the program works, but shows no CPU temperature or power, cannot control motherboard fans and has no CPU tab. You can install them manually:
 
 [Tasks]
-Name: "dotnet"; Description: "{cm:TaskDotNet}"; GroupDescription: "{cm:GroupMissing}"; Check: NeedsDotNet
 Name: "pawnio"; Description: "{cm:TaskPawnIO}"; GroupDescription: "{cm:GroupMissing}"; Check: NeedsPawnIO
 Name: "desktopicon"; Description: "{cm:TaskDesktop}"; GroupDescription: "{cm:GroupShortcuts}"; Flags: unchecked
 
@@ -120,11 +119,17 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 Root: HKLM; Subkey: "SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers"; ValueType: none; ValueName: "{app}\{#AppExe}"; Flags: deletevalue uninsdeletevalue
 
 [Run]
-Filename: "{cmd}"; Parameters: "/C winget install --id Microsoft.DotNet.Runtime.8 --exact --silent --accept-package-agreements --accept-source-agreements"; StatusMsg: "{cm:StatusDotNet}"; Tasks: dotnet; Flags: waituntilterminated
+; .NET 11 Runtime instalowany zawsze, gdy go brak (bez zadania do odznaczenia -
+; przy aktualizacji Inno Setup pamieta wybor zadan z poprzedniej instalacji).
+Filename: "{cmd}"; Parameters: "/C winget install --id Microsoft.DotNet.Runtime.11 --exact --silent --accept-package-agreements --accept-source-agreements"; StatusMsg: "{cm:StatusDotNet}"; Check: NeedsDotNet; Flags: waituntilterminated runhidden
 Filename: "{cmd}"; Parameters: "/C winget install --id namazso.PawnIO --exact --silent --accept-package-agreements --accept-source-agreements"; StatusMsg: "{cm:StatusPawnIO}"; Tasks: pawnio; Flags: waituntilterminated
 Filename: "{app}\{#AppExe}"; Description: "{cm:RunApp}"; Flags: nowait postinstall skipifsilent
 ; Po cichej aktualizacji (przycisk "Zainstaluj" w programie) program wraca sam.
 Filename: "{app}\{#AppExe}"; Flags: nowait; Check: SilentUpgrade
+
+[InstallDelete]
+; Pozostalosc po procesie czujnikow na .NET 8 (w .NET 11 ta biblioteka jest wbudowana).
+Type: files; Name: "{app}\System.Threading.AccessControl.dll"
 
 [UninstallRun]
 ; Usuwa zadanie autostartu utworzone przez opcje "Uruchamiaj z systemem".
@@ -253,7 +258,7 @@ var
   FindRec: TFindRec;
 begin
   Result := True;
-  if FindFirst(ExpandConstant('{commonpf64}\dotnet\shared\Microsoft.NETCore.App\8.*'), FindRec) then
+  if FindFirst(ExpandConstant('{commonpf64}\dotnet\shared\Microsoft.NETCore.App\11.*'), FindRec) then
   begin
     Result := False;
     FindClose(FindRec);
@@ -279,7 +284,7 @@ begin
   { Jesli winget nie zadzialal albo uzytkownik odznaczyl skladnik, mowimy o tym wprost. }
   Missing := '';
   if NeedsDotNet then
-    Missing := Missing + '- .NET 8 Runtime: https://dotnet.microsoft.com/download/dotnet/8.0' + #13#10;
+    Missing := Missing + '- .NET 11 Runtime: https://dotnet.microsoft.com/download/dotnet/11.0' + #13#10;
   if NeedsPawnIO then
     Missing := Missing + '- PawnIO: https://pawnio.eu' + #13#10;
 

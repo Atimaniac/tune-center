@@ -194,6 +194,23 @@ const MAX_RESTARTS: u32 = 5;
 const STABLE_AFTER: Duration = Duration::from_secs(120);
 
 /// Uruchamia proces czujników bez okna konsoli.
+/// Wersja .NET, której wymaga sensor-bridge (TargetFramework w csproj).
+const DOTNET_MAJOR: &str = "11.";
+
+/// Czy jest runtime .NET w wersji wymaganej przez sensor-bridge
+/// (`%ProgramFiles%\dotnet\shared\Microsoft.NETCore.App\11.*`).
+fn dotnet_runtime_installed() -> bool {
+    let base = std::env::var_os("ProgramFiles")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Program Files"));
+    std::fs::read_dir(base.join(r"dotnet\shared\Microsoft.NETCore.App"))
+        .map(|list| {
+            list.flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with(DOTNET_MAJOR))
+        })
+        .unwrap_or(false)
+}
+
 fn start_child(path: &std::path::Path) -> Result<(Child, ChildStdin, ChildStdout), String> {
     let mut cmd = Command::new(path);
     cmd.stdin(Stdio::piped())
@@ -322,13 +339,20 @@ impl Backend {
                     }
                     if restarts >= MAX_RESTARTS {
                         if !matches!(s.status, Status::Error(_)) {
-                            s.status = Status::Error(
+                            // Najczęstsza przyczyna po aktualizacji: brak runtime .NET 11
+                            // (np. winget w instalatorze nie zadziałał).
+                            let text = if dotnet_runtime_installed() {
                                 crate::i18n::tr(
                                     "Proces sensor-bridge kilka razy z rzędu zakończył działanie.",
                                     "The sensor-bridge process exited several times in a row.",
                                 )
-                                .into(),
-                            );
+                            } else {
+                                crate::i18n::tr(
+                                    "Brak .NET 11 Runtime - czujniki i wentylatory nie działają. Zainstaluj go: winget install Microsoft.DotNet.Runtime.11 (albo dotnet.microsoft.com/download/dotnet/11.0).",
+                                    "The .NET 11 Runtime is missing - sensors and fans do not work. Install it: winget install Microsoft.DotNet.Runtime.11 (or dotnet.microsoft.com/download/dotnet/11.0).",
+                                )
+                            };
+                            s.status = Status::Error(text.into());
                         }
                         break;
                     }

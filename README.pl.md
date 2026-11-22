@@ -72,7 +72,7 @@ Parametry:
 Powstanie `installer-output\TuneCenter-Setup.exe`. Instalator:
 
 - kopiuje program do `C:\Program Files\Tune Center` i tworzy skrót w menu Start,
-- sprawdza, czy są .NET 8 Runtime i sterownik PawnIO; brakujące proponuje
+- sprawdza, czy są .NET 11 Runtime i sterownik PawnIO; brakujące proponuje
   zainstalować (pola wyboru), pobierając je przez `winget`,
 - podaje wydawcę "Atimaniac" (Programy i funkcje, właściwości pliku),
 - usuwa wpis "zawsze jako administrator" ze starszych wersji,
