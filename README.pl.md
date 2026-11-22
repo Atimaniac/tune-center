@@ -759,6 +759,14 @@ W zakładce NVIDIA > Overclock > Informacje:
   "nieznane".
   Resizable BAR włącza się w BIOS-ie płyty głównej.
 
+## Awarie
+
+Gdy program albo proces czujników ulegnie awarii, pokazuje się okno z opisem
+błędu (kod, moduł, w którym wystąpił, komunikat .NET procesu czujników).
+Raport trafia do pliku `tunecenter-crash.log` albo `sensor-bridge-crash.log`
+obok programu; przy następnym starcie program pokazuje ostatni raport.
+Proces czujników po awarii uruchamia się ponownie sam.
+
 ## Znane ograniczenia
 
 - Zakładka POWER pokazuje tylko procesor i kartę graficzną. Dyski i płyta

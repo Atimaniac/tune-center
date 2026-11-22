@@ -100,6 +100,9 @@ Running as administrator is optional – the GPU, NVIDIA settings, shader compil
 - [.NET 11 Runtime](https://dotnet.microsoft.com/download/dotnet/11.0) – for the sensor process (installed by the setup)
 - [PawnIO](https://pawnio.eu) – optional; needed for CPU tuning, CPU sensors and RAM RGB (installed by the setup)
 
+### If something goes wrong
+When Tune Center or its sensor process crashes, a window shows what happened (error code, the module that failed, the .NET error of the sensor process). The report is saved next to the program in `tunecenter-crash.log` or `sensor-bridge-crash.log` – please attach it to a [GitHub issue](https://github.com/Atimaniac/tune-center/issues).
+
 ## ⚠️ Disclaimer
 
 Tune Center changes clocks, voltages, power limits, fan speeds and system settings. Overly aggressive values can make your PC unstable or reduce cooling. Change one thing at a time and test stability. You use the program at your own risk.

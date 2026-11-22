@@ -143,6 +143,65 @@ struct Inner {
     /// Typy podzespołów, których wentylatorami steruje sterownik karty
     /// graficznej (moduł `gpu_fans`), a nie ten proces.
     skip_kinds: Vec<&'static str>,
+    /// Ostatnie wiersze stderr procesu czujników (np. stos wyjątku .NET).
+    stderr: StderrLines,
+    /// Raport ostatniej awarii procesu czujników i czy użytkownik go jeszcze nie widział.
+    crash: Option<String>,
+    crash_unseen: bool,
+}
+
+/// Ostatnie wiersze wyjścia błędów procesu czujników.
+type StderrLines = Arc<Mutex<std::collections::VecDeque<String>>>;
+const STDERR_LINES: usize = 60;
+
+/// Raport awarii procesu czujników: kod wyjścia i ostatnie wiersze stderr;
+/// dopisywany też do `sensor-bridge-crash.log` obok programu.
+fn crash_report(code: Option<i32>, stderr: &StderrLines) -> String {
+    let code_text = match code {
+        Some(c) => {
+            let u = c as u32;
+            format!("0x{u:08X} ({c}) - {}", crate::crash::describe(u))
+        }
+        None => "?".into(),
+    };
+    let lines: Vec<String> = stderr
+        .lock()
+        .map(|l| l.iter().cloned().collect())
+        .unwrap_or_default();
+    let mut text = format!(
+        "{} - {BRIDGE} {}\n{} {code_text}\n",
+        crate::bench::now_text(),
+        env!("CARGO_PKG_VERSION"),
+        crate::i18n::tr("Kod wyjścia:", "Exit code:"),
+    );
+    if lines.is_empty() {
+        text.push_str(crate::i18n::tr(
+            "(proces nie wypisał komunikatu błędu)",
+            "(the process printed no error message)",
+        ));
+    } else {
+        text.push_str(&lines.join("\n"));
+    }
+    if text.contains("NvidiaML") || text.to_lowercase().contains("nvml") {
+        text.push_str(crate::i18n::tr(
+            "\n\nBłąd w bibliotece sterownika NVIDIA (NVML) - zwykle przy instalacji lub przeładowaniu sterownika karty.",
+            "\n\nError in the NVIDIA driver library (NVML) - usually while the graphics driver is being installed or reloaded.",
+        ));
+    }
+    if let Some(path) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join("sensor-bridge-crash.log")))
+    {
+        use std::io::Write as _;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(f, "{text}\n----------------------------------------");
+        }
+    }
+    text
 }
 
 impl Inner {
@@ -193,7 +252,6 @@ const MAX_RESTARTS: u32 = 5;
 /// Proces, który przepracował tyle czasu, zeruje licznik ponowień.
 const STABLE_AFTER: Duration = Duration::from_secs(120);
 
-/// Uruchamia proces czujników bez okna konsoli.
 /// Wersja .NET, której wymaga sensor-bridge (TargetFramework w csproj).
 const DOTNET_MAJOR: &str = "11.";
 
@@ -211,11 +269,16 @@ fn dotnet_runtime_installed() -> bool {
         .unwrap_or(false)
 }
 
-fn start_child(path: &std::path::Path) -> Result<(Child, ChildStdin, ChildStdout), String> {
+/// Uruchamia proces czujników bez okna konsoli; jego stderr (komunikaty
+/// błędów, stos wyjątku .NET) trafia do `stderr`.
+fn start_child(
+    path: &std::path::Path,
+    stderr: &StderrLines,
+) -> Result<(Child, ChildStdin, ChildStdout), String> {
     let mut cmd = Command::new(path);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -235,6 +298,22 @@ fn start_child(path: &std::path::Path) -> Result<(Child, ChildStdin, ChildStdout
         "Brak stdout procesu pomocniczego",
         "The helper process has no stdout",
     ))?;
+    if let Some(err) = child.stderr.take() {
+        let buf = stderr.clone();
+        if let Ok(mut b) = buf.lock() {
+            b.clear();
+        }
+        std::thread::spawn(move || {
+            for line in BufReader::new(err).lines().map_while(Result::ok) {
+                if let Ok(mut b) = buf.lock() {
+                    if b.len() >= STDERR_LINES {
+                        b.pop_front();
+                    }
+                    b.push_back(line);
+                }
+            }
+        });
+    }
     Ok((child, stdin, stdout))
 }
 
@@ -269,7 +348,8 @@ impl Backend {
             ));
         }
 
-        let (child, stdin, stdout) = start_child(&path)?;
+        let stderr: StderrLines = Arc::default();
+        let (child, stdin, stdout) = start_child(&path, &stderr)?;
         let inner = Arc::new(Mutex::new(Inner {
             stdin,
             child,
@@ -279,6 +359,9 @@ impl Backend {
             fans,
             applied: HashMap::new(),
             skip_kinds,
+            stderr: stderr.clone(),
+            crash: None,
+            crash_unseen: false,
         }));
 
         let thread_inner = inner.clone();
@@ -333,7 +416,15 @@ impl Backend {
                     if s.quitting {
                         break;
                     }
-                    let _ = s.child.wait();
+                    let exit = s.child.wait().ok();
+                    // Awaria (kod różny od 0): raport z kodem i komunikatem błędu,
+                    // okno w programie pokazuje go jeden raz.
+                    if let Some(code) = exit.and_then(|e| e.code()).filter(|c| *c != 0) {
+                        // Chwila na odczyt ostatnich wierszy stderr (wątek czytający).
+                        std::thread::sleep(Duration::from_millis(300));
+                        s.crash = Some(crash_report(Some(code), &s.stderr));
+                        s.crash_unseen = true;
+                    }
                     if started.elapsed() > STABLE_AFTER {
                         restarts = 0;
                     }
@@ -362,7 +453,7 @@ impl Backend {
                 restarts += 1;
                 std::thread::sleep(Duration::from_secs(2));
 
-                match start_child(&path) {
+                match start_child(&path, &stderr) {
                     Ok((child, stdin, out)) => {
                         let mut s = thread_inner.lock().unwrap();
                         if s.quitting {
@@ -388,6 +479,19 @@ impl Backend {
         });
 
         Ok(Self { inner })
+    }
+
+    /// Raport ostatniej awarii procesu czujników i czy jest jeszcze niepokazany.
+    pub fn crash_report(&self) -> Option<(String, bool)> {
+        let s = self.inner.lock().ok()?;
+        s.crash.clone().map(|c| (c, s.crash_unseen))
+    }
+
+    /// Okno z raportem zamknięte - następne pokaże dopiero nowa awaria.
+    pub fn dismiss_crash(&self) {
+        if let Ok(mut s) = self.inner.lock() {
+            s.crash_unseen = false;
+        }
     }
 
     pub fn state(&self) -> (Option<Snapshot>, Status) {

@@ -16,6 +16,11 @@ use crate::theme::{self, accent, bg, card_edge, muted, track, warn, well};
 
 const TEMP_MIN: f32 = 20.0;
 const TEMP_MAX: f32 = 100.0;
+/// Szerokość wnętrza karty wentylatora; cała karta = wnętrze + marginesy 2 × 16
+/// i obwódka. Przy domyślnym oknie (1120 px) mieszczą się 3 karty obok siebie.
+const CARD_W: f32 = 260.0;
+const CARD_OUTER: f32 = CARD_W + 34.0;
+const CARD_GAP: f32 = 14.0;
 
 pub struct FansTab {
     pub config: Config,
@@ -477,35 +482,49 @@ impl FansTab {
         }
         let show_idle = self.show_idle;
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(14.0, 14.0);
-                for fan in &snap.fans {
-                    let auto = self
-                        .config
-                        .fans()
-                        .get(&fan.id)
-                        .is_none_or(|cfg| cfg.mode == Mode::Auto);
-                    if !show_idle && auto && looks_unused(fan) {
-                        continue;
-                    }
+        let visible: Vec<&Fan> = snap
+            .fans
+            .iter()
+            .filter(|fan| {
+                let auto = self
+                    .config
+                    .fans()
+                    .get(&fan.id)
+                    .is_none_or(|cfg| cfg.mode == Mode::Auto);
+                show_idle || !auto || !looks_unused(fan)
+            })
+            .collect();
 
-                    // Kąt animacji: obroty spowolnione, żeby łopatki były czytelne.
-                    let speed = match fan.rpm {
-                        Some(rpm) => rpm / 60.0 * 0.12,
-                        None => fan.percent.unwrap_or(0.0) / 100.0 * 3.0,
-                    };
-                    let angle = self.angles.entry(fan.id.clone()).or_insert(0.0);
-                    *angle = (*angle + speed * TAU * dt) % TAU;
-                    let angle = *angle;
+        // Karty w wierszach: tyle obok siebie, ile mieści się w szerokości okna,
+        // reszta niżej (przewijanie w pionie). `horizontal_wrapped` nie zawija
+        // ramek - karty wychodziły w bok i były ucinane.
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let avail = ui.available_width();
+                let cols = (((avail + CARD_GAP) / (CARD_OUTER + CARD_GAP)).floor() as usize).max(1);
+                for row in visible.chunks(cols) {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::new(CARD_GAP, CARD_GAP);
+                        for fan in row {
+                            // Kąt animacji: obroty spowolnione, żeby łopatki były czytelne.
+                            let speed = match fan.rpm {
+                                Some(rpm) => rpm / 60.0 * 0.12,
+                                None => fan.percent.unwrap_or(0.0) / 100.0 * 3.0,
+                            };
+                            let angle = self.angles.entry(fan.id.clone()).or_insert(0.0);
+                            *angle = (*angle + speed * TAU * dt) % TAU;
+                            let angle = *angle;
 
-                    let cfg = self.config.fans_mut().entry(fan.id.clone()).or_default();
-                    if fan_card(ui, fan, cfg, &snap.temps, angle) {
-                        self.dirty = true;
-                    }
+                            let cfg = self.config.fans_mut().entry(fan.id.clone()).or_default();
+                            if fan_card(ui, fan, cfg, &snap.temps, angle) {
+                                self.dirty = true;
+                            }
+                        }
+                    });
+                    ui.add_space(CARD_GAP);
                 }
             });
-        });
     }
 }
 
@@ -521,12 +540,12 @@ fn fan_card(ui: &mut egui::Ui, fan: &Fan, cfg: &mut FanConfig, temps: &[Temp], a
     }
 
     theme::card(14, 16).show(ui, |ui| {
-        ui.set_width(300.0);
+        ui.set_width(CARD_W);
         ui.push_id(&fan.id, |ui| {
             ui.vertical(|ui| {
                 ui.label(
                     RichText::new(&fan.name)
-                        .size(17.0)
+                        .size(15.5)
                         .strong()
                         .color(theme::text()),
                 );
@@ -534,8 +553,8 @@ fn fan_card(ui: &mut egui::Ui, fan: &Fan, cfg: &mut FanConfig, temps: &[Temp], a
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
-                    let (resp, painter) = ui.allocate_painter(Vec2::splat(104.0), Sense::hover());
-                    draw_fan(&painter, resp.rect.center(), 50.0, angle);
+                    let (resp, painter) = ui.allocate_painter(Vec2::splat(84.0), Sense::hover());
+                    draw_fan(&painter, resp.rect.center(), 40.0, angle);
 
                     ui.add_space(10.0);
                     ui.vertical(|ui| {
@@ -545,14 +564,14 @@ fn fan_card(ui: &mut egui::Ui, fan: &Fan, cfg: &mut FanConfig, temps: &[Temp], a
                             .map(|r| format!("{r:.0}"))
                             .unwrap_or_else(|| "--".into());
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(rpm).size(30.0).strong().color(theme::text()));
+                            ui.label(RichText::new(rpm).size(26.0).strong().color(theme::text()));
                             ui.label(RichText::new("RPM").color(muted()));
                         });
                         let pct = fan
                             .percent
                             .map(|p| format!("{p:.0} %"))
                             .unwrap_or_else(|| "-- %".into());
-                        ui.label(RichText::new(pct).size(16.0).color(accent()));
+                        ui.label(RichText::new(pct).size(15.0).color(accent()));
                     });
                 });
 
@@ -592,7 +611,7 @@ fn fan_card(ui: &mut egui::Ui, fan: &Fan, cfg: &mut FanConfig, temps: &[Temp], a
                         );
                     }
                     Mode::Manual => {
-                        ui.spacing_mut().slider_width = 220.0;
+                        ui.spacing_mut().slider_width = CARD_W - 70.0;
                         let slider = egui::Slider::new(&mut cfg.manual, MIN_PCT..=100.0)
                             .suffix(" %")
                             .fixed_decimals(0);
@@ -629,7 +648,7 @@ fn fan_card(ui: &mut egui::Ui, fan: &Fan, cfg: &mut FanConfig, temps: &[Temp], a
                             .color(muted()),
                         );
                         egui::ComboBox::from_id_salt("source")
-                            .width(290.0)
+                            .width(CARD_W - 24.0)
                             .selected_text(selected)
                             .show_ui(ui, |ui| {
                                 for t in temps {
@@ -699,7 +718,7 @@ fn draw_fan(painter: &egui::Painter, center: Pos2, radius: f32, angle: f32) {
 /// Zwraca true po zmianie.
 fn points_editor(ui: &mut egui::Ui, points: &mut [[f32; 2]], temp_now: Option<f32>) -> bool {
     let mut changed = false;
-    let (resp, painter) = ui.allocate_painter(Vec2::new(296.0, 140.0), Sense::hover());
+    let (resp, painter) = ui.allocate_painter(Vec2::new(CARD_W, 130.0), Sense::hover());
     let rect = resp.rect.shrink2(Vec2::new(8.0, 10.0));
 
     let to_screen = |t: f32, p: f32| -> Pos2 {

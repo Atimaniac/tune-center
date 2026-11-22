@@ -14,6 +14,7 @@ mod bridge;
 mod config;
 mod cpu;
 mod cpu_tab;
+mod crash;
 mod curve;
 mod disks;
 mod elevation;
@@ -232,6 +233,8 @@ struct App {
     bench: bench_tab::BenchTab,
     /// Temperatura procesora z kafelków SENSORS (co sekundę).
     cpu_temp: Option<f32>,
+    /// Raport awarii z poprzedniego uruchomienia (okno przy starcie).
+    crash_report: Option<String>,
     /// Temperatury dysków odczytywane przez API Windows.
     disks: disks::Disks,
     /// Licznik energii zakładki POWER.
@@ -373,6 +376,7 @@ impl App {
             },
             bench: bench_tab::BenchTab::new(),
             cpu_temp: None,
+            crash_report: crash::previous(),
             meter,
             gpu_power,
             meter_tick: Instant::now(),
@@ -399,6 +403,87 @@ impl App {
     /// `--tab <nvidia|cpu|fan|sensors|power|tune|options|about>` i
     /// `--page <info|clocks|curve|3d|dlss|display|color|gsync|custom|shaders>`:
     /// program otwiera się na wskazanej zakładce (np. ze skrótu na pulpicie).
+    /// Okno z raportem awarii: poprzednie uruchomienie programu albo
+    /// awaria procesu czujników w tym uruchomieniu.
+    fn crash_window(&mut self, ctx: &egui::Context) {
+        let bridge_crash = self.bridge.as_ref().ok().and_then(|b| b.crash_report());
+        let (report, from_bridge) = match (&self.crash_report, &bridge_crash) {
+            (Some(r), _) => (r.clone(), false),
+            (None, Some((r, true))) => (r.clone(), true),
+            _ => return,
+        };
+        let mut open = true;
+        let mut close = false;
+        let title = if from_bridge {
+            crate::i18n::tr("Awaria procesu czujników", "Sensor process crash")
+        } else {
+            crate::i18n::tr(
+                "Poprzednio program zakończył się błędem",
+                "The program crashed last time",
+            )
+        };
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(640.0)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(if from_bridge {
+                        crate::i18n::tr(
+                            "Proces czujników (sensor-bridge) zakończył się błędem i został uruchomiony ponownie. Szczegóły:",
+                            "The sensor process (sensor-bridge) crashed and was restarted. Details:",
+                        )
+                    } else {
+                        crate::i18n::tr(
+                            "Raport zapisany przy awarii (plik tunecenter-crash.log obok programu):",
+                            "Report saved at the crash (tunecenter-crash.log next to the program):",
+                        )
+                    })
+                    .color(muted()),
+                );
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    let mut text = report.as_str();
+                    ui.add(
+                        egui::TextEdit::multiline(&mut text)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(crate::i18n::tr("Kopiuj", "Copy")).clicked() {
+                        ui.ctx().copy_text(report.clone());
+                    }
+                    if ui
+                        .button(crate::i18n::tr("Otwórz folder", "Open folder"))
+                        .clicked()
+                    {
+                        if let Some(dir) = crash::folder() {
+                            let _ = std::process::Command::new("explorer").arg(dir).spawn();
+                        }
+                    }
+                    if theme::primary_button(ui, None, crate::i18n::tr("Zamknij", "Close"), true)
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
+            });
+        if !open || close {
+            if from_bridge {
+                if let Ok(b) = &self.bridge {
+                    b.dismiss_crash();
+                }
+            } else {
+                crash::acknowledge();
+                self.crash_report = None;
+            }
+        }
+    }
+
     fn open_from_args(&mut self) {
         let args: Vec<String> = std::env::args().collect();
         let value = |flag: &str| {
@@ -1195,6 +1280,8 @@ impl eframe::App for App {
             );
         }
 
+        self.crash_window(&ctx);
+
         // --- pasek stanu na samym dole okna ---
         let status_panel = egui::Panel::bottom("status")
             .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 8)))
@@ -1522,6 +1609,22 @@ fn main() -> eframe::Result<()> {
     #[cfg(windows)]
     if args.get(1).map(String::as_str) == Some(shaders::warm::HOST_ARG_PROBE) {
         std::process::exit(shaders::warm::run_cache_probe());
+    }
+    // Raport awarii (panika i awarie natywne, np. w nvml.dll): plik obok
+    // programu i okno z opisem błędu. Tylko dla programu z oknem - procesy
+    // pomocnicze (kompilacja shaderów) kończą się kodem błędu.
+    crash::install();
+    // Test raportu: --crash-test panic | native.
+    match args
+        .iter()
+        .position(|a| a == "--crash-test")
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
+    {
+        Some("panic") => panic!("test raportu awarii (--crash-test panic)"),
+        // SAFETY: celowe naruszenie dostępu - sprawdzenie filtra wyjątków.
+        Some("native") => unsafe { std::ptr::write_volatile(std::ptr::null_mut::<u32>(), 1) },
+        _ => {}
     }
     // Jedna kopia programu: ponowne uruchomienie pokazuje okno już działającej
     // (także schowane do zasobnika, gdy powłoka nie pokazuje ikony).
