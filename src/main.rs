@@ -1,5 +1,23 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+// Tune Center
+// Copyright (C) 2026 Atimaniac
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+//
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Tune Center: karta graficzna, procesor, wentylatory, czujniki i pobór mocy w jednym oknie.
 //!
 //! Parametry: `--minimized` (start zminimalizowany - przy włączonym zasobniku
@@ -890,7 +908,7 @@ impl App {
         });
     }
 
-    /// Zakładka ABOUT: wersja, opis i użyte składniki.
+    /// Zakładka ABOUT: wersja, opis, autor i licencja, użyte składniki.
     fn about_ui(&self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -931,6 +949,7 @@ impl App {
                     crate::i18n::tr("OPTIONS - język, autostart, zasobnik, motywy (Tune, Neon Green, Neon City, Crimson) i diagnostyka zgodności ze zgłaszaniem na GitHubie.", "OPTIONS - language, autostart, tray, themes (Tune, Neon Green, Neon City, Crimson) and a compatibility check with GitHub reporting."),
                 ],
             );
+            license_card(ui, width);
             about_card(
                 ui,
                 width,
@@ -970,6 +989,60 @@ impl App {
 fn option_note(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).size(11.5).color(muted()));
     ui.add_space(10.0);
+}
+
+/// Adres repozytorium z kodem źródłowym.
+const REPO_URL: &str = "https://github.com/Atimaniac/tune-center";
+
+/// Karta ABOUT z autorem, odnośnikiem do GitHuba i notą licencyjną
+/// (GPL-3.0-or-later, punkt 5d licencji: nota w interfejsie programu).
+fn license_card(ui: &mut egui::Ui, width: f32) {
+    use crate::i18n::tr;
+    theme::card(14, 18).show(ui, |ui| {
+        ui.set_width(width);
+        theme::subheading(ui, Icon::About, tr("Autor i licencja", "Author and license"));
+        ui.add_space(2.0);
+        ui.label(RichText::new(tr("Autor: Atimaniac", "Author: Atimaniac")).color(theme::text()));
+        ui.add_space(2.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(tr("Kod źródłowy i zgłoszenia:", "Source code and issues:")).color(theme::text()));
+            ui.hyperlink_to("github.com/Atimaniac/tune-center", REPO_URL);
+        });
+        ui.add_space(6.0);
+        for line in [
+            "Copyright (C) 2026 Atimaniac",
+            tr(
+                "Licencja: GNU General Public License w wersji 3 lub (według uznania) dowolnej nowszej (GPL-3.0-or-later).",
+                "License: GNU General Public License, version 3 or (at your option) any later version (GPL-3.0-or-later).",
+            ),
+            tr(
+                "Tune Center jest wolnym oprogramowaniem: możesz go rozpowszechniać i modyfikować na warunkach tej licencji.",
+                "Tune Center is free software: you can redistribute it and modify it under the terms of this license.",
+            ),
+            tr(
+                "Program jest udostępniany BEZ ŻADNEJ GWARANCJI, w tym bez domniemanej gwarancji przydatności handlowej albo przydatności do określonego celu.",
+                "The program comes with ABSOLUTELY NO WARRANTY, including the implied warranty of merchantability or fitness for a particular purpose.",
+            ),
+            tr(
+                "Pełna treść licencji: plik LICENSE obok programu.",
+                "Full license text: the LICENSE file next to the program.",
+            ),
+        ] {
+            ui.label(RichText::new(line).color(theme::text()));
+            ui.add_space(2.0);
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.hyperlink_to(tr("Licencja", "License"), format!("{REPO_URL}/blob/main/LICENSE"));
+            ui.label(RichText::new("·").color(muted()));
+            ui.hyperlink_to(
+                tr("Polityka prywatności", "Privacy policy"),
+                format!("{REPO_URL}/blob/main/{}", tr("PRIVACY.pl.md", "PRIVACY.md")),
+            );
+            ui.label(RichText::new("·").color(muted()));
+            ui.hyperlink_to("gnu.org/licenses", "https://www.gnu.org/licenses/");
+        });
+    });
+    ui.add_space(12.0);
 }
 
 /// Karta z tytułem i listą akapitów w zakładce ABOUT.

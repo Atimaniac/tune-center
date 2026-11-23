@@ -30,7 +30,8 @@ przełącza się przyciskami w nagłówku, obok logo:
 - **OPTIONS** - uruchamianie z Windows, minimalizowanie do zasobnika
   i motyw wyglądu: Tune (z opcją jasnego), Neon Green, Neon City (miasto nocą
   z postacią w nagłówku i ulicą na dole okna) i Crimson.
-- **ABOUT** - wersja programu, opis i użyte składniki.
+- **ABOUT** - wersja programu, opis, autor, odnośnik do GitHuba, nota
+  licencyjna i użyte składniki.
 
 Stan połączenia z czujnikami ("Czujniki: połączono") jest na pasku na
 samym dole okna. W dalszej części opisu sekcje noszą polskie nazwy:
@@ -873,6 +874,46 @@ Karta graficzna:
 Nie uruchamiaj równocześnie innych programów sterujących tym samym sprzętem
 (MSI Afterburner, FanControl, oprogramowanie producenta płyty) - będą się
 nadpisywać.
+
+## Prywatność
+
+Tune Center nie ma telemetrii, kont ani reklam. Łączy się z GitHubem
+(aktualizacje programu) i z serwerami NVIDIA (aktualizacje sterownika)
+wyłącznie po to, żeby sprawdzić i pobrać aktualizację; oba sprawdzania można
+wyłączyć. Szczegóły: [PRIVACY.pl.md](PRIVACY.pl.md).
+
+## Licencja
+
+Tune Center - strojenie i monitorowanie komputera w jednym oknie\
+Copyright (C) 2026 Atimaniac
+
+Ten program jest wolnym oprogramowaniem: możesz go rozpowszechniać i
+modyfikować na warunkach Powszechnej Licencji Publicznej GNU (GNU General
+Public License), wydanej przez Free Software Foundation, w wersji 3 albo
+(według Twojego uznania) dowolnej nowszej. Identyfikator SPDX:
+`GPL-3.0-or-later`.
+
+Program jest rozpowszechniany z nadzieją, że będzie użyteczny, ale BEZ
+ŻADNEJ GWARANCJI, nawet domniemanej gwarancji PRZYDATNOŚCI HANDLOWEJ albo
+PRZYDATNOŚCI DO OKREŚLONEGO CELU. Szczegóły są w Powszechnej Licencji
+Publicznej GNU.
+
+Kopia licencji jest w pliku [LICENSE](LICENSE) (wiążący jest tekst
+angielski); znajdziesz ją też pod adresem <https://www.gnu.org/licenses/>.
+
+Co to oznacza w praktyce:
+
+- Możesz używać programu w dowolnym celu, czytać i zmieniać jego kod źródłowy
+  oraz przekazywać kopie - za darmo albo odpłatnie.
+- Jeśli rozpowszechniasz program albo jego zmienioną wersję, musisz robić to
+  na tej samej licencji (GPL-3.0-or-later), zachować noty o prawach
+  autorskich i udostępnić pełny kod źródłowy.
+- Program nie ma gwarancji, a autor nie odpowiada za szkody wynikłe z jego
+  używania.
+
+Plik LICENSE jest instalowany obok programu, a nota licencyjna jest widoczna
+w zakładce ABOUT. Składniki innych autorów zachowują swoje licencje - zobacz
+[THIRD-PARTY.pl.md](THIRD-PARTY.pl.md).
 
 ## Stan projektu
 
