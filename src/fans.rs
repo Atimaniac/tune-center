@@ -450,6 +450,26 @@ impl FansTab {
             return;
         }
 
+        // Układy tylko do odczytu (np. NCT6683D z firmware producenta płyty):
+        // ich złączy nie pokazujemy do sterowania, tylko informację.
+        let mut read_only: Vec<&str> = snap
+            .fans
+            .iter()
+            .filter(|f| crate::bridge::read_only_chip(&f.hw))
+            .map(|f| f.hw.as_str())
+            .collect();
+        read_only.dedup();
+        for hw in &read_only {
+            crate::theme::info(
+                ui,
+                &crate::trf!(
+                    "Układ {hw} na tej płycie ma firmware producenta i pozwala tylko na odczyt - program nie steruje jego wentylatorami (zapisy z systemu mogłyby rozregulować płytę). Krzywe wentylatorów ustaw w BIOS-ie.",
+                    "The {hw} chip on this motherboard runs vendor firmware and is read-only - the program does not control its fans (writes from the OS could upset the board). Set the fan curves in the BIOS."
+                ),
+            );
+            ui.add_space(6.0);
+        }
+
         // Złącza z zerowym odczytem są ukrywane, ale tylko w trybie Auto:
         // wentylator zatrzymany własnym ustawieniem musi zostać widoczny,
         // żeby dało się go z powrotem rozkręcić.
@@ -457,7 +477,8 @@ impl FansTab {
             .fans
             .iter()
             .filter(|fan| {
-                looks_unused(fan)
+                !crate::bridge::read_only_chip(&fan.hw)
+                    && looks_unused(fan)
                     && self
                         .config
                         .fans()
@@ -491,7 +512,8 @@ impl FansTab {
                     .fans()
                     .get(&fan.id)
                     .is_none_or(|cfg| cfg.mode == Mode::Auto);
-                show_idle || !auto || !looks_unused(fan)
+                !crate::bridge::read_only_chip(&fan.hw)
+                    && (show_idle || !auto || !looks_unused(fan))
             })
             .collect();
 

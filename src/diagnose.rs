@@ -433,6 +433,11 @@ fn cpu(r: &mut Report, hw: &mut Vec<String>) {
             (0x620, "RING_RATIO_LIMIT"),
             (0xCE, "PLATFORM_INFO"),
         ] {
+            // 0x650 istnieje tylko w procesorach z rdzeniami E (12. gen. i nowsze).
+            if msr == 0x650 && !info.hybrid {
+                r.info(format!("MSR 0x{msr:X} {what}: not present (no E-cores)"));
+                continue;
+            }
             match intel::Msr::read(&mut io, msr) {
                 Ok(v) => r.ok(format!("MSR 0x{msr:X} {what} = 0x{v:016X}")),
                 Err(e) => r.fail(format!("MSR 0x{msr:X} {what}: {e}")),
@@ -441,9 +446,11 @@ fn cpu(r: &mut Report, hw: &mut Vec<String>) {
         let state = intel::read_state(&mut io, info.hybrid);
         r.result("power limits", &state.limits, |v| format!("{v:?}"));
         for (domain, v) in &state.voltages {
-            r.result(&format!("voltage offset {}", domain.label()), v, |v| {
-                format!("{v:?}")
-            });
+            r.result(
+                &format!("voltage offset {}", domain.label_for(info.hybrid)),
+                v,
+                |v| format!("{v:?}"),
+            );
         }
         match &state.iccmax_a {
             Some(v) => r.result("Core IccMax", v, |a| format!("{a} A")),
@@ -533,7 +540,9 @@ fn gpu(r: &mut Report, hw: &mut Vec<String>) {
         }
     }
     let Some(mut backend) = crate::gpu::load_drivers() else {
-        r.fail("no NVIDIA or AMD driver library could be loaded");
+        // Sama grafika zintegrowana (np. Intel) to nie błąd - zakładka NVIDIA
+        // nie ma wtedy czym sterować.
+        r.info("no NVIDIA or AMD graphics driver - NVIDIA tab and GPU features are not available on this PC");
         return;
     };
     let names = backend.gpus();
@@ -636,6 +645,18 @@ fn sensors(r: &mut Report, live: &Live) {
     if !s.temps.iter().any(|t| t.kind == "Cpu" && t.value.is_some()) {
         r.warn("no CPU temperature");
     }
+    let mut read_only: Vec<&str> = s
+        .fans
+        .iter()
+        .filter(|f| crate::bridge::read_only_chip(&f.hw))
+        .map(|f| f.hw.as_str())
+        .collect();
+    read_only.dedup();
+    for hw in read_only {
+        r.warn(format!(
+            "{hw}: read-only Super I/O (vendor firmware) - fan control disabled, 65535 rpm readings treated as no reading"
+        ));
+    }
     if !kinds.keys().any(|k| k.starts_with("SuperIO")) {
         r.warn("no Super I/O chip detected - motherboard fans and temperatures unavailable");
     }
@@ -684,7 +705,8 @@ fn bridge_once() -> (Option<crate::bridge::Snapshot>, String) {
     std::thread::spawn(move || {
         let Some(out) = stdout else { return };
         for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
-            if let Ok(s) = serde_json::from_str::<crate::bridge::Snapshot>(&line) {
+            if let Ok(mut s) = serde_json::from_str::<crate::bridge::Snapshot>(&line) {
+                s.sanitize();
                 // Pierwszy pełny odczyt (z czujnikami) albo błąd.
                 if !s.temps.is_empty() || s.error.is_some() {
                     let _ = tx.send(s);

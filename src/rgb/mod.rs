@@ -129,7 +129,10 @@ pub enum Family {
 impl Family {
     /// Sprawdzone na prawdziwym sprzęcie.
     pub fn tested(self) -> bool {
-        matches!(self, Family::EneRam | Family::Skydimo | Family::Logitech)
+        matches!(
+            self,
+            Family::EneRam | Family::CorsairRam | Family::Skydimo | Family::Logitech
+        )
     }
 
     pub fn label(self) -> &'static str {

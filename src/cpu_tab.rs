@@ -216,7 +216,7 @@ impl IntelTab {
                 continue;
             }
             match intel::set_voltage_offset(driver, *domain, *new) {
-                Ok(mv) => done.push(format!("{} {mv} mV", domain.label())),
+                Ok(mv) => done.push(format!("{} {mv} mV", domain.label_for(self.info.hybrid))),
                 Err(e) => {
                     // Po pierwszym błędzie nie próbujemy kolejnych domen.
                     error = Some(e);
@@ -413,7 +413,7 @@ impl IntelTab {
                 egui::Grid::new("cpu_voltage").num_columns(3).spacing([14.0, 8.0]).show(ui, |ui| {
                     header_row(ui);
                     for (i, (domain, voltage)) in state.voltages.iter().enumerate() {
-                        ui.label(domain.label());
+                        ui.label(domain.label_for(self.info.hybrid));
                         match voltage {
                             Ok(v) => {
                                 let mode = if v.override_mode { crate::i18n::tr("stałe", "override") } else { crate::i18n::tr("adaptacyjne", "adaptive") };

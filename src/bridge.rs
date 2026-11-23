@@ -204,6 +204,34 @@ fn crash_report(code: Option<i32>, stderr: &StderrLines) -> String {
     text
 }
 
+/// Wartość obrotów, która oznacza brak odczytu (licznik 0xFFFF), a nie
+/// prawdziwą prędkość - np. układ NCT6683D na płytach ASRock.
+const RPM_INVALID: f32 = 65_000.0;
+
+/// Układy Super I/O, którymi nie sterujemy - tylko odczyt. NCT6683D ma na
+/// płytach (np. ASRock) własny firmware producenta; zapisy z systemu są
+/// uznawane za ryzykowne (sterownik Linuksa też je blokuje).
+pub fn read_only_chip(hw: &str) -> bool {
+    hw.to_ascii_uppercase().contains("NCT6683")
+}
+
+impl Snapshot {
+    /// Odczyty "brak danych" (65535 obr./min) jako brak odczytu.
+    pub fn sanitize(&mut self) {
+        let fix = |rpm: &mut Option<f32>| {
+            if rpm.is_some_and(|r| r >= RPM_INVALID) {
+                *rpm = None;
+            }
+        };
+        for f in &mut self.fans {
+            fix(&mut f.rpm);
+        }
+        for s in &mut self.speeds {
+            fix(&mut s.rpm);
+        }
+    }
+}
+
 impl Inner {
     fn send(&mut self, line: &str) {
         let _ = writeln!(self.stdin, "{line}");
@@ -216,7 +244,7 @@ impl Inner {
         let mut commands = Vec::new();
 
         for fan in &snap.fans {
-            if self.skip_kinds.contains(&fan.kind.as_str()) {
+            if self.skip_kinds.contains(&fan.kind.as_str()) || read_only_chip(&fan.hw) {
                 continue;
             }
             let target = target(self.fans.get(&fan.id), &snap.temps)
@@ -375,7 +403,8 @@ impl Backend {
                     if line.trim().is_empty() {
                         continue;
                     }
-                    if let Ok(snap) = serde_json::from_str::<Snapshot>(&line) {
+                    if let Ok(mut snap) = serde_json::from_str::<Snapshot>(&line) {
+                        snap.sanitize();
                         let mut s = thread_inner.lock().unwrap();
                         if let Some(err) = &snap.error {
                             s.status = Status::Error(err.clone());
@@ -529,5 +558,26 @@ impl Drop for Backend {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod invalid_rpm_tests {
+    use super::*;
+
+    #[test]
+    fn rpm_sentinel_and_read_only_chip() {
+        let json = r#"{"temps":[],"fans":[
+            {"id":"a","name":"Fan #1","hw":"Nuvoton NCT6683D","kind":"SuperIO","rpm":65535.0,"percent":100.0},
+            {"id":"b","name":"Fan #2","hw":"Nuvoton NCT6796D-R","kind":"SuperIO","rpm":1200.0,"percent":40.0}],
+            "speeds":[{"name":"x","hw":"h","rpm":65535.0,"percent":null}]}"#;
+        let mut s: Snapshot = serde_json::from_str(json).unwrap();
+        s.sanitize();
+        assert_eq!(s.fans[0].rpm, None);
+        assert_eq!(s.fans[1].rpm, Some(1200.0));
+        assert_eq!(s.speeds[0].rpm, None);
+        assert!(read_only_chip("Nuvoton NCT6683D"));
+        assert!(!read_only_chip("Nuvoton NCT6796D-R"));
+        assert!(!read_only_chip("Nuvoton NCT6701D"));
     }
 }

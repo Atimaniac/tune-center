@@ -65,6 +65,16 @@ impl Domain {
     pub fn label(&self) -> &'static str {
         crate::i18n::tr(self.name, self.name_en)
     }
+
+    /// Nazwa z uwzględnieniem procesora: bez rdzeni E domena rdzeni to
+    /// po prostu "Rdzenie".
+    pub fn label_for(&self, hybrid: bool) -> &'static str {
+        if !hybrid && self.id == DOMAIN_P_CORE {
+            crate::i18n::tr("Rdzenie", "Cores")
+        } else {
+            self.label()
+        }
+    }
 }
 
 /// Ustawienia napięcia jednej domeny.

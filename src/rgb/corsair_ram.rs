@@ -13,7 +13,8 @@
 //!
 //! Efekt: [tryb, szybkość, kolory własne (1), kierunek, R, G, B, jasność,
 //! R2, G2, B2, jasność2, 0…]; tryb 0x10 = stały kolor. Wyłączenie = stały
-//! czarny. Nietestowane na sprzęcie.
+//! czarny. Sprawdzone na Corsair Vengeance RGB PRO (CMW16GX4M2C3200C16, płyta
+//! MSI B450 z chipsetem AMD) - zgłoszenie #1.
 
 use super::ene_ram::{open_bus, Smbus, SMBUS_LOCK};
 use crate::cpu::pawnio::NamedLock;
