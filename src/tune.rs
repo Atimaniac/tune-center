@@ -1943,8 +1943,8 @@ impl Tune {
         theme::info(
             ui,
             crate::i18n::tr(
-                "Ustawienia Windows wpływające na opóźnienia wejścia i DPC. Zaznaczenie ustawia wartość zalecaną, odznaczenie przywraca oryginał. Przed pierwszą zmianą program zapisuje oryginalne wartości (tune-backup.json) i sprawdza każdy zapis odczytem. Zmieniaj po jednej pozycji i porównuj LatencyMon przed i po.",
-                "Windows settings that affect input latency and DPC. Ticking sets the recommended value, unticking restores the original. Before the first change the program saves the original values (tune-backup.json) and verifies every write by reading back. Change one item at a time and compare LatencyMon before and after.",
+                "Ustawienia Windows wpływające na opóźnienia wejścia i DPC. Przełącznik pokazuje stan odczytany z systemu: ON (zielony) = ustawiona wartość zalecana, OFF (czerwony) = wartość Windows; kliknięcie przełącza. Przed pierwszą zmianą program zapisuje oryginalne wartości (tune-backup.json) i sprawdza każdy zapis odczytem. Zmieniaj po jednej pozycji i porównuj LatencyMon przed i po.",
+                "Windows settings that affect input latency and DPC. The switch shows the state read from the system: ON (green) = recommended value set, OFF (red) = Windows value; click to toggle. Before the first change the program saves the original values (tune-backup.json) and verifies every write by reading back. Change one item at a time and compare LatencyMon before and after.",
             ),
         );
         if !elevated {
@@ -2019,6 +2019,22 @@ impl Tune {
                 theme::card(12, 16).show(ui, |ui| {
                     ui.set_width(width);
                     theme::subheading(ui, icon, title);
+                    let available = items
+                        .iter()
+                        .filter(|i| matches!(i.state, State::Optimized(_) | State::Default(_)))
+                        .count();
+                    let on = items
+                        .iter()
+                        .filter(|i| matches!(i.state, State::Optimized(_)))
+                        .count();
+                    ui.label(
+                        RichText::new(crate::trf!(
+                            "Włączone: {on} z {available} dostępnych",
+                            "On: {on} of {available} available"
+                        ))
+                        .size(12.5)
+                        .color(theme::muted()),
+                    );
                     let mut msi_note = false;
                     for item in items {
                         // Opis trybu MSI raz, nad listą urządzeń.
@@ -2060,49 +2076,41 @@ fn item_ui(
     use eframe::egui::{self, RichText};
 
     let mut change = None;
-    let (badge, color, detail) = match &item.state {
-        State::Optimized(v) => (
-            crate::i18n::tr("ZALECANE", "RECOMMENDED"),
-            theme::ok(),
-            Some(v.clone()),
-        ),
-        State::Default(v) => (
-            crate::i18n::tr("DOMYŚLNE", "DEFAULT"),
-            theme::muted(),
-            Some(v.clone()),
-        ),
-        State::Unsupported(v) => (
-            crate::i18n::tr("NIE DOTYCZY", "N/A"),
-            theme::muted(),
-            Some(v.clone()),
-        ),
-        State::Unknown(v) => (
-            crate::i18n::tr("BŁĄD ODCZYTU", "READ ERROR"),
-            theme::warn(),
-            Some(v.clone()),
-        ),
+    let (switch, detail) = match &item.state {
+        State::Optimized(v) => (theme::SwitchState::On, v.clone()),
+        State::Default(v) => (theme::SwitchState::Off, v.clone()),
+        State::Unsupported(v) => (theme::SwitchState::NotApplicable, v.clone()),
+        // Nieznany stan: przełącznik nieaktywny, plakietka z błędem.
+        State::Unknown(v) => (theme::SwitchState::NotApplicable, v.clone()),
     };
+    let detail = Some(detail);
     let toggleable = matches!(item.state, State::Optimized(_) | State::Default(_));
     ui.horizontal(|ui| {
-        let mut on = matches!(item.state, State::Optimized(_));
+        let on = matches!(item.state, State::Optimized(_));
         let enabled = idle && allowed && toggleable;
-        if ui
-            .add_enabled(
-                enabled,
-                egui::Checkbox::new(
-                    &mut on,
-                    RichText::new(&item.name).size(14.0).color(theme::text()),
-                ),
-            )
-            .clicked()
-        {
-            change = Some((item.key.clone(), on));
+        // Przełącznik pokazuje stan odczytany z Windows; kliknięcie zgłasza
+        // zmianę, a gałka przesuwa się dopiero po zapisie i odczycie.
+        if theme::switch(ui, &item.key, switch, enabled).clicked() {
+            change = Some((item.key.clone(), !on));
         }
+        ui.add_space(4.0);
+        let name_color = if toggleable {
+            theme::text()
+        } else {
+            theme::muted()
+        };
+        ui.label(RichText::new(&item.name).size(14.0).color(name_color));
         if busy == Some(item.key.as_str()) {
             ui.spinner();
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::history::badge(ui, badge, color);
+            if matches!(item.state, State::Unknown(_)) {
+                crate::history::badge(
+                    ui,
+                    crate::i18n::tr("BŁĄD ODCZYTU", "READ ERROR"),
+                    theme::warn(),
+                );
+            }
             if item.restart {
                 crate::history::badge(ui, crate::i18n::tr("RESTART", "RESTART"), theme::warn())
                     .on_hover_text(crate::i18n::tr(
@@ -2113,7 +2121,7 @@ fn item_ui(
         });
     });
     ui.horizontal(|ui| {
-        ui.add_space(26.0);
+        ui.add_space(78.0);
         ui.vertical(|ui| {
             if !item.key.starts_with("msi:") {
                 ui.add(

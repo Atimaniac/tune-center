@@ -624,3 +624,125 @@ pub fn grid_card_width(avail: f32, min_outer: f32, gap: f32, max_cols: usize, ma
     // 2 px na obramowanie i 1 px zapasu, żeby zaokrąglenia nie zawijały wiersza.
     (outer - 2.0 * margin - 3.0).max(120.0)
 }
+
+/// Stan przełącznika ON/OFF.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SwitchState {
+    On,
+    Off,
+    /// Ustawienie nie dotyczy tego komputera (szary, przerywany, bez gałki).
+    NotApplicable,
+}
+
+/// Przełącznik ON/OFF: zielony z gałką po prawej (ON), czerwony z gałką po
+/// lewej (OFF). Zmiana stanu przesuwa gałkę płynnie. Stan pokazuje to, co
+/// podał wywołujący - kliknięcie tylko zgłasza żądanie zmiany.
+pub fn switch(ui: &mut egui::Ui, id: &str, state: SwitchState, enabled: bool) -> egui::Response {
+    let size = vec2(66.0, 28.0);
+    let sense = if enabled && state != SwitchState::NotApplicable {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    let id = ui.scope_id().with(("tc-switch", id));
+    let t = ui
+        .ctx()
+        .animate_bool_with_time(id, state == SwitchState::On, 0.2);
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let painter = ui.painter();
+    let radius = CornerRadius::same(14);
+    let font = egui::FontId::proportional(12.0);
+
+    if state == SwitchState::NotApplicable {
+        // Przerywana obwódka z napisem "n/d".
+        let color = muted().gamma_multiply(0.7);
+        let r = rect.shrink(1.0);
+        let mut pts = Vec::new();
+        let steps = 48;
+        for i in 0..=steps {
+            let a = i as f32 / steps as f32 * std::f32::consts::TAU;
+            // Zaokrąglony prostokąt przybliżony "stadionem".
+            let (s, c) = a.sin_cos();
+            let x = if c >= 0.0 { r.right() - 14.0 } else { r.left() + 14.0 } + c * 13.0;
+            pts.push(pos2(x, r.center().y + s * 13.0));
+        }
+        for (i, w) in pts.windows(2).enumerate() {
+            // Odcinek przeskakujący między łukami (góra/dół) rysują linie niżej.
+            if i % 2 == 0 && (w[0].x - w[1].x).abs() < 6.0 {
+                painter.line_segment([w[0], w[1]], Stroke::new(1.5, color));
+            }
+        }
+        let mut x = r.left() + 16.0;
+        while x < r.right() - 16.0 {
+            let x2 = (x + 4.0).min(r.right() - 14.0);
+            for y in [r.center().y - 13.0, r.center().y + 13.0] {
+                painter.line_segment([pos2(x, y), pos2(x2, y)], Stroke::new(1.5, color));
+            }
+            x += 8.0;
+        }
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            crate::i18n::tr("n/d", "n/a"),
+            font,
+            color,
+        );
+        return response;
+    }
+
+    let lerp = |a: Color32, b: Color32| {
+        let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+        Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
+    };
+    let (off_bg, off_edge, off_knob, off_text) = (
+        pick(Color32::from_rgb(90, 26, 31), Color32::from_rgb(252, 222, 222)),
+        pick(Color32::from_rgb(224, 72, 72), Color32::from_rgb(200, 50, 50)),
+        pick(Color32::from_rgb(255, 138, 138), Color32::from_rgb(200, 50, 50)),
+        pick(Color32::from_rgb(255, 179, 179), Color32::from_rgb(170, 30, 30)),
+    );
+    let (on_bg, on_edge, on_knob, on_text) = (
+        pick(Color32::from_rgb(23, 128, 63), Color32::from_rgb(34, 160, 80)),
+        pick(Color32::from_rgb(64, 220, 120), Color32::from_rgb(24, 130, 60)),
+        Color32::WHITE,
+        Color32::WHITE,
+    );
+    let mut bg = lerp(off_bg, on_bg);
+    let edge = lerp(off_edge, on_edge);
+    if !enabled {
+        bg = bg.gamma_multiply(0.6);
+    }
+    painter.rect(rect, radius, bg, Stroke::new(1.5, edge), StrokeKind::Inside);
+    if response.hovered() && enabled {
+        painter.rect_stroke(
+            rect.expand(2.0),
+            CornerRadius::same(16),
+            Stroke::new(1.0, edge.gamma_multiply(0.5)),
+            StrokeKind::Outside,
+        );
+    }
+    // Napisy: ON po lewej, OFF po prawej - widoczny ten po stronie bez gałki.
+    painter.text(
+        pos2(rect.left() + 18.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        "ON",
+        font.clone(),
+        on_text.gamma_multiply(t),
+    );
+    painter.text(
+        pos2(rect.right() - 20.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        "OFF",
+        font,
+        off_text.gamma_multiply(1.0 - t),
+    );
+    let x = rect.left() + 14.0 + t * (rect.width() - 28.0);
+    painter.circle_filled(pos2(x, rect.center().y), 10.0, lerp(off_knob, on_knob));
+    response.on_hover_cursor(if enabled {
+        egui::CursorIcon::PointingHand
+    } else {
+        egui::CursorIcon::NotAllowed
+    })
+}

@@ -524,8 +524,10 @@ nadpisywać ustawienia - najlepiej, żeby nie działały jednocześnie.
 ## TUNE - opóźnienia i DPC
 
 Ustawienia Windows, które wpływają na opóźnienie wejścia i czasy DPC. Każda
-pozycja pokazuje stan odczytany z systemu; zaznaczenie ustawia wartość
-zalecaną, odznaczenie przywraca oryginał. Przed pierwszą zmianą pozycji
+pozycja ma przełącznik pokazujący stan odczytany z systemu: ON (zielony) -
+ustawiona wartość zalecana, OFF (czerwony) - wartość Windows, "n/d" - nie
+dotyczy tego komputera. Kliknięcie przełącza; gałka przesuwa się dopiero po
+zapisie i odczycie. Nad listą licznik włączonych pozycji. Przed pierwszą zmianą pozycji
 oryginalna wartość trafia do `tune-backup.json` obok programu, a każdy zapis
 jest sprawdzany odczytem. "Przywróć ustawienia Windows" cofa wszystko.
 Oznaczenie RESTART: zmiana działa po ponownym uruchomieniu komputera.
