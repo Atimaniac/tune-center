@@ -666,7 +666,11 @@ pub fn switch(ui: &mut egui::Ui, id: &str, state: SwitchState, enabled: bool) ->
             let a = i as f32 / steps as f32 * std::f32::consts::TAU;
             // Zaokrąglony prostokąt przybliżony "stadionem".
             let (s, c) = a.sin_cos();
-            let x = if c >= 0.0 { r.right() - 14.0 } else { r.left() + 14.0 } + c * 13.0;
+            let x = if c >= 0.0 {
+                r.right() - 14.0
+            } else {
+                r.left() + 14.0
+            } + c * 13.0;
             pts.push(pos2(x, r.center().y + s * 13.0));
         }
         for (i, w) in pts.windows(2).enumerate() {
@@ -698,14 +702,32 @@ pub fn switch(ui: &mut egui::Ui, id: &str, state: SwitchState, enabled: bool) ->
         Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
     };
     let (off_bg, off_edge, off_knob, off_text) = (
-        pick(Color32::from_rgb(90, 26, 31), Color32::from_rgb(252, 222, 222)),
-        pick(Color32::from_rgb(224, 72, 72), Color32::from_rgb(200, 50, 50)),
-        pick(Color32::from_rgb(255, 138, 138), Color32::from_rgb(200, 50, 50)),
-        pick(Color32::from_rgb(255, 179, 179), Color32::from_rgb(170, 30, 30)),
+        pick(
+            Color32::from_rgb(90, 26, 31),
+            Color32::from_rgb(252, 222, 222),
+        ),
+        pick(
+            Color32::from_rgb(224, 72, 72),
+            Color32::from_rgb(200, 50, 50),
+        ),
+        pick(
+            Color32::from_rgb(255, 138, 138),
+            Color32::from_rgb(200, 50, 50),
+        ),
+        pick(
+            Color32::from_rgb(255, 179, 179),
+            Color32::from_rgb(170, 30, 30),
+        ),
     );
     let (on_bg, on_edge, on_knob, on_text) = (
-        pick(Color32::from_rgb(23, 128, 63), Color32::from_rgb(34, 160, 80)),
-        pick(Color32::from_rgb(64, 220, 120), Color32::from_rgb(24, 130, 60)),
+        pick(
+            Color32::from_rgb(23, 128, 63),
+            Color32::from_rgb(34, 160, 80),
+        ),
+        pick(
+            Color32::from_rgb(64, 220, 120),
+            Color32::from_rgb(24, 130, 60),
+        ),
         Color32::WHITE,
         Color32::WHITE,
     );

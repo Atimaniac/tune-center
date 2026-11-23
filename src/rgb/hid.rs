@@ -15,7 +15,6 @@ pub struct Iface {
     pub pid: u16,
     pub usage_page: u16,
     pub usage: u16,
-    #[cfg_attr(not(test), allow(dead_code))]
     pub interface: i32,
     pub path: CString,
     pub product: String,
@@ -26,6 +25,14 @@ impl Hid {
         hidapi::HidApi::new()
             .map(|api| Self { api })
             .map_err(|e| format!("HID: {e}"))
+    }
+
+    /// Wszystkie interfejsy HID (diagnostyka).
+    pub fn list_all(&self) -> Vec<Iface> {
+        let mut v: Vec<u16> = self.api.device_list().map(|d| d.vendor_id()).collect();
+        v.sort();
+        v.dedup();
+        v.into_iter().flat_map(|vid| self.list(vid)).collect()
     }
 
     /// Interfejsy urządzeń danego producenta.

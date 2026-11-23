@@ -60,7 +60,7 @@ pub struct FanStatus {
     pub pct: Option<u32>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Vendor {
     Nvidia,
     Amd,

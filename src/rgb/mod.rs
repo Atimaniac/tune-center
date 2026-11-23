@@ -242,7 +242,7 @@ impl Manager {
 }
 
 /// Wyszukuje wszystkie obsługiwane urządzenia.
-fn discover(
+pub(crate) fn discover(
     elevated: bool,
     ram_saved: &RamSaved,
 ) -> (Vec<Box<dyn Device>>, Vec<Problem>) {
@@ -413,4 +413,25 @@ mod tests {
         c.sync = true;
         assert_eq!(c.effective("a").mode, Mode::Untouched);
     }
+}
+
+/// Diagnostyka zgodności: wszystkie interfejsy USB HID (bez numerów
+/// seryjnych) - z tego da się dopisać obsługę nieznanego kontrolera RGB.
+pub fn hid_inventory() -> Vec<String> {
+    let Ok(hid) = hid::Hid::new() else {
+        return vec!["hidapi: init failed".into()];
+    };
+    let mut out: Vec<String> = hid
+        .list_all()
+        .iter()
+        .map(|i| {
+            format!(
+                "{:04X}:{:04X} if {} page {:04X} usage {:04X} \"{}\"",
+                i.vid, i.pid, i.interface, i.usage_page, i.usage, i.product
+            )
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }

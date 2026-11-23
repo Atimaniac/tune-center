@@ -1,0 +1,37 @@
+name: Compatibility report
+description: Something does not work on your hardware - send the report from OPTIONS > Compatibility check.
+title: "Compatibility: "
+labels: ["compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you! This report lets the author fix Tune Center for hardware he does not have.
+        Created by **OPTIONS > Compatibility check > Report on GitHub**. The check only reads - nothing on your PC was changed.
+        The report has no serial numbers; your user and computer name are replaced.
+        *Polski: raport pozwala poprawić program bez dostępu do Twojego sprzętu. Opisy możesz pisać po polsku.*
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary (filled in by the program)
+      description: Version, number of errors and the FAIL / WARN lines.
+    validations:
+      required: false
+  - type: textarea
+    id: report
+    attributes:
+      label: Full report
+      description: |
+        The full report is in your clipboard - click here and press **Ctrl+V**.
+        If it is too long, drag the file `tunecenter-diagnostics.txt` (next to the program, or in %TEMP%) into this field instead.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What does not work?
+      description: Which tab or function, what you expected and what happened (a screenshot helps).
+      placeholder: e.g. FAN shows no motherboard fans; CPU tab says "not supported"
+    validations:
+      required: true

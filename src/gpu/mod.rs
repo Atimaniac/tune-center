@@ -1281,3 +1281,25 @@ mod monitor_timing {
         }
     }
 }
+
+/// Diagnostyka zgodności: wczytanie bibliotek NVIDIA i AMD (tylko odczyt).
+pub fn driver_diagnostics() -> Vec<(bool, String)> {
+    let mut out = Vec::new();
+    match nvapi::NvApi::load() {
+        Ok(mut api) => {
+            out.push((true, "NVAPI loaded".to_owned()));
+            // Pierwszy odczyt ustala wersję struktur i maskę czujników.
+            if !api.gpus().is_empty() {
+                let _ = api.monitor(0);
+                let _ = api.offsets(0);
+            }
+            out.extend(api.diagnostics().into_iter().map(|l| (true, l)));
+        }
+        Err(e) => out.push((false, format!("NVAPI: {e}"))),
+    }
+    match amd::Amd::load() {
+        Ok(_) => out.push((true, "ADL (AMD) loaded".to_owned())),
+        Err(e) => out.push((false, format!("ADL: {e}"))),
+    }
+    out
+}

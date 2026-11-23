@@ -84,7 +84,7 @@ Single-thread and multi-thread CPU score (10 s each, own scale for before/after 
 **Graphics card stability** – 2 minutes of full load through Direct3D 11: FP32 math on the whole GPU, a power-heavy mixed memory + math pass and write/read checks of 512 MB of video memory. Every calculation and memory read is verified, so an unstable overclock or undervolt shows up as errors. When the test ends, a window shows the score (GFLOPS FP32 and memory GB/s), STABLE / UNSTABLE, the comparison with your best result, and average/min/max with 2-minute charts of core clock, memory clock, temperature and power draw. Results are kept in the history.
 
 ### OPTIONS and ABOUT
-Both open from the buttons next to *UPDATE* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), light theme, GPU fans through the driver, update checks, energy price. Lighting moved to the RGB tab in 0.28.0 (settings are carried over).
+Both open from the buttons next to *UPDATE* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), light theme, GPU fans through the driver, update checks, energy price, **compatibility check**. Lighting moved to the RGB tab in 0.28.0 (settings are carried over).
 
 ## Installation
 
@@ -101,6 +101,8 @@ Running as administrator is optional – the GPU, NVIDIA settings, shader compil
 - [PawnIO](https://pawnio.eu) – optional; needed for CPU tuning, CPU sensors and RAM lighting (installed by the setup)
 
 ### If something goes wrong
+**Something does not work on your hardware?** Run *OPTIONS > Compatibility check* (or `tunecenter.exe --diagnose`). It only reads - CPU registers, graphics driver functions, sensors, disks, RGB devices, TUNE items, games - and writes `tunecenter-diagnostics.txt` without serial numbers or your user name. *Report on GitHub* copies the report and opens a ready [compatibility issue](https://github.com/Atimaniac/tune-center/issues/new?template=compatibility.yml) - paste it with Ctrl+V. With it, support for new hardware can be fixed without access to it.
+
 When Tune Center or its sensor process crashes, a window shows what happened (error code, the module that failed, the .NET error of the sensor process). The report is saved next to the program in `tunecenter-crash.log` or `sensor-bridge-crash.log` – please attach it to a [GitHub issue](https://github.com/Atimaniac/tune-center/issues).
 
 ## ⚠️ Disclaimer

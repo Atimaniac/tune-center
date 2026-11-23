@@ -264,3 +264,8 @@ mod tests {
         assert_eq!(parse_name(&[0u8; 4]), None);
     }
 }
+
+/// Jednorazowy odczyt temperatur dysków (diagnostyka).
+pub fn read_now() -> Vec<Disk> {
+    imp::read_all()
+}

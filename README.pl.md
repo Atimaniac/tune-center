@@ -795,6 +795,31 @@ W zakładce NVIDIA > Overclock > Informacje:
   "nieznane".
   Resizable BAR włącza się w BIOS-ie płyty głównej.
 
+## Diagnostyka zgodności
+
+OPTIONS > "Diagnostyka zgodności" (albo `tunecenter.exe --diagnose` bez okna)
+sprawdza, co na danym komputerze działa, a co nie - **wyłącznie odczyty**,
+nic nie jest zmieniane. Raport `tunecenter-diagnostics.txt` (obok programu,
+a gdy tam nie wolno pisać - w %TEMP%) zawiera dla każdego punktu OK / WARN /
+FAIL i surowe dane:
+
+- system: Windows, administrator, UAC, płyta i BIOS, .NET 11, pliki procesu
+  czujników, moduły i sterownik PawnIO,
+- procesor: identyfikator CPUID, surowe odczyty MSR (Intel) albo generacja,
+  wersja tabeli PM i odczyty SMU (AMD), wszystko, co pokazuje zakładka CPU,
+- karta: identyfikatory PCI, okna pamięci (ReBAR), brakujące funkcje NVAPI /
+  NVML, ADL, odczyty czujników, wentylator, offsety, krzywa V/F,
+- czujniki (LibreHardwareMonitor): układ Super I/O, temperatury, wentylatory,
+- dyski, RGB (wykryte urządzenia i lista wszystkich urządzeń USB HID), TUNE,
+  gry i silniki do kompilacji shaderów, raporty awarii.
+
+Bez numerów seryjnych i adresów MAC; nazwa użytkownika i komputera są
+zastępowane. "Zgłoś na GitHubie" kopiuje raport do schowka i otwiera nowe
+zgłoszenie z szablonu "Compatibility report" (tytuł i podsumowanie są
+wypełnione, raport wkleja się Ctrl+V). Uruchomiona z OPTIONS korzysta z
+działającego procesu czujników; w trybie `--diagnose` uruchamia go na chwilę
+tylko wtedy, gdy nie działa już inny (żeby nie oddać wentylatorów BIOS-owi).
+
 ## Awarie
 
 Gdy program albo proces czujników ulegnie awarii, pokazuje się okno z opisem

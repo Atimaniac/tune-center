@@ -16,6 +16,7 @@ mod cpu;
 mod cpu_tab;
 mod crash;
 mod curve;
+mod diagnose;
 mod disks;
 mod elevation;
 mod fans;
@@ -225,6 +226,8 @@ struct App {
     gpu_fans: Option<gpu_fans::GpuFans>,
     /// Zakładka RGB (oświetlenie).
     rgb: rgb_tab::RgbTab,
+    /// Diagnostyka zgodności (OPTIONS).
+    diagnose: diagnose::Panel,
     /// Zakładka TUNE (opóźnienia i DPC).
     tune: tune::Tune,
     /// Zakładka BENCH (test wydajności i stress test).
@@ -353,6 +356,7 @@ impl App {
             gpu_fans,
             disks: disks::Disks::start(),
             rgb,
+            diagnose: diagnose::Panel::default(),
             tune: {
                 let ctx = cc.egui_ctx.clone();
                 tune::Tune::new(cpu::cpu_info().name.contains("X3D"), move || {
@@ -781,6 +785,24 @@ impl App {
             );
 
             self.nvdriver_options(ui, ctx);
+
+            {
+                let elevated = self.elevated;
+                let bridge = self.bridge.as_ref().map_or_else(
+                    |e| (None, e.clone()),
+                    |b| {
+                        let (snap, status) = b.state();
+                        (snap, format!("{status:?}"))
+                    },
+                );
+                let rgb = self.rgb.snapshot();
+                self.diagnose.ui(ui, ctx, move || diagnose::Live {
+                    bridge: Some(bridge),
+                    rgb: Some(rgb),
+                    elevated,
+                });
+                ui.add_space(10.0);
+            }
 
             let mut check = self.fans.config.check_updates;
             if ui
@@ -1441,6 +1463,28 @@ fn main() -> eframe::Result<()> {
         // SAFETY: celowe naruszenie dostępu - sprawdzenie filtra wyjątków.
         Some("native") => unsafe { std::ptr::write_volatile(std::ptr::null_mut::<u32>(), 1) },
         _ => {}
+    }
+    // Diagnostyka zgodności bez okna: raport obok programu (albo w %TEMP%).
+    if args.iter().any(|a| a == "--diagnose") {
+        // Raport po angielsku (do zgłoszenia na GitHubie).
+        i18n::set_english(true);
+        let report = diagnose::run(
+            diagnose::Live {
+                elevated: elevation::is_elevated(),
+                ..Default::default()
+            },
+            |step| eprintln!("diagnose: {step}"),
+        );
+        match diagnose::save(&report) {
+            Ok(path) => {
+                println!("{}", path.display());
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
     }
     // Jedna kopia programu: ponowne uruchomienie pokazuje okno już działającej
     // (także schowane do zasobnika, gdy powłoka nie pokazuje ikony).

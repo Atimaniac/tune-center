@@ -257,7 +257,7 @@ const DOTNET_MAJOR: &str = "11.";
 
 /// Czy jest runtime .NET w wersji wymaganej przez sensor-bridge
 /// (`%ProgramFiles%\dotnet\shared\Microsoft.NETCore.App\11.*`).
-fn dotnet_runtime_installed() -> bool {
+pub fn dotnet_runtime_installed() -> bool {
     let base = std::env::var_os("ProgramFiles")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Program Files"));

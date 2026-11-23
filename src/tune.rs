@@ -1292,7 +1292,7 @@ fn text(pl: &'static str, en: &'static str) -> String {
 }
 
 #[cfg(windows)]
-fn read_all(cpu_x3d: bool) -> Vec<Item> {
+pub(crate) fn read_all(cpu_x3d: bool) -> Vec<Item> {
     let mut items = Vec::new();
     let reg_item = |key: &str| REG_TWEAKS.iter().find(|t| t.key == key).unwrap();
 

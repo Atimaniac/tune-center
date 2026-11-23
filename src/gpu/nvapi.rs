@@ -1214,3 +1214,44 @@ mod interplay {
         assert_eq!(diff(&curve0, &curve9), 0, "krzywa nie wróciła");
     }
 }
+
+impl NvApi {
+    /// Diagnostyka zgodności: funkcje NVAPI, których sterownik nie ma, wersja
+    /// struktury P-stanów i maska czujników (tylko odczyt).
+    pub fn diagnostics(&self) -> Vec<String> {
+        let mut out = vec![format!(
+            "pstates20 struct version 0x{:08X}, thermal sensor mask {}",
+            self.pstates_version,
+            self.sensor_mask
+                .map_or("not read yet".to_owned(), |m| format!("0x{m:X}"))
+        )];
+        let fns: [(&str, bool); 16] = [
+            ("GetThermalSettings", self.get_thermal.is_some()),
+            ("ThermalGetSensors", self.get_sensors.is_some()),
+            ("ClientFanCoolersGetStatus", self.fan_status.is_some()),
+            ("ClientFanCoolersGetControl", self.fan_get_control.is_some()),
+            ("ClientFanCoolersSetControl", self.fan_set_control.is_some()),
+            ("GetAllClockFrequencies", self.get_clocks.is_some()),
+            ("GetDynamicPstatesInfoEx", self.get_usages.is_some()),
+            ("GetCurrentVoltage", self.get_voltage.is_some()),
+            ("GetPstates20", self.get_pstates.is_some()),
+            ("SetPstates20", self.set_pstates.is_some()),
+            (
+                "ClockClientClkVfPointsGetInfo (mask)",
+                self.get_mask.is_some(),
+            ),
+            ("ClockClientClkVfPointsGetControl", self.get_table.is_some()),
+            ("ClockClientClkVfPointsSetControl", self.set_table.is_some()),
+            ("ClockClientClkVfPointsGetStatus", self.get_vfp.is_some()),
+            ("ClientPowerTopologyGetStatus", self.get_topology.is_some()),
+            ("NVML (nvml.dll)", self.nvml.is_some()),
+        ];
+        let missing: Vec<&str> = fns.iter().filter(|f| !f.1).map(|f| f.0).collect();
+        out.push(if missing.is_empty() {
+            "all used NVAPI functions present".to_owned()
+        } else {
+            format!("missing: {}", missing.join(", "))
+        });
+        out
+    }
+}

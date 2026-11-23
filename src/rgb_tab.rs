@@ -206,3 +206,10 @@ fn setting_ui(ui: &mut egui::Ui, id: &str, s: &mut Setting) -> bool {
     });
     changed
 }
+
+impl RgbTab {
+    /// Stan urządzeń (diagnostyka zgodności).
+    pub fn snapshot(&self) -> rgb::Snapshot {
+        self.manager.snapshot()
+    }
+}
