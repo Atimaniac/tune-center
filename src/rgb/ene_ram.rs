@@ -43,6 +43,7 @@ const REG_COLORS_EFFECT: u16 = 0x8010;
 const REG_COLORS_EFFECT_V2: u16 = 0x8160;
 const REG_DIRECT: u16 = 0x8020;
 const REG_MODE: u16 = 0x8021;
+const REG_SPEED: u16 = 0x8022;
 const REG_APPLY: u16 = 0x80A0;
 const APPLY: u8 = 0x01;
 const MODE_OFF: u8 = 0;
@@ -297,7 +298,7 @@ impl Ram {
             // efektem urządzenia - wtedy przy oddaniu wraca tryb fabryczny.
             *saved = now
                 .iter()
-                .filter(|c| !matches!(c.mode, MODE_OFF | MODE_STATIC) || c.direct != 0)
+                .filter(|c| !matches!(c.mode, 0..=4) || c.direct != 0)
                 .map(|c| (c.addr, c.direct, c.mode))
                 .collect();
         }
@@ -317,6 +318,7 @@ impl super::Device for Ram {
             family: super::Family::EneRam,
             detail: names.join(", "),
             restores: true,
+            effects: EFFECTS.to_vec(),
         }
     }
 
@@ -336,7 +338,16 @@ impl super::Device for Ram {
         for c in &now {
             let r = match s.mode {
                 super::Mode::Color => {
-                    set_color(&bus, c, s.rgb()).and_then(|_| set_mode(&bus, c.addr, 0, MODE_STATIC))
+                    let (mode, speed) = effect_mode(s.effect_for(EFFECTS), s.speed);
+                    set_color(&bus, c, s.rgb())
+                        .and_then(|_| {
+                            Ene {
+                                bus: &bus,
+                                addr: c.addr,
+                            }
+                            .write(REG_SPEED, speed)
+                        })
+                        .and_then(|_| set_mode(&bus, c.addr, 0, mode))
                 }
                 _ => set_mode(&bus, c.addr, 0, MODE_OFF),
             };
@@ -442,6 +453,7 @@ mod hardware_write {
             mode: Mode::Color,
             color: [255, 0, 0],
             brightness: 60,
+            ..Default::default()
         };
         println!("czerwony: {:?}", d.apply(&color));
         std::thread::sleep(std::time::Duration::from_secs(3));
@@ -468,4 +480,27 @@ mod hardware_write {
             );
         }
     }
+}
+
+/// Efekty kontrolera ENE (tryby 1-5 rejestru 0x8021).
+const EFFECTS: &[super::Effect] = &super::Effect::ALL;
+
+/// Tryb i szybkość (rejestr 0x8022: 0 najszybciej … 4 najwolniej).
+fn effect_mode(effect: super::Effect, speed: super::Speed) -> (u8, u8) {
+    use super::Effect;
+    let mode = match effect {
+        Effect::Static => MODE_STATIC,
+        Effect::Breathing => 2,
+        Effect::Flashing => 3,
+        Effect::ColorCycle => 4,
+        Effect::Rainbow => MODE_RAINBOW,
+    };
+    (mode, 3 - speed.level())
+}
+
+/// Przywraca tryb kontrolera z odczytu (testy).
+#[cfg(test)]
+pub(crate) fn restore_mode(bus: &Smbus, c: &Controller) -> Result<(), String> {
+    let _lock = NamedLock::acquire(SMBUS_LOCK, 2000)?;
+    set_mode(bus, c.addr, c.direct, c.mode)
 }

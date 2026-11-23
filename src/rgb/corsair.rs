@@ -24,6 +24,8 @@ const MODELS: [(u16, u8, &str); 4] = [
 const LEN: usize = 65;
 const LEDS: u8 = 96;
 const MODE_STATIC: u8 = 4;
+/// Efekty: 4 stały, 2 pulsowanie, 8 miganie, 1 przesuwanie kolorów, 0 fala tęczy.
+const EFFECTS: &[super::Effect] = &super::Effect::ALL;
 
 struct Node {
     dev: HidDevice,
@@ -51,35 +53,32 @@ impl super::Device for Node {
             family: super::Family::Corsair,
             detail: crate::trf!("kanały: {}", "channels: {}", self.channels),
             restores: false,
+            effects: EFFECTS.to_vec(),
         }
     }
 
     fn apply(&mut self, s: &super::Setting) -> Result<(), String> {
+        use super::Effect;
         let [r, g, b] = s.rgb();
+        let effect = s.effect_for(EFFECTS);
+        let mode = match effect {
+            Effect::Static => MODE_STATIC,
+            Effect::Breathing => 0x02,
+            Effect::Flashing => 0x08,
+            Effect::ColorCycle => 0x01,
+            Effect::Rainbow => 0x00,
+        };
+        // Szybkość kontrolera: 0 szybko, 1 średnio, 2 wolno; losowe kolory dla
+        // efektów bez wybranego koloru.
+        let speed = 2 - s.speed.level();
+        let random = u8::from(!effect.uses_color());
         for ch in 0..self.channels {
             self.cmd(&[0x37, ch])?;
             self.cmd(&[0x34, ch])?;
             self.cmd(&[0x38, ch, 0x01])?;
             self.cmd(&[0x39, ch, 100])?;
             self.cmd(&[
-                0x35,
-                ch,
-                0,
-                LEDS,
-                MODE_STATIC,
-                0,
-                0,
-                0,
-                0,
-                r,
-                g,
-                b,
-                r,
-                g,
-                b,
-                r,
-                g,
-                b,
+                0x35, ch, 0, LEDS, mode, speed, 0, random, 0, r, g, b, r, g, b, r, g, b,
             ])?;
         }
         self.cmd(&[0x33, 0xFF])

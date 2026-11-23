@@ -48,12 +48,97 @@ pub enum Mode {
     Off,
 }
 
+/// Efekt podświetlenia - wykonywany przez samo urządzenie (jego oprogramowanie),
+/// program tylko go wybiera. Każde urządzenie ma swój podzbiór.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Effect {
+    /// Stały kolor.
+    #[default]
+    Static,
+    /// Kolor płynnie rozjaśnia się i gaśnie.
+    Breathing,
+    /// Kolor miga.
+    Flashing,
+    /// Płynne przechodzenie przez wszystkie kolory.
+    ColorCycle,
+    /// Tęczowa fala przesuwająca się po diodach.
+    Rainbow,
+}
+
+impl Effect {
+    pub const ALL: [Effect; 5] = [
+        Effect::Static,
+        Effect::Breathing,
+        Effect::Flashing,
+        Effect::ColorCycle,
+        Effect::Rainbow,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Effect::Static => crate::i18n::tr("Stały kolor", "Static color"),
+            Effect::Breathing => crate::i18n::tr("Oddychanie", "Breathing"),
+            Effect::Flashing => crate::i18n::tr("Miganie", "Flashing"),
+            Effect::ColorCycle => crate::i18n::tr("Cykl kolorów", "Color cycle"),
+            Effect::Rainbow => crate::i18n::tr("Tęcza (fala)", "Rainbow (wave)"),
+        }
+    }
+
+    /// Czy efekt korzysta z wybranego koloru (cykl i tęcza mają własne).
+    pub fn uses_color(self) -> bool {
+        matches!(self, Effect::Static | Effect::Breathing | Effect::Flashing)
+    }
+}
+
+/// Szybkość efektu.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Speed {
+    Slow,
+    #[default]
+    Normal,
+    Fast,
+}
+
+impl Speed {
+    pub const ALL: [Speed; 3] = [Speed::Slow, Speed::Normal, Speed::Fast];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Speed::Slow => crate::i18n::tr("Wolno", "Slow"),
+            Speed::Normal => crate::i18n::tr("Średnio", "Normal"),
+            Speed::Fast => crate::i18n::tr("Szybko", "Fast"),
+        }
+    }
+
+    /// 0 = wolno, 1 = średnio, 2 = szybko.
+    pub fn level(self) -> u8 {
+        match self {
+            Speed::Slow => 0,
+            Speed::Normal => 1,
+            Speed::Fast => 2,
+        }
+    }
+
+    /// Okres efektu w milisekundach (urządzenia, które przyjmują czas).
+    pub fn period_ms(self) -> u16 {
+        match self {
+            Speed::Slow => 8000,
+            Speed::Normal => 4000,
+            Speed::Fast => 1500,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Setting {
     pub mode: Mode,
     pub color: [u8; 3],
     /// 0-100 %.
     pub brightness: u8,
+    #[serde(default)]
+    pub effect: Effect,
+    #[serde(default)]
+    pub speed: Speed,
 }
 
 impl Default for Setting {
@@ -62,6 +147,8 @@ impl Default for Setting {
             mode: Mode::Untouched,
             color: [255, 255, 255],
             brightness: 100,
+            effect: Effect::Static,
+            speed: Speed::Normal,
         }
     }
 }
@@ -72,6 +159,16 @@ impl Setting {
         match self.mode {
             Mode::Color => scaled(self.color, self.brightness),
             _ => [0, 0, 0],
+        }
+    }
+
+    /// Efekt do wykonania na urządzeniu, które obsługuje `supported` (inaczej
+    /// stały kolor). Wyłączenie zawsze jako stały czarny / tryb "wyłączone".
+    pub fn effect_for(&self, supported: &[Effect]) -> Effect {
+        if self.mode == Mode::Color && supported.contains(&self.effect) {
+            self.effect
+        } else {
+            Effect::Static
         }
     }
 }
@@ -179,6 +276,8 @@ pub struct Info {
     pub detail: String,
     /// Czy `release` przywraca efekt urządzenia od razu (inaczej po restarcie).
     pub restores: bool,
+    /// Efekty, które urządzenie potrafi wykonać (zawsze z `Effect::Static`).
+    pub effects: Vec<Effect>,
 }
 
 /// Stan urządzenia widoczny w interfejsie.
@@ -325,7 +424,9 @@ fn worker(
         }
         for (i, d) in devices.iter_mut().enumerate() {
             let want = config.effective(&d.info().id);
-            let changed = want != applied[i];
+            // Przy "Bez zmian" kolor i efekt nie mają znaczenia.
+            let changed = want != applied[i]
+                && !(want.mode == Mode::Untouched && applied[i].mode == Mode::Untouched);
             let repeat = keepalive && d.needs_keepalive() && want.mode != Mode::Untouched;
             if !changed && !repeat {
                 continue;
@@ -443,4 +544,51 @@ pub fn hid_inventory() -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+#[cfg(test)]
+mod effects_hardware {
+    use super::*;
+
+    /// Pokaz efektów na znalezionych urządzeniach RAM ENE i Logitech, każdy
+    /// ok. 4 s, potem powrót (ZMIENIA podświetlenie na chwilę):
+    /// `cargo test rgb_effects_demo -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn rgb_effects_demo() {
+        let before = ene_ram::scan().unwrap_or_default();
+        let saved: RamSaved = Default::default();
+        let (mut devices, problems) = discover(true, &saved);
+        println!("problemy: {problems:?}");
+        devices.retain(|d| matches!(d.info().family, Family::EneRam | Family::Logitech));
+        for d in &mut devices {
+            let info = d.info();
+            println!("== {} {:?}", info.name, info.effects);
+            for e in info.effects.clone() {
+                let s = Setting {
+                    mode: Mode::Color,
+                    color: [255, 0, 80],
+                    brightness: 100,
+                    effect: e,
+                    speed: Speed::Fast,
+                };
+                println!("{:?}: {:?}", e, d.apply(&s));
+                std::thread::sleep(std::time::Duration::from_secs(4));
+            }
+            if info.family == Family::Logitech {
+                println!("oddanie: {:?}", d.release());
+            }
+        }
+        // RAM wraca do trybu sprzed testu.
+        if let Ok(bus) = ene_ram::open_bus() {
+            for c in &before {
+                println!(
+                    "RAM 0x{:02X} → tryb {}: {:?}",
+                    c.addr,
+                    c.mode,
+                    ene_ram::restore_mode(&bus, c)
+                );
+            }
+        }
+    }
 }

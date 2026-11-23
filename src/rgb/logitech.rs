@@ -36,6 +36,9 @@ const F_RGB2: u16 = 0x8071;
 
 const EFFECT_OFF: u16 = 0x0000;
 const EFFECT_FIXED: u16 = 0x0001;
+const EFFECT_CYCLE: u16 = 0x0003;
+const EFFECT_WAVE: u16 = 0x0004;
+const EFFECT_BREATHING: u16 = 0x000A;
 
 /// Połączenie z jednym urządzeniem HID++ (kabel albo pozycja w odbiorniku).
 struct Link {
@@ -122,6 +125,9 @@ struct Zone {
     index: u8,
     fixed: Option<u8>,
     off: Option<u8>,
+    breathing: Option<u8>,
+    cycle: Option<u8>,
+    wave: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -150,11 +156,17 @@ fn zones(link: &Link, api: Api) -> Result<Vec<Zone>, String> {
                     index: z,
                     fixed: None,
                     off: None,
+                    breathing: None,
+                    cycle: None,
+                    wave: None,
                 };
                 for e in 0..effects {
                     let ei = link.request(f, 0, &[z, e])?;
                     match be16(ei[2], ei[3]) {
                         EFFECT_FIXED => zone.fixed = zone.fixed.or(Some(e)),
+                        EFFECT_CYCLE => zone.cycle = zone.cycle.or(Some(e)),
+                        EFFECT_WAVE => zone.wave = zone.wave.or(Some(e)),
+                        EFFECT_BREATHING => zone.breathing = zone.breathing.or(Some(e)),
                         EFFECT_OFF => zone.off = zone.off.or(Some(e)),
                         _ => {}
                     }
@@ -171,11 +183,17 @@ fn zones(link: &Link, api: Api) -> Result<Vec<Zone>, String> {
                     index: z,
                     fixed: None,
                     off: None,
+                    breathing: None,
+                    cycle: None,
+                    wave: None,
                 };
                 for e in 0..effects {
                     let ei = link.request(f, 2, &[z, e])?;
                     match be16(ei[2], ei[3]) {
                         EFFECT_FIXED => zone.fixed = zone.fixed.or(Some(e)),
+                        EFFECT_CYCLE => zone.cycle = zone.cycle.or(Some(e)),
+                        EFFECT_WAVE => zone.wave = zone.wave.or(Some(e)),
+                        EFFECT_BREATHING => zone.breathing = zone.breathing.or(Some(e)),
                         EFFECT_OFF => zone.off = zone.off.or(Some(e)),
                         _ => {}
                     }
@@ -199,9 +217,36 @@ struct Logi {
 }
 
 impl Logi {
+    /// Efekty dostępne w pierwszej strefie (klawisze / główna strefa myszy).
+    fn effects(&self) -> Vec<super::Effect> {
+        use super::Effect;
+        let mut out = vec![Effect::Static];
+        if let Some(z) = self.zones.first() {
+            if z.breathing.is_some() {
+                out.push(Effect::Breathing);
+            }
+            if z.cycle.is_some() {
+                out.push(Effect::ColorCycle);
+            }
+            if z.wave.is_some() {
+                out.push(Effect::Rainbow);
+            }
+        }
+        out
+    }
+
     fn set_zone(&self, zone: &Zone, s: &super::Setting) -> Result<(), String> {
-        let (effect, rgb) = match s.mode {
-            super::Mode::Color => (zone.fixed, s.rgb()),
+        use super::Effect;
+        let wanted = s.effect_for(&self.effects());
+        let (effect, rgb) = match (s.mode, wanted) {
+            (super::Mode::Color, Effect::Breathing) if zone.breathing.is_some() => {
+                (zone.breathing, s.color)
+            }
+            (super::Mode::Color, Effect::ColorCycle) if zone.cycle.is_some() => {
+                (zone.cycle, s.color)
+            }
+            (super::Mode::Color, Effect::Rainbow) if zone.wave.is_some() => (zone.wave, s.color),
+            (super::Mode::Color, _) => (zone.fixed, s.rgb()),
             // Bez efektu "wyłączone" - stały czarny kolor.
             _ => (zone.off.or(zone.fixed), [0, 0, 0]),
         };
@@ -212,6 +257,21 @@ impl Logi {
         p[0] = zone.index;
         p[1] = effect;
         p[2..5].copy_from_slice(&rgb);
+        // Parametry efektu: okres w ms (big-endian) i jasność 0-100.
+        let period = s.speed.period_ms().to_be_bytes();
+        let bright = s.brightness.min(100);
+        if Some(effect) == zone.breathing {
+            p[5..7].copy_from_slice(&period);
+            p[8] = bright;
+        } else if Some(effect) == zone.cycle {
+            p[7..9].copy_from_slice(&period);
+            p[9] = bright;
+        } else if Some(effect) == zone.wave {
+            p[8] = period[1];
+            p[9] = 0x01; // kierunek: poziomo
+            p[10] = bright;
+            p[11] = period[0];
+        }
         match self.api {
             Api::Rgb2(f) => {
                 if Some(effect) == zone.fixed {
@@ -251,6 +311,7 @@ impl super::Device for Logi {
                 self.zones.len()
             ),
             restores: matches!(self.api, Api::Rgb2(_)),
+            effects: self.effects(),
         }
     }
 
@@ -377,6 +438,7 @@ mod hardware {
                 mode: Mode::Color,
                 color: [255, 0, 0],
                 brightness: 100,
+                ..Default::default()
             };
             println!("czerwony: {:?}", d.apply(&s));
             std::thread::sleep(std::time::Duration::from_secs(3));

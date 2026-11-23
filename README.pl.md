@@ -484,8 +484,12 @@ schowane). Obroty wentylatorów są w zakładce FAN.
 Wszystkie obsługiwane podświetlenia w jednej zakładce (od 0.28.0; wcześniej
 RAM i Skydimo były w OPTIONS - ustawienia przechodzą same). Dla każdego
 urządzenia: **Bez zmian** (program nie dotyka podświetlenia albo oddaje
-sterowanie urządzeniu), **Kolor** (jeden kolor z jasnością 0-100 %) albo
-**Wyłączone**. "To samo ustawienie na wszystkich urządzeniach" ustawia jeden
+sterowanie urządzeniu), **Kolor** (jeden kolor z jasnością 0-100 % i
+efektem) albo **Wyłączone**. Efekty wykonuje samo urządzenie, a lista
+pokazuje tylko te, które ono ma: stały kolor, oddychanie, miganie, cykl
+kolorów, tęcza (fala); do tego szybkość (wolno / średnio / szybko). Przy cyklu
+kolorów i tęczy urządzenie używa własnych kolorów. Skydimo i karty NVIDIA -
+tylko stały kolor. "To samo ustawienie na wszystkich urządzeniach" ustawia jeden
 kolor wszędzie. "Szukaj urządzeń ponownie" po podłączeniu nowego sprzętu.
 
 Program niczego nie zapisuje w pamięci urządzeń: po wyłączeniu zasilania

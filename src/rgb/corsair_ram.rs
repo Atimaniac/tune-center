@@ -47,10 +47,29 @@ fn crc8(data: &[u8]) -> u8 {
 }
 
 /// Konfiguracja efektu „stały kolor”.
-fn effect(rgb: [u8; 3]) -> [u8; 20] {
+/// Efekty kontrolera Corsair: stały 0x10, pulsowanie 0x01, przesuwanie kolorów
+/// 0x00, fala tęczy 0x03 (migania kontroler nie ma).
+const EFFECTS: &[super::Effect] = &[
+    super::Effect::Static,
+    super::Effect::Breathing,
+    super::Effect::ColorCycle,
+    super::Effect::Rainbow,
+];
+
+/// Konfiguracja efektu: [tryb, szybkość, kolory własne/losowe, kierunek, RGB,
+/// jasność, RGB2, jasność2, 0…].
+fn effect_data(effect: super::Effect, speed: super::Speed, rgb: [u8; 3]) -> [u8; 20] {
+    use super::Effect;
     let mut e = [0u8; 20];
-    e[0] = MODE_STATIC;
-    e[2] = CUSTOM_COLORS;
+    let (mode, custom) = match effect {
+        Effect::Static | Effect::Flashing => (MODE_STATIC, true),
+        Effect::Breathing => (0x01, true),
+        Effect::ColorCycle => (0x00, false),
+        Effect::Rainbow => (0x03, false),
+    };
+    e[0] = mode;
+    e[1] = speed.level();
+    e[2] = if custom { CUSTOM_COLORS } else { 0 };
     e[4..7].copy_from_slice(&rgb);
     e[7] = 0xFF;
     e[8..11].copy_from_slice(&rgb);
@@ -115,13 +134,14 @@ impl super::Device for CorsairRam {
             family: super::Family::CorsairRam,
             detail: crate::trf!("moduły: {}", "modules: {}", list.join(", ")),
             restores: false,
+            effects: EFFECTS.to_vec(),
         }
     }
 
     fn apply(&mut self, s: &super::Setting) -> Result<(), String> {
         let bus = open_bus()?;
         let _lock = NamedLock::acquire(SMBUS_LOCK, 2000)?;
-        let data = effect(s.rgb());
+        let data = effect_data(s.effect_for(EFFECTS), s.speed, s.rgb());
         let errors: Vec<String> = self
             .addresses
             .iter()
@@ -163,8 +183,18 @@ mod tests {
     fn crc_and_effect() {
         // CRC-8 (0x07) dla "123456789" = 0xF4.
         assert_eq!(super::crc8(b"123456789"), 0xF4);
-        let e = super::effect([1, 2, 3]);
+        let e = super::effect_data(
+            super::super::Effect::Static,
+            super::super::Speed::Slow,
+            [1, 2, 3],
+        );
         assert_eq!(&e[..12], &[0x10, 0, 1, 0, 1, 2, 3, 0xFF, 1, 2, 3, 0xFF]);
+        let r = super::effect_data(
+            super::super::Effect::Rainbow,
+            super::super::Speed::Fast,
+            [1, 2, 3],
+        );
+        assert_eq!(&r[..3], &[0x03, 2, 0]);
         assert!(e[12..].iter().all(|&b| b == 0));
     }
 }

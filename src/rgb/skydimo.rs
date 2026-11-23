@@ -185,6 +185,7 @@ impl super::Device for Strip {
             family: super::Family::Skydimo,
             detail,
             restores: true,
+            effects: vec![super::Effect::Static],
         }
     }
 

@@ -15,6 +15,8 @@ use super::hid::{self, Hid, HidDevice};
 
 const VID: u16 = 0x1462;
 const REPORT: u8 = 0x52;
+/// Efekty: 1 stały, 2 oddychanie, 3 miganie, 22 przesuwanie kolorów, 26 fala tęczy.
+const EFFECTS: &[super::Effect] = &super::Effect::ALL;
 
 /// Początki stref (pierwszy bajt = efekt) dla danej długości raportu.
 fn zones(len: usize) -> Option<(Vec<usize>, Vec<usize>)> {
@@ -32,7 +34,13 @@ fn zones(len: usize) -> Option<(Vec<usize>, Vec<usize>)> {
 }
 
 /// Raport ze zmienionym efektem i kolorem wszystkich stref.
+#[cfg_attr(not(test), allow(dead_code))]
 fn modified(original: &[u8], effect: u8, rgb: [u8; 3]) -> Vec<u8> {
+    modified_speed(original, effect, rgb, None)
+}
+
+/// Jak `modified`, z szybkością efektu (bity 0-1: 0 wolno … 2 szybko).
+fn modified_speed(original: &[u8], effect: u8, rgb: [u8; 3], speed: Option<u8>) -> Vec<u8> {
     let mut p = original.to_vec();
     let Some((full, simple)) = zones(p.len()) else {
         return p;
@@ -42,8 +50,11 @@ fn modified(original: &[u8], effect: u8, rgb: [u8; 3]) -> Vec<u8> {
         p[z + 1..z + 4].copy_from_slice(&rgb);
     }
     for &z in &full {
-        // Jasność 100 % (poziom 10), szybkość bez zmian.
+        // Jasność 100 % (poziom 10); szybkość podana albo bez zmian.
         p[z + 4] = (p[z + 4] & !0x7C) | (10 << 2);
+        if let Some(sp) = speed {
+            p[z + 4] = (p[z + 4] & !0x03) | (sp & 0x03);
+        }
         p[z + 8] |= 0x80;
     }
     let last = p.len() - 1;
@@ -96,6 +107,7 @@ impl super::Device for Mystic {
                 self.original.len()
             ),
             restores: true,
+            effects: EFFECTS.to_vec(),
         }
     }
 
@@ -104,8 +116,21 @@ impl super::Device for Mystic {
             // Stan sprzed pierwszej zmiany (mógł się zmienić od wyszukania).
             self.original = self.read()?;
         }
-        let effect = if s.mode == super::Mode::Color { 1 } else { 0 };
-        self.write(&modified(&self.original, effect, s.rgb()))?;
+        use super::Effect;
+        let effect = match (s.mode, s.effect_for(EFFECTS)) {
+            (super::Mode::Color, Effect::Static) => 1,
+            (super::Mode::Color, Effect::Breathing) => 2,
+            (super::Mode::Color, Effect::Flashing) => 3,
+            (super::Mode::Color, Effect::ColorCycle) => 22,
+            (super::Mode::Color, Effect::Rainbow) => 26,
+            _ => 0,
+        };
+        self.write(&modified_speed(
+            &self.original,
+            effect,
+            s.rgb(),
+            Some(s.speed.level()),
+        ))?;
         self.changed = true;
         Ok(())
     }

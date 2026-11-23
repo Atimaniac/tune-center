@@ -1,6 +1,6 @@
 [package]
 name = "tunecenter"
-version = "0.31.1"
+version = "0.32.0"
 edition = "2021"
 description = "Tune Center: karta graficzna (Nvidia, AMD), wentylatory, czujniki i pobor mocy w jednym oknie (Windows)"
 

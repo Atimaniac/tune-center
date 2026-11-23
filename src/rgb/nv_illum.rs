@@ -107,6 +107,7 @@ impl super::Device for Gpu {
             family: super::Family::NvidiaGpu,
             detail: crate::trf!("stref: {}", "zones: {}", self.zones),
             restores: true,
+            effects: vec![super::Effect::Static],
         }
     }
 

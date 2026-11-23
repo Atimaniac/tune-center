@@ -6,7 +6,7 @@ use eframe::egui::{self, RichText};
 use crate::config::Config;
 use crate::i18n::tr;
 use crate::icons::Icon;
-use crate::rgb::{self, Mode, Setting};
+use crate::rgb::{self, Effect, Mode, Setting, Speed};
 use crate::theme::{self, accent, muted, warn};
 
 pub struct RgbTab {
@@ -66,7 +66,13 @@ impl RgbTab {
                 });
                 if config.rgb.sync {
                     ui.add_space(6.0);
-                    changed |= setting_ui(ui, "rgb-all", &mut config.rgb.all);
+                    // Wspólne ustawienie: efekty, które ma choć jedno urządzenie
+                    // (pozostałe pokażą wtedy stały kolor).
+                    let all: Vec<Effect> = Effect::ALL
+                        .into_iter()
+                        .filter(|e| *e == Effect::Static || snap.devices.iter().any(|d| d.info.effects.contains(e)))
+                        .collect();
+                    changed |= setting_ui(ui, "rgb-all", &mut config.rgb.all, &all);
                 }
                 ui.add_space(6.0);
                 theme::info(
@@ -152,7 +158,7 @@ fn device_card(
         );
     } else {
         let mut s = config.devices.get(&info.id).copied().unwrap_or_default();
-        if setting_ui(ui, &info.id, &mut s) {
+        if setting_ui(ui, &info.id, &mut s, &info.effects) {
             config.devices.insert(info.id.clone(), s);
             *changed = true;
         }
@@ -178,8 +184,9 @@ fn device_card(
     }
 }
 
-/// Tryb, kolor i jasność. Zwraca `true` po zmianie.
-fn setting_ui(ui: &mut egui::Ui, id: &str, s: &mut Setting) -> bool {
+/// Tryb, efekt, kolor, jasność i szybkość. `effects` - efekty, które ma
+/// urządzenie (albo wszystkie urządzenia razem). Zwraca `true` po zmianie.
+fn setting_ui(ui: &mut egui::Ui, id: &str, s: &mut Setting, effects: &[Effect]) -> bool {
     let mut changed = false;
     ui.push_id(id, |ui| {
         ui.horizontal_wrapped(|ui| {
@@ -193,16 +200,50 @@ fn setting_ui(ui: &mut egui::Ui, id: &str, s: &mut Setting) -> bool {
                 .radio_value(&mut s.mode, Mode::Off, tr("Wyłączone", "Off"))
                 .changed();
         });
-        if s.mode == Mode::Color {
+        if s.mode != Mode::Color {
+            return;
+        }
+        // Efekt spoza listy urządzenia (np. po zmianie sprzętu) - stały kolor.
+        if !effects.contains(&s.effect) {
+            s.effect = Effect::Static;
+        }
+        if effects.len() > 1 {
             ui.horizontal(|ui| {
-                changed |= egui::color_picker::color_edit_button_srgb(ui, &mut s.color).changed();
-                ui.add_space(10.0);
-                ui.label(tr("Jasność:", "Brightness:"));
-                changed |= ui
-                    .add(egui::Slider::new(&mut s.brightness, 0..=100).suffix(" %"))
-                    .changed();
+                ui.label(tr("Efekt:", "Effect:"));
+                egui::ComboBox::from_id_salt("effect")
+                    .selected_text(s.effect.label())
+                    .width(150.0)
+                    .show_ui(ui, |ui| {
+                        for e in effects {
+                            changed |= ui.selectable_value(&mut s.effect, *e, e.label()).changed();
+                        }
+                    });
+                if s.effect != Effect::Static {
+                    ui.add_space(8.0);
+                    ui.label(tr("Szybkość:", "Speed:"));
+                    egui::ComboBox::from_id_salt("speed")
+                        .selected_text(s.speed.label())
+                        .width(90.0)
+                        .show_ui(ui, |ui| {
+                            for sp in Speed::ALL {
+                                changed |=
+                                    ui.selectable_value(&mut s.speed, sp, sp.label()).changed();
+                            }
+                        });
+                }
             });
         }
+        ui.horizontal(|ui| {
+            // Cykl kolorów i tęcza mają własne kolory - bez wyboru koloru.
+            if s.effect.uses_color() {
+                changed |= egui::color_picker::color_edit_button_srgb(ui, &mut s.color).changed();
+                ui.add_space(10.0);
+            }
+            ui.label(tr("Jasność:", "Brightness:"));
+            changed |= ui
+                .add(egui::Slider::new(&mut s.brightness, 0..=100).suffix(" %"))
+                .changed();
+        });
     });
     changed
 }

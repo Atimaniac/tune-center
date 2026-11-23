@@ -22,6 +22,8 @@ const REPORT: u8 = 0xEC;
 const LEN: usize = 65;
 const MODE_OFF: u8 = 0;
 const MODE_STATIC: u8 = 1;
+/// Efekty Aura: tryby 1 stały, 2 oddychanie, 3 miganie, 4 cykl kolorów, 5 tęcza.
+const EFFECTS: &[super::Effect] = &super::Effect::ALL;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -87,14 +89,19 @@ impl super::Device for Aura {
                 self.argb
             ),
             restores: false,
+            effects: EFFECTS.to_vec(),
         }
     }
 
     fn apply(&mut self, s: &super::Setting) -> Result<(), String> {
-        let mode = if s.mode == super::Mode::Color {
-            MODE_STATIC
-        } else {
-            MODE_OFF
+        use super::Effect;
+        let mode = match (s.mode, s.effect_for(EFFECTS)) {
+            (super::Mode::Color, Effect::Static) => MODE_STATIC,
+            (super::Mode::Color, Effect::Breathing) => 2,
+            (super::Mode::Color, Effect::Flashing) => 3,
+            (super::Mode::Color, Effect::ColorCycle) => 4,
+            (super::Mode::Color, Effect::Rainbow) => 5,
+            _ => MODE_OFF,
         };
         let [r, g, b] = s.rgb();
         match self.kind {

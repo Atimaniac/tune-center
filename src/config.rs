@@ -238,6 +238,7 @@ impl Config {
                     mode: crate::rgb::Mode::Color,
                     color: self.skydimo_color,
                     brightness: self.skydimo_brightness,
+                    ..Default::default()
                 },
             );
         }

@@ -46,7 +46,33 @@ impl Fusion {
 }
 
 /// Pakiet efektu dla wszystkich stref.
+/// Efekty Fusion 2: 1 stały, 2 pulsowanie, 3 miganie, 4 cykl kolorów, 6 fala.
+const EFFECTS: &[super::Effect] = &super::Effect::ALL;
+
+/// Typ efektu i czasy (ms): narastanie, opadanie, przytrzymanie; parametr 0.
+fn effect_timing(effect: super::Effect, speed: super::Speed) -> (u8, [u16; 3], u8) {
+    use super::Effect;
+    let t = speed.period_ms() / 4; // 375-2000 ms
+    match effect {
+        Effect::Static => (1, [0, 0, 0], 0),
+        Effect::Breathing => (2, [t, t, 200], 0),
+        Effect::Flashing => (3, [100, 100, t], 0),
+        Effect::ColorCycle => (4, [t, t.saturating_sub(200), 0], 7),
+        Effect::Rainbow => (6, [t / 4, 0, 0], 7),
+    }
+}
+
 fn effect_packet(pid: u16, effect: u8, rgb: [u8; 3]) -> [u8; LEN] {
+    effect_packet_timed(pid, effect, rgb, [0, 0, 0], 0)
+}
+
+fn effect_packet_timed(
+    pid: u16,
+    effect: u8,
+    rgb: [u8; 3],
+    periods: [u16; 3],
+    param0: u8,
+) -> [u8; LEN] {
     let mut p = [0u8; LEN];
     p[0] = REPORT;
     p[1] = 0x20;
@@ -57,6 +83,14 @@ fn effect_packet(pid: u16, effect: u8, rgb: [u8; 3]) -> [u8; LEN] {
     p[13] = 0x00; // jasność minimalna
     let color = u32::from_be_bytes([0, rgb[0], rgb[1], rgb[2]]);
     p[14..18].copy_from_slice(&color.to_le_bytes());
+    // Czasy efektu (u16 LE od bajtu 22) i parametr 0 (bajt 30).
+    for (i, t) in periods.iter().enumerate() {
+        p[22 + 2 * i..24 + 2 * i].copy_from_slice(&t.to_le_bytes());
+    }
+    if effect == 6 {
+        p[31] = 1; // fala: parametr 1
+    }
+    p[30] = param0;
     p
 }
 
@@ -68,13 +102,19 @@ impl super::Device for Fusion {
             family: super::Family::GigabyteFusion,
             detail: format!("USB {VID:04X}:{:04X}", self.pid),
             restores: false,
+            effects: EFFECTS.to_vec(),
         }
     }
 
     fn apply(&mut self, s: &super::Setting) -> Result<(), String> {
-        let effect = if s.mode == super::Mode::Color { 1 } else { 0 };
+        let packet = if s.mode == super::Mode::Color {
+            let (kind, periods, param0) = effect_timing(s.effect_for(EFFECTS), s.speed);
+            effect_packet_timed(self.pid, kind, s.rgb(), periods, param0)
+        } else {
+            effect_packet(self.pid, 0, [0, 0, 0])
+        };
         self.short(0x31, 0x00, 0x00)?;
-        self.send(&effect_packet(self.pid, effect, s.rgb()))?;
+        self.send(&packet)?;
         let apply = if self.pid == 0x5711 { 0x07 } else { 0x00 };
         self.short(0x28, 0xFF, apply)
     }

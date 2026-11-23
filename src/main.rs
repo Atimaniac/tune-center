@@ -921,11 +921,14 @@ impl App {
                 crate::i18n::tr("O programie", "About"),
                 &[
                     crate::i18n::tr("Strojenie i monitorowanie komputera w jednym oknie.", "PC tuning and monitoring in one window."),
-                    crate::i18n::tr("GPU - zegary kart Nvidia i AMD, krzywa napięcie/częstotliwość kart Nvidia, profile, HAGS i Resizable BAR.", "GPU - Nvidia and AMD card clocks, voltage/frequency curve for Nvidia cards, profiles, HAGS and Resizable BAR."),
-                    crate::i18n::tr("CPU - Intel: limity mocy, offsety napięcia, IccMax. AMD Ryzen: Curve Optimizer i limity PBO.", "CPU - Intel: power limits, voltage offsets, IccMax. AMD Ryzen: Curve Optimizer and PBO limits."),
-                    crate::i18n::tr("FAN - sterowanie wentylatorami: ręcznie albo krzywą zależną od temperatury.", "FAN - fan control: manual or a temperature-based curve."),
-                    crate::i18n::tr("SENSORS - najważniejsze temperatury podzespołów.", "SENSORS - key component temperatures."),
-                    crate::i18n::tr("POWER - pobór mocy procesora i karty graficznej z licznikiem energii.", "POWER - CPU and graphics card power draw with an energy counter."),
+                    crate::i18n::tr("NVIDIA - Overclock (zegary kart Nvidia i AMD, krzywa napięcie/częstotliwość, profile, HAGS, Resizable BAR), ustawienia 3D i DLSS, ekran, kolor i HDR, G-SYNC, rozdzielczości niestandardowe, kompilacja shaderów gier, OLED fix i aktualizacja sterownika.", "NVIDIA - Overclock (Nvidia and AMD card clocks, voltage/frequency curve, profiles, HAGS, Resizable BAR), 3D and DLSS settings, display, color and HDR, G-SYNC, custom resolutions, game shader compilation, OLED fix and driver updates."),
+                    crate::i18n::tr("CPU - Intel: limity mocy, offsety napięcia, IccMax, mnożniki turbo. AMD Ryzen: Curve Optimizer i limity PBO.", "CPU - Intel: power limits, voltage offsets, IccMax, turbo ratios. AMD Ryzen: Curve Optimizer and PBO limits."),
+                    crate::i18n::tr("FAN - wentylatory płyty i karty: ręcznie albo krzywą zależną od temperatury, profile, także osobne dla gier.", "FAN - motherboard and card fans: manual or a temperature-based curve, profiles, also per game."),
+                    crate::i18n::tr("SENSORS i POWER - najważniejsze temperatury oraz pobór mocy procesora i karty z licznikiem energii i kosztem.", "SENSORS and POWER - key temperatures and CPU and card power draw with an energy counter and cost."),
+                    crate::i18n::tr("TUNE - ustawienia Windows wpływające na opóźnienia (przełączniki ON/OFF z kopią oryginałów).", "TUNE - Windows settings that affect latency (ON/OFF switches with a backup of the originals)."),
+                    crate::i18n::tr("RGB - podświetlenie RAM, taśm Skydimo, urządzeń Logitech G, kart NVIDIA, płyt ASUS, Gigabyte i MSI oraz kontrolerów Corsair: kolor z jasnością, efekty (oddychanie, miganie, cykl kolorów, tęcza - tyle, ile ma dane urządzenie) z szybkością albo wyłączenie.", "RGB - lighting of RAM, Skydimo strips, Logitech G devices, NVIDIA cards, ASUS, Gigabyte and MSI boards and Corsair controllers: color with brightness, effects (breathing, flashing, color cycle, rainbow - as many as the device has) with speed, or off."),
+                    crate::i18n::tr("BENCH - test wydajności procesora, stress test i test stabilności karty graficznej.", "BENCH - CPU performance test, stress test and graphics card stability test."),
+                    crate::i18n::tr("OPTIONS - język, autostart, zasobnik, motywy (Tune, Neon Green, Neon City, Crimson) i diagnostyka zgodności ze zgłaszaniem na GitHubie.", "OPTIONS - language, autostart, tray, themes (Tune, Neon Green, Neon City, Crimson) and a compatibility check with GitHub reporting."),
                 ],
             );
             about_card(
@@ -933,8 +936,8 @@ impl App {
                 width,
                 crate::i18n::tr("Uwaga", "Warning"),
                 &[
-                    crate::i18n::tr("Program zmienia ustawienia procesora, karty graficznej i wentylatorów. Zbyt agresywne wartości mogą zawiesić komputer albo pogorszyć chłodzenie.", "The program changes CPU, graphics card and fan settings. Overly aggressive values can freeze the computer or reduce cooling."),
-                    crate::i18n::tr("Ustawienia procesora i karty graficznej działają do restartu komputera.", "CPU and graphics card settings last until the computer restarts."),
+                    crate::i18n::tr("Program zmienia ustawienia procesora, karty graficznej, wentylatorów, podświetlenia i Windows. Zbyt agresywne wartości mogą zawiesić komputer albo pogorszyć chłodzenie.", "The program changes CPU, graphics card, fan, lighting and Windows settings. Overly aggressive values can freeze the computer or reduce cooling."),
+                    crate::i18n::tr("Ustawienia procesora i karty graficznej działają do restartu komputera. Podświetlenie nie jest zapisywane w pamięci urządzeń - program ustawia je przy każdym starcie.", "CPU and graphics card settings last until the computer restarts. Lighting is not saved in device memory - the program sets it at every start."),
                     crate::i18n::tr("Używasz programu na własną odpowiedzialność.", "You use the program at your own risk."),
                 ],
             );
@@ -945,7 +948,8 @@ impl App {
                 &[
                     crate::i18n::tr("PawnIO i PawnIO.Modules (namazso) - dostęp do sprzętu.", "PawnIO and PawnIO.Modules (namazso) - hardware access."),
                     crate::i18n::tr("LibreHardwareMonitor - odczyt czujników i sterowanie wentylatorami.", "LibreHardwareMonitor - sensor readings and fan control."),
-                    crate::i18n::tr("egui / eframe - interfejs.", "egui / eframe - user interface."),
+                    crate::i18n::tr("NVIDIA NVAPI i NVML, AMD Display Library - karty graficzne.", "NVIDIA NVAPI and NVML, AMD Display Library - graphics cards."),
+                    crate::i18n::tr("hidapi - urządzenia USB podświetlenia; egui / eframe - interfejs.", "hidapi - USB lighting devices; egui / eframe - user interface."),
                     crate::i18n::tr("Pełna lista i licencje: plik THIRD-PARTY.md obok programu.", "Full list and licenses: the THIRD-PARTY.md file next to the program."),
                 ],
             );
@@ -954,8 +958,8 @@ impl App {
                 width,
                 crate::i18n::tr("Sterownik PawnIO jest opcjonalny", "The PawnIO driver is optional"),
                 &[
-                    crate::i18n::tr("Bez PawnIO działają: cała zakładka GPU, temperatura, wentylatory i pobór mocy karty graficznej oraz temperatury dysków.", "Without PawnIO these work: the whole GPU tab, graphics card temperature, fans and power draw, and disk temperatures."),
-                    crate::i18n::tr("PawnIO jest potrzebny do: temperatury i mocy procesora, wentylatorów płyty głównej oraz zakładki CPU. Tych danych Windows nie udostępnia bez sterownika.", "PawnIO is needed for: CPU temperature and power, motherboard fans and the CPU tab. Windows does not expose that data without a driver."),
+                    crate::i18n::tr("Bez PawnIO działają: zakładka NVIDIA, temperatura, wentylatory i pobór mocy karty graficznej, temperatury dysków, TUNE oraz podświetlenie na USB.", "Without PawnIO these work: the NVIDIA tab, graphics card temperature, fans and power draw, disk temperatures, TUNE and USB lighting."),
+                    crate::i18n::tr("PawnIO jest potrzebny do: temperatury i mocy procesora, wentylatorów płyty głównej, zakładki CPU oraz podświetlenia pamięci RAM. Tych danych Windows nie udostępnia bez sterownika.", "PawnIO is needed for: CPU temperature and power, motherboard fans, the CPU tab and RAM lighting. Windows does not expose that data without a driver."),
                 ],
             );
         });
