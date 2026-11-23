@@ -577,15 +577,6 @@ const REG_TWEAKS: &[RegTweak] = &[
         optimized: 0,
         absent: Some(1),
     },
-    // Superfetch / Prefetch: usługa SysMain wyłączona (4), domyślnie automatyczna (2).
-    RegTweak {
-        key: "sysmain",
-        root: reg::HKLM,
-        path: r"SYSTEM\CurrentControlSet\Services\SysMain",
-        value: "Start",
-        optimized: 4,
-        absent: Some(2),
-    },
     // Odstęp danych z myszy dla okien w tle (ms): domyślnie 8, najmniej 3.
     RegTweak {
         key: "mouse_background",
@@ -670,11 +661,6 @@ fn reg_value_text(t: &RegTweak, raw: Option<u32>) -> String {
         ("game_dvr" | "game_dvr_capture" | "fth" | "fast_startup" | "dynamic_lighting", _) => {
             crate::i18n::tr(" - włączone", " - on")
         }
-        ("sysmain", 4) => crate::i18n::tr(" - usługa wyłączona", " - service disabled"),
-        ("sysmain", 2) => {
-            crate::i18n::tr(" - uruchamiana automatycznie", " - starts automatically")
-        }
-        ("sysmain", 3) => crate::i18n::tr(" - uruchamiana ręcznie", " - manual start"),
         ("mouse_background", _) => crate::i18n::tr(" ms", " ms"),
         ("mpo", 5) => crate::i18n::tr(" - MPO wyłączone", " - MPO off"),
         _ => "",
@@ -762,13 +748,9 @@ fn reg_set(
             ));
         }
     } else {
-        let orig: Option<u32> = match original(key) {
-            Some(v) => serde_json::from_value(v).ok().flatten(),
-            // Bez kopii: usunięcie wartości przywraca domyślne Windows - poza
-            // usługą SysMain, której wpis "Start" musi istnieć (2 = automatycznie).
-            None if key == "sysmain" => Some(2),
-            None => None,
-        };
+        let orig: Option<u32> = original(key)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .flatten();
         // Bez kopii (zmienione poza programem) - usuwamy wartość, Windows wraca do domyślnej.
         reg::set_dword(root, path, value, orig)?;
         if reg::get_dword(root, path, value) != orig {
@@ -777,6 +759,186 @@ fn reg_set(
                 "{value}: the restore was not confirmed by reading back"
             ));
         }
+        forget(key);
+    }
+    Ok(())
+}
+
+// ---- usługi Windows przez menedżera usług (nie przez rejestr: menedżer
+// trzyma konfigurację w pamięci i potrafi nadpisać wpis zmieniony w rejestrze)
+
+#[cfg(windows)]
+mod service {
+    use std::ffi::c_void;
+
+    type Handle = *mut c_void;
+    const SC_MANAGER_CONNECT: u32 = 0x0001;
+    const SERVICE_QUERY_CONFIG: u32 = 0x0001;
+    const SERVICE_CHANGE_CONFIG: u32 = 0x0002;
+    const SERVICE_QUERY_STATUS: u32 = 0x0004;
+    const SERVICE_START: u32 = 0x0010;
+    const SERVICE_STOP: u32 = 0x0020;
+    const SERVICE_NO_CHANGE: u32 = 0xFFFF_FFFF;
+    const SERVICE_CONTROL_STOP: u32 = 1;
+    pub const AUTO: u32 = 2;
+    pub const DISABLED: u32 = 4;
+    const RUNNING: u32 = 4;
+    const STOPPED: u32 = 1;
+
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn OpenSCManagerW(machine: *const u16, db: *const u16, access: u32) -> Handle;
+        fn OpenServiceW(scm: Handle, name: *const u16, access: u32) -> Handle;
+        fn CloseServiceHandle(h: Handle) -> i32;
+        fn QueryServiceConfigW(h: Handle, cfg: *mut u8, size: u32, needed: *mut u32) -> i32;
+        fn QueryServiceStatus(h: Handle, status: *mut [u32; 7]) -> i32;
+        fn ChangeServiceConfigW(
+            h: Handle,
+            kind: u32,
+            start: u32,
+            error: u32,
+            path: *const u16,
+            group: *const u16,
+            tag: *mut u32,
+            deps: *const u16,
+            user: *const u16,
+            password: *const u16,
+            display: *const u16,
+        ) -> i32;
+        fn ControlService(h: Handle, control: u32, status: *mut [u32; 7]) -> i32;
+        fn StartServiceW(h: Handle, argc: u32, argv: *const *const u16) -> i32;
+    }
+
+    struct H(Handle);
+    impl Drop for H {
+        fn drop(&mut self) {
+            // SAFETY: uchwyt z OpenSCManagerW / OpenServiceW, zamykany raz.
+            unsafe { CloseServiceHandle(self.0) };
+        }
+    }
+
+    fn last_error(what: &str) -> String {
+        format!("{what}: {}", std::io::Error::last_os_error())
+    }
+
+    fn open(name: &str, access: u32) -> Result<(H, H), String> {
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        // SAFETY: zwykłe wywołania API; uchwyty zamyka `H`.
+        let scm = unsafe { OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT) };
+        if scm.is_null() {
+            return Err(last_error("OpenSCManager"));
+        }
+        let scm = H(scm);
+        let svc = unsafe { OpenServiceW(scm.0, wide.as_ptr(), access) };
+        if svc.is_null() {
+            return Err(last_error(name));
+        }
+        Ok((scm, H(svc)))
+    }
+
+    /// Typ uruchamiania (2 = automatycznie, 3 = ręcznie, 4 = wyłączona) i czy działa.
+    pub fn state(name: &str) -> Result<(u32, bool), String> {
+        let (_scm, svc) = open(name, SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS)?;
+        let mut buf = vec![0u8; 8192];
+        let mut needed = 0u32;
+        // SAFETY: bufor ma podany rozmiar; QUERY_SERVICE_CONFIGW zaczyna się od
+        // dwServiceType i dwStartType (u32).
+        if unsafe { QueryServiceConfigW(svc.0, buf.as_mut_ptr(), buf.len() as u32, &mut needed) }
+            == 0
+        {
+            return Err(last_error(name));
+        }
+        let start = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        let mut status = [0u32; 7];
+        // SAFETY: SERVICE_STATUS = 7 × u32; drugie pole to stan.
+        let running =
+            unsafe { QueryServiceStatus(svc.0, &mut status) } != 0 && status[1] == RUNNING;
+        Ok((start, running))
+    }
+
+    /// Ustawia typ uruchamiania; przy wyłączeniu zatrzymuje usługę, przy
+    /// automatycznym - uruchamia ją.
+    pub fn set(name: &str, start: u32) -> Result<(), String> {
+        let (_scm, svc) = open(
+            name,
+            SERVICE_CHANGE_CONFIG | SERVICE_QUERY_STATUS | SERVICE_START | SERVICE_STOP,
+        )?;
+        let null = std::ptr::null();
+        // SAFETY: zmieniamy tylko typ uruchamiania (reszta SERVICE_NO_CHANGE / null).
+        let ok = unsafe {
+            ChangeServiceConfigW(
+                svc.0,
+                SERVICE_NO_CHANGE,
+                start,
+                SERVICE_NO_CHANGE,
+                null,
+                null,
+                std::ptr::null_mut(),
+                null,
+                null,
+                null,
+                null,
+            )
+        };
+        if ok == 0 {
+            return Err(last_error(name));
+        }
+        let mut status = [0u32; 7];
+        // SAFETY: jak wyżej.
+        unsafe { QueryServiceStatus(svc.0, &mut status) };
+        if start == DISABLED && status[1] != STOPPED {
+            // Zatrzymanie od razu (błąd nie jest krytyczny - typ już zmieniony).
+            unsafe { ControlService(svc.0, SERVICE_CONTROL_STOP, &mut status) };
+        } else if start == AUTO && status[1] == STOPPED {
+            unsafe { StartServiceW(svc.0, 0, std::ptr::null()) };
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn service_text(start: u32, running: bool) -> String {
+    let kind = match start {
+        2 => crate::i18n::tr("uruchamiana automatycznie", "starts automatically"),
+        3 => crate::i18n::tr("uruchamiana ręcznie", "manual start"),
+        4 => crate::i18n::tr("wyłączona", "disabled"),
+        _ => "?",
+    };
+    let now = if running {
+        crate::i18n::tr("działa", "running")
+    } else {
+        crate::i18n::tr("zatrzymana", "stopped")
+    };
+    crate::trf!(
+        "usługa {kind}, teraz {now} (typ {start})",
+        "service {kind}, now {now} (type {start})"
+    )
+}
+
+/// SysMain: włączone = usługa wyłączona. Bez kopii powrót do automatycznej.
+#[cfg(windows)]
+fn sysmain_set(on: bool) -> Result<(), String> {
+    const NAME: &str = "SysMain";
+    let key = "sysmain";
+    let (current, _) = service::state(NAME)?;
+    let target = if on {
+        remember(key, serde_json::json!(current));
+        service::DISABLED
+    } else {
+        original(key)
+            .and_then(|v| serde_json::from_value::<Option<u32>>(v).ok().flatten())
+            .filter(|t| (2..=4).contains(t))
+            .unwrap_or(service::AUTO)
+    };
+    service::set(NAME, target)?;
+    if service::state(NAME)?.0 != target {
+        return Err(crate::i18n::tr(
+            "Zmiana usługi SysMain nie została potwierdzona odczytem.",
+            "The SysMain change was not confirmed by reading back.",
+        )
+        .into());
+    }
+    if !on {
         forget(key);
     }
     Ok(())
@@ -1925,25 +2087,30 @@ pub(crate) fn read_all(cpu_x3d: bool) -> Vec<Item> {
 
     // Kompresja pamięci i dyski HDD (jedno wywołanie PowerShell, potrzebne niżej).
     let mem_disks = memory_and_disks();
-    let t = reg_item("sysmain");
     items.push(Item {
-        key: t.key.into(),
+        key: "sysmain".into(),
         name: text(
             "SysMain (Superfetch / Prefetch) wyłączony",
             "SysMain (Superfetch / Prefetch) off",
         ),
         desc: crate::i18n::tr(
-            "Usługa wstępnie wczytuje często używane programy do pamięci. Na dyskach SSD nie przyspiesza uruchamiania, a w tle czyta dysk i zajmuje pamięć. Microsoft zaleca jej wyłączenie w systemach czasu rzeczywistego. Tylko dla komputerów bez dysków HDD. Działa po restarcie.",
-            "The service preloads frequently used programs into memory. On SSDs it does not speed up launching, while it reads the disk and uses memory in the background. Microsoft recommends turning it off for real-time systems. Only for PCs without HDDs. Takes effect after a restart.",
+            "Usługa wstępnie wczytuje często używane programy do pamięci. Na dyskach SSD nie przyspiesza uruchamiania, a w tle czyta dysk i zajmuje pamięć. Microsoft zaleca jej wyłączenie w systemach czasu rzeczywistego. Tylko dla komputerów bez dysków HDD. Usługa jest zatrzymywana od razu.",
+            "The service preloads frequently used programs into memory. On SSDs it does not speed up launching, while it reads the disk and uses memory in the background. Microsoft recommends turning it off for real-time systems. Only for PCs without HDDs. The service is stopped right away.",
         ),
         group: Group::Proven,
-        restart: true,
+        restart: false,
         state: match &mem_disks {
             Ok((_, hdd)) if *hdd > 0 => State::Unsupported(crate::trf!(
                 "w komputerze jest dysk HDD ({hdd}) - SysMain przyspiesza go",
                 "the PC has a hard disk ({hdd}) - SysMain speeds it up"
             )),
-            _ => reg_state(t, t.path),
+            _ => match service::state("SysMain") {
+                Ok((start, running)) if start == service::DISABLED => {
+                    State::Optimized(service_text(start, running))
+                }
+                Ok((start, running)) => State::Default(service_text(start, running)),
+                Err(e) => State::Unknown(e),
+            },
         },
         warning: None,
     });
@@ -2124,6 +2291,7 @@ fn set(key: &str, on: bool) -> Result<(), String> {
         "windowed_games" => return windowed_set(on),
         "mouse_accel" => return mouse_set(on),
         "memory_compression" => return memory_compression_set(on),
+        "sysmain" => return sysmain_set(on),
         _ => {}
     }
     if let Some(t) = REG_TWEAKS.iter().find(|t| t.key == key) {

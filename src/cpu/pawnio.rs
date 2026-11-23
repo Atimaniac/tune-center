@@ -117,6 +117,15 @@ impl PawnIo {
 
             if let Err(e) = hresult("pawnio_load", load(handle, blob.as_ptr(), blob.len())) {
                 close(handle);
+                let name = module.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                // 0x80070032 = ERROR_NOT_SUPPORTED: moduł nie znalazł swojego sprzętu
+                // (np. moduł SMBus Intela na płycie z chipsetem AMD).
+                if e.contains("0x80070032") {
+                    return Err(crate::trf!(
+                        "{e}. Moduł {name} nie obsługuje sprzętu tego komputera.",
+                        "{e}. Module {name} does not support this computer's hardware."
+                    ));
+                }
                 return Err(crate::trf!("{e}. Sterownik odrzucił moduł {} - plik jest uszkodzony, nie pasuje do tego procesora albo sterownik PawnIO jest zbyt stary.", "{e}. The driver rejected module {} - the file is damaged, does not match this processor, or the PawnIO driver is too old.",
                     module.file_name().and_then(|n| n.to_str()).unwrap_or("?")
                 ));

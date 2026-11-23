@@ -17,13 +17,13 @@ Copy-Item THIRD-PARTY.md dist\ -Force
 
 # Zakladka "Procesor" potrzebuje oficjalnych, podpisanych modulow PawnIO:
 # IntelMSR.bin (Intel) oraz RyzenSMU.bin i AMDFamily17.bin (AMD Ryzen);
-# SmbusI801.bin (SMBus chipsetow Intel) - wylaczanie podswietlenia RAM.
+# SmbusI801.bin i SmbusPIIX4.bin (SMBus chipsetow Intel i AMD) - podswietlenie RAM.
 # Pobieramy je z najnowszego wydania projektu PawnIO.Modules i kopiujemy bez
 # zmian. Numer wydania trafia do dist\modules\version.txt - przy nowszym
 # wydaniu wszystkie moduly sa pobierane ponownie.
 # Bez nich program dziala, tylko zakladka "Procesor" jest nieaktywna.
 Write-Host "== Krok 3/3: moduly PawnIO =="
-$modules = @("IntelMSR.bin", "RyzenSMU.bin", "AMDFamily17.bin", "SmbusI801.bin")
+$modules = @("IntelMSR.bin", "RyzenSMU.bin", "AMDFamily17.bin", "SmbusI801.bin", "SmbusPIIX4.bin")
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $release = Invoke-RestMethod "https://api.github.com/repos/namazso/PawnIO.Modules/releases/latest" -Headers @{ "User-Agent" = "TuneCenter-build" }

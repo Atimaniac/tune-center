@@ -17,6 +17,7 @@
 
 pub mod aura;
 pub mod corsair;
+pub mod corsair_ram;
 pub mod ene_ram;
 pub mod fusion2;
 mod hid;
@@ -115,6 +116,7 @@ impl Config {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Family {
     EneRam,
+    CorsairRam,
     Skydimo,
     Logitech,
     NvidiaGpu,
@@ -133,6 +135,10 @@ impl Family {
     pub fn label(self) -> &'static str {
         match self {
             Family::EneRam => crate::i18n::tr("Pamięć RAM (ENE, SMBus)", "RAM (ENE, SMBus)"),
+            Family::CorsairRam => crate::i18n::tr(
+                "Pamięć RAM Corsair (SMBus)",
+                "Corsair RAM (SMBus)",
+            ),
             Family::Skydimo => crate::i18n::tr("Taśma Skydimo (USB)", "Skydimo strip (USB)"),
             Family::Logitech => "Logitech G (HID++)",
             Family::NvidiaGpu => crate::i18n::tr("Karta NVIDIA (NVAPI)", "NVIDIA card (NVAPI)"),
@@ -257,6 +263,7 @@ pub(crate) fn discover(
         Family::EneRam,
         ene_ram::discover(elevated, ram_saved.clone()),
     );
+    add(Family::CorsairRam, corsair_ram::discover(elevated));
     add(Family::Skydimo, skydimo::discover());
     add(Family::NvidiaGpu, nv_illum::discover());
     match hid::Hid::new() {

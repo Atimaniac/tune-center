@@ -373,6 +373,7 @@ fn system(r: &mut Report, live: &Live, hw: &mut Vec<String>) {
         "RyzenSMU.bin",
         "AMDFamily17.bin",
         "SmbusI801.bin",
+        "SmbusPIIX4.bin",
     ] {
         if modules.join(m).exists() {
             r.ok(format!("PawnIO module {m} present ({})", version.trim()));

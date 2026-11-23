@@ -496,7 +496,8 @@ nadpisywać ustawienia - najlepiej, żeby nie działały jednocześnie.
 
 | Urządzenia | Jak | Sprawdzone |
 |---|---|---|
-| Pamięć RAM z kontrolerem ENE (np. G.Skill Trident Z RGB) | SMBus przez moduł PawnIO `SmbusI801.bin`; wymaga administratora | tak ("DIMM_LED-0103") |
+| Pamięć RAM z kontrolerem ENE (np. G.Skill Trident Z RGB) | SMBus przez moduł PawnIO `SmbusI801.bin` (Intel) albo `SmbusPIIX4.bin` (AMD); wymaga administratora | tak ("DIMM_LED-0103", Intel) |
+| Pamięć RAM Corsair (Vengeance RGB PRO, Dominator Platinum RGB, DDR4) | SMBus jak wyżej, kontroler Corsair 0x58-0x5F | nie |
 | Taśmy Skydimo (USB CH340 1A86:7523) | port szeregowy, protokół Adalight, kolor powtarzany co sekundę | tak (SK0127) |
 | Logitech G - klawiatury, myszy, odbiorniki LIGHTSPEED | HID++ 2.0, funkcje 0x8071 / 0x8070 wykrywane w urządzeniu | tak (G915 TKL na kablu) |
 | Karty NVIDIA ze strefami oświetlenia w sterowniku (np. Founders Edition) | publiczne NVAPI `ClientIllumZones*` | odczyt (MSI RTX 5070 nie ma stref) |

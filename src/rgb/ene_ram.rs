@@ -30,7 +30,7 @@ use std::path::Path;
 
 use crate::cpu::pawnio::{NamedLock, PawnIo};
 
-const SMBUS_LOCK: &str = "Global\\Access_SMBUS.HTP.Method";
+pub(crate) const SMBUS_LOCK: &str = "Global\\Access_SMBUS.HTP.Method";
 
 /// Adresy kontrolerów ENE pamięci RAM (0x77 = adres po włączeniu zasilania).
 const ENE_ADDRESSES: std::ops::RangeInclusive<u8> = 0x70..=0x77;
@@ -91,12 +91,12 @@ impl Smbus {
         self.xfer(addr, READ, 0, PROTO_BYTE, None).map(|v| v as u8)
     }
 
-    fn read_byte_data(&self, addr: u8, cmd: u8) -> Result<u8, String> {
+    pub(crate) fn read_byte_data(&self, addr: u8, cmd: u8) -> Result<u8, String> {
         self.xfer(addr, READ, cmd, PROTO_BYTE_DATA, None)
             .map(|v| v as u8)
     }
 
-    fn write_byte_data(&self, addr: u8, cmd: u8, value: u8) -> Result<(), String> {
+    pub(crate) fn write_byte_data(&self, addr: u8, cmd: u8, value: u8) -> Result<(), String> {
         self.xfer(addr, WRITE, cmd, PROTO_BYTE_DATA, Some(value as u64))
             .map(|_| ())
     }
@@ -162,15 +162,30 @@ pub struct Controller {
     pub leds: u8,
 }
 
-/// Plik modułu SmbusI801 obok programu.
-pub fn module_path() -> Option<std::path::PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    Some(exe.parent()?.join("modules").join("SmbusI801.bin"))
+/// Moduły PawnIO magistrali SMBus: chipsety Intel (I801) i AMD (PIIX4 /
+/// FCH). Moduł bez swojego kontrolera odmawia wczytania.
+const BUS_MODULES: [&str; 2] = ["SmbusI801.bin", "SmbusPIIX4.bin"];
+
+fn module_dir() -> Option<std::path::PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.join("modules"))
 }
 
-fn open_bus() -> Result<Smbus, String> {
-    let path = module_path().ok_or("brak ścieżki programu")?;
-    Smbus::open(&path)
+/// Magistrala SMBus pamięci RAM - pierwszy moduł, który pasuje do chipsetu.
+/// Na płytach AMD moduły RAM są na porcie 0 (domyślnym) kontrolera FCH.
+pub(crate) fn open_bus() -> Result<Smbus, String> {
+    let dir = module_dir().ok_or("brak ścieżki programu")?;
+    let mut errors = Vec::new();
+    for m in BUS_MODULES {
+        match Smbus::open(&dir.join(m)) {
+            Ok(bus) => return Ok(bus),
+            Err(e) => errors.push(e),
+        }
+    }
+    Err(crate::trf!(
+        "Nie znaleziono obsługiwanego kontrolera SMBus (chipset Intel lub AMD): {}",
+        "No supported SMBus controller found (Intel or AMD chipset): {}",
+        errors.join(" | ")
+    ))
 }
 
 /// Kontrolery ENE pamięci RAM (tylko odczyt).
