@@ -2,7 +2,9 @@
 name = "tunecenter"
 version = "0.32.0"
 edition = "2021"
+authors = ["Atimaniac"]
 license = "GPL-3.0-or-later"
+repository = "https://github.com/Atimaniac/tune-center"
 description = "Tune Center: karta graficzna (Nvidia, AMD), wentylatory, czujniki i pobor mocy w jednym oknie (Windows)"
 
 [dependencies]

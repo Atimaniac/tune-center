@@ -11,6 +11,7 @@ GPU overclocking and V/F curve, NVIDIA driver settings and DLSS overrides, CPU p
 [![Downloads](https://img.shields.io/github/downloads/Atimaniac/tune-center/total?style=for-the-badge&color=1f6fb2)](https://github.com/Atimaniac/tune-center/releases)
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0a2a52?style=for-the-badge&logo=windows)
 ![Rust](https://img.shields.io/badge/built%20with-Rust-0a2a52?style=for-the-badge&logo=rust)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-0a2a52?style=for-the-badge)](LICENSE)
 
 ### [⬇ Download the latest installer](https://github.com/Atimaniac/tune-center/releases/latest)
 
@@ -84,7 +85,7 @@ Single-thread and multi-thread CPU score (10 s each, own scale for before/after 
 **Graphics card stability** – 2 minutes of full load through Direct3D 11: FP32 math on the whole GPU, a power-heavy mixed memory + math pass and write/read checks of 512 MB of video memory. Every calculation and memory read is verified, so an unstable overclock or undervolt shows up as errors. When the test ends, a window shows the score (GFLOPS FP32 and memory GB/s), STABLE / UNSTABLE, the comparison with your best result, and average/min/max with 2-minute charts of core clock, memory clock, temperature and power draw. Results are kept in the history.
 
 ### OPTIONS and ABOUT
-Both open from the buttons next to *UPDATE* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), themes (Tune with an optional light variant, Neon Green, Neon City, Crimson), GPU fans through the driver, update checks, energy price, **compatibility check**. Lighting moved to the RGB tab in 0.28.0 (settings are carried over).
+Both open from the buttons next to *UPDATE* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), themes (Tune with an optional light variant, Neon Green, Neon City, Crimson), GPU fans through the driver, update checks, energy price, **compatibility check**. ABOUT shows the version, the author, a link to this repository and the license notice. Lighting moved to the RGB tab in 0.28.0 (settings are carried over).
 
 ## Installation
 
@@ -123,7 +124,22 @@ Tune Center has no telemetry, accounts or ads. It contacts GitHub (program updat
 
 ## License
 
-Tune Center is free software, released under the [GNU General Public License v3.0 or later](LICENSE). It comes with no warranty. Third-party components keep their own licenses – see [THIRD-PARTY.md](THIRD-PARTY.md).
+Tune Center – PC tuning and monitoring in one window<br>
+Copyright (C) 2026 Atimaniac
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+What this means in practice:
+
+- You may use the program for any purpose, study and change its source code, and share copies – free of charge or for a fee.
+- If you distribute the program or a modified version, you must do it under the same license (GPL-3.0-or-later), keep the copyright notices and make the complete source code available.
+- There is no warranty, and the author is not liable for damage caused by using the program.
+
+The full license text is in [LICENSE](LICENSE); it is also installed next to the program and summarised in the ABOUT tab. Third-party components keep their own licenses – see [THIRD-PARTY.md](THIRD-PARTY.md).
 
 ## Credits
 
