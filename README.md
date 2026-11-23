@@ -117,6 +117,14 @@ Tune Center changes clocks, voltages, power limits, fan speeds and system settin
 .\build-installer.ps1   # installer -> installer-output\TuneCenter-Setup.exe
 ```
 
+## Privacy
+
+Tune Center has no telemetry, accounts or ads. It contacts GitHub (program updates) and NVIDIA (driver updates) only to check for and download updates; both checks can be turned off. See [PRIVACY.md](PRIVACY.md).
+
+## License
+
+Tune Center is free software, released under the [GNU General Public License v3.0 or later](LICENSE). It comes with no warranty. Third-party components keep their own licenses – see [THIRD-PARTY.md](THIRD-PARTY.md).
+
 ## Credits
 
 Built with [egui/eframe](https://github.com/emilk/egui), [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) and [PawnIO](https://pawnio.eu). See [THIRD-PARTY.md](THIRD-PARTY.md) for all components and references.

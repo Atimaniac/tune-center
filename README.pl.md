@@ -874,6 +874,20 @@ Nie uruchamiaj równocześnie innych programów sterujących tym samym sprzętem
 (MSI Afterburner, FanControl, oprogramowanie producenta płyty) - będą się
 nadpisywać.
 
+## Prywatność
+
+Tune Center nie ma telemetrii, kont ani reklam. Łączy się z GitHubem
+(aktualizacje programu) i z serwerami NVIDIA (aktualizacje sterownika)
+wyłącznie po to, żeby sprawdzić i pobrać aktualizację; oba sprawdzania można
+wyłączyć. Szczegóły: [PRIVACY.pl.md](PRIVACY.pl.md).
+
+## Licencja
+
+Tune Center jest wolnym oprogramowaniem na licencji
+[GNU General Public License w wersji 3 lub nowszej](LICENSE). Program jest
+udostępniany bez żadnej gwarancji. Składniki innych autorów zachowują swoje
+licencje - zobacz [THIRD-PARTY.pl.md](THIRD-PARTY.pl.md).
+
 ## Stan projektu
 
 - Projekt nie był kompilowany w całości ani uruchamiany na prawdziwym

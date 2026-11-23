@@ -14,6 +14,7 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish nie powiodl sie (kod $LASTEXITC
 
 Copy-Item target\release\tunecenter.exe dist\ -Force
 Copy-Item THIRD-PARTY.md dist\ -Force
+Copy-Item LICENSE, PRIVACY.md, PRIVACY.pl.md dist\ -Force
 
 # Zakladka "Procesor" potrzebuje oficjalnych, podpisanych modulow PawnIO:
 # IntelMSR.bin (Intel) oraz RyzenSMU.bin i AMDFamily17.bin (AMD Ryzen);

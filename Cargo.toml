@@ -2,6 +2,7 @@
 name = "tunecenter"
 version = "0.32.0"
 edition = "2021"
+license = "GPL-3.0-or-later"
 description = "Tune Center: karta graficzna (Nvidia, AMD), wentylatory, czujniki i pobor mocy w jednym oknie (Windows)"
 
 [dependencies]
