@@ -27,7 +27,6 @@ mod hags;
 mod history;
 mod i18n;
 mod icons;
-mod leds;
 #[cfg(test)]
 mod logo_tool;
 mod nvcp;
@@ -36,9 +35,10 @@ mod oled_fix;
 mod power;
 mod power_tab;
 mod rebar;
+mod rgb;
+mod rgb_tab;
 mod sensors;
 mod shaders;
-mod skydimo;
 mod theme;
 mod tray;
 mod tune;
@@ -71,19 +71,21 @@ enum Tab {
     Sensors,
     Power,
     Tune,
+    Rgb,
     Bench,
     Options,
     About,
 }
 
 /// Zakładki w kolejności przycisków w nagłówku.
-const TABS: [(Tab, &str, Icon); 7] = [
+const TABS: [(Tab, &str, Icon); 8] = [
     (Tab::Nvidia, "NVIDIA", Icon::Gpu),
     (Tab::Cpu, "CPU", Icon::Cpu),
     (Tab::Fans, "FAN", Icon::Fan),
     (Tab::Sensors, "SENSORS", Icon::Sensors),
     (Tab::Power, "POWER", Icon::Power),
     (Tab::Tune, "TUNE", Icon::Gauge),
+    (Tab::Rgb, "RGB", Icon::Rgb),
     (Tab::Bench, "BENCH", Icon::Bench),
 ];
 
@@ -221,12 +223,8 @@ struct App {
     /// Wentylatory kart graficznych sterowane wprost przez sterownik karty;
     /// `None`, gdy opcja jest wyłączona albo sterownik tego nie udostępnia.
     gpu_fans: Option<gpu_fans::GpuFans>,
-    /// Wyłączanie podświetlenia LED (RAM) i wynik ostatniej operacji.
-    leds: leds::Control,
-    leds_status: Option<(String, bool)>,
-    leds_started: bool,
-    /// Taśma LED Skydimo (USB).
-    skydimo: skydimo::Control,
+    /// Zakładka RGB (oświetlenie).
+    rgb: rgb_tab::RgbTab,
     /// Zakładka TUNE (opóźnienia i DPC).
     tune: tune::Tune,
     /// Zakładka BENCH (test wydajności i stress test).
@@ -298,19 +296,9 @@ impl App {
         // Wentylatory kart graficznych: najpierw sterownik karty. Proces
         // czujników dowiaduje się, których kart ma nie dotykać.
         let board: gpu_fans::TempBoard = Arc::default();
-        // Taśma Skydimo: kolor z ustawień od razu po starcie (także z autostartu).
-        let skydimo = {
-            let c = &fans.config;
-            let ctx = cc.egui_ctx.clone();
-            skydimo::Control::start(
-                skydimo::Setting {
-                    on: c.skydimo_on,
-                    color: c.skydimo_color,
-                    brightness: c.skydimo_brightness,
-                },
-                move || ctx.request_repaint(),
-            )
-        };
+        // Oświetlenie RGB: ustawienia stosowane od razu po starcie (także z autostartu).
+        let elevated = elevation::is_elevated();
+        let rgb = rgb_tab::RgbTab::start(&fans.config.rgb, elevated, &cc.egui_ctx);
         let gpu_fans = if fans.config.gpu_fans_direct && !demo {
             let ctx = cc.egui_ctx.clone();
             gpu_fans::GpuFans::start(fans.config.fans().clone(), board.clone(), move || {
@@ -356,7 +344,7 @@ impl App {
             fans,
             bridge,
             minimize: args.iter().any(|a| a == "--minimized"),
-            elevated: elevation::is_elevated(),
+            elevated,
             autostart: autostart::is_enabled(),
             // OLED fix: przywrócenie wpisu usuniętego przez instalację sterownika.
             notice: notice.or_else(oled_fix::reapply),
@@ -364,10 +352,7 @@ impl App {
             logo,
             gpu_fans,
             disks: disks::Disks::start(),
-            leds: leds::Control::default(),
-            leds_status: None,
-            leds_started: false,
-            skydimo,
+            rgb,
             tune: {
                 let ctx = cc.egui_ctx.clone();
                 tune::Tune::new(cpu::cpu_info().name.contains("X3D"), move || {
@@ -499,6 +484,7 @@ impl App {
                 "sensors" => Tab::Sensors,
                 "power" => Tab::Power,
                 "tune" => Tab::Tune,
+                "rgb" => Tab::Rgb,
                 "bench" => Tab::Bench,
                 "options" => Tab::Options,
                 "about" => Tab::About,
@@ -702,76 +688,6 @@ impl App {
         ctx.request_repaint_after(EVERY.saturating_sub(self.update_checked.elapsed()));
     }
 
-    /// Podświetlenie LED: wyłączenie przy starcie i wyniki operacji w tle.
-    fn leds_logic(&mut self, ctx: &egui::Context) {
-        if !self.leds_started {
-            self.leds_started = true;
-            if self.fans.config.leds_off && self.elevated {
-                let ctx = ctx.clone();
-                self.leds.turn_off(move || ctx.request_repaint());
-            }
-        }
-        let Some(outcome) = self.leds.take() else {
-            return;
-        };
-        let errors = |r: &leds::Report| {
-            if r.errors.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", r.errors.join("; "))
-            }
-        };
-        self.leds_status = Some(match outcome {
-            leds::Outcome::Off(r) if r.devices.is_empty() => (
-                crate::i18n::tr(
-                    "Nie znaleziono sterowalnego podświetlenia pamięci RAM.",
-                    "No controllable RAM lighting found.",
-                )
-                .to_string(),
-                true,
-            ),
-            leds::Outcome::Off(r) => {
-                // Zapamiętujemy tryby sprzed pierwszego wyłączenia.
-                if self.fans.config.leds_saved.is_empty() {
-                    self.fans.config.leds_saved = r
-                        .devices
-                        .iter()
-                        .filter(|d| d.mode != 0 || d.direct != 0)
-                        .map(|d| (d.addr, d.direct, d.mode))
-                        .collect();
-                    self.fans.config.save();
-                }
-                let names: Vec<String> = r
-                    .devices
-                    .iter()
-                    .map(|d| format!("{} (0x{:02X})", d.name, d.addr))
-                    .collect();
-                (
-                    crate::trf!(
-                        "Podświetlenie RAM wyłączone: {}{}",
-                        "RAM lighting turned off: {}{}",
-                        names.join(", "),
-                        errors(&r)
-                    ),
-                    !r.errors.is_empty(),
-                )
-            }
-            leds::Outcome::Restored(r) => {
-                self.fans.config.leds_saved.clear();
-                self.fans.config.save();
-                (
-                    crate::trf!(
-                        "Podświetlenie RAM przywrócone{}",
-                        "RAM lighting restored{}",
-                        errors(&r)
-                    ),
-                    !r.errors.is_empty(),
-                )
-            }
-            leds::Outcome::Failed(e) => (crate::trf!("LED: {e}", "LED: {e}"), true),
-        });
-    }
-
     /// Zakładka OPTIONS: ustawienia całego programu.
     fn options_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         theme::heading(ui, Icon::Options, crate::i18n::tr("Opcje", "Options"));
@@ -864,42 +780,6 @@ impl App {
                 ),
             );
 
-            let mut off = self.fans.config.leds_off;
-            let changed = ui
-                .add_enabled(
-                    self.elevated && !self.leds.busy(),
-                    egui::Checkbox::new(&mut off, crate::i18n::tr("Wyłącz podświetlenie LED (pamięć RAM)", "Turn off LED lighting (RAM)")),
-                )
-                .on_disabled_hover_text(crate::i18n::tr(
-                    "Wymaga uprawnień administratora (przycisk w pasku stanu) i sterownika PawnIO.",
-                    "Requires administrator rights (button in the status bar) and the PawnIO driver.",
-                ))
-                .changed();
-            if changed {
-                self.fans.config.leds_off = off;
-                self.fans.config.save();
-                let ctx = ctx.clone();
-                if off {
-                    self.leds.turn_off(move || ctx.request_repaint());
-                } else {
-                    let saved = self.fans.config.leds_saved.clone();
-                    self.leds.restore(saved, move || ctx.request_repaint());
-                }
-            }
-            option_note(
-                ui,
-                crate::i18n::tr(
-                    "Wyłącza podświetlenie modułów RAM z kontrolerem ENE (np. G.Skill Trident Z RGB) przez magistralę SMBus (moduł PawnIO SmbusI801). Moduły pamiętają swój efekt, więc program wyłącza je przy każdym starcie; odznaczenie przywraca poprzedni efekt. Płyta główna i karta graficzna nie są obsługiwane.",
-                    "Turns off the lighting of RAM modules with an ENE controller (e.g. G.Skill Trident Z RGB) over the SMBus (PawnIO SmbusI801 module). The modules keep their own effect, so the program turns them off at every start; unticking restores the previous effect. The motherboard and graphics card are not supported.",
-                ),
-            );
-            if self.leds.busy() {
-                ui.label(RichText::new(crate::i18n::tr("Trwa...", "Working...")).size(12.0).color(muted()));
-            } else if let Some((text, error)) = &self.leds_status {
-                ui.label(RichText::new(text).size(12.0).color(if *error { warn() } else { accent() }));
-            }
-
-            self.skydimo_ui(ui);
             self.nvdriver_options(ui, ctx);
 
             let mut check = self.fans.config.check_updates;
@@ -943,74 +823,6 @@ impl App {
                 ),
             );
         });
-    }
-
-    /// Ustawienie taśmy Skydimo z konfiguracji.
-    fn skydimo_setting(&self) -> skydimo::Setting {
-        let c = &self.fans.config;
-        skydimo::Setting {
-            on: c.skydimo_on,
-            color: c.skydimo_color,
-            brightness: c.skydimo_brightness,
-        }
-    }
-
-    /// OPTIONS: taśma LED Skydimo - włączenie, kolor, jasność i stan połączenia.
-    fn skydimo_ui(&mut self, ui: &mut egui::Ui) {
-        let mut changed = false;
-        let cfg = &mut self.fans.config;
-        changed |= ui
-            .checkbox(
-                &mut cfg.skydimo_on,
-                crate::i18n::tr(
-                    "Podświetlenie Skydimo (taśma LED na USB)",
-                    "Skydimo lighting (USB LED strip)",
-                ),
-            )
-            .changed();
-        ui.add_enabled_ui(cfg.skydimo_on, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(crate::i18n::tr("Kolor:", "Color:"));
-                changed |= egui::color_picker::color_edit_button_srgb(ui, &mut cfg.skydimo_color)
-                    .changed();
-                ui.add_space(12.0);
-                ui.label(crate::i18n::tr("Jasność:", "Brightness:"));
-                changed |= ui
-                    .add(egui::Slider::new(&mut cfg.skydimo_brightness, 0..=100).suffix(" %"))
-                    .changed();
-            });
-        });
-        if changed {
-            self.fans.config.save();
-            self.skydimo.set(self.skydimo_setting());
-        }
-        option_note(
-            ui,
-            crate::i18n::tr(
-                "Jeden kolor na całej taśmie (protokół Adalight przez USB CH340, VID 1A86 PID 7523). Program wysyła kolor co sekundę - taśma bez danych gaśnie, więc świeci, dopóki Tune Center działa (także po starcie z Windows). Aplikacja SkyDimo musi być zamknięta, bo zajmuje port. Odznaczenie gasi taśmę i zwalnia port.",
-                "One color on the whole strip (Adalight protocol over USB CH340, VID 1A86 PID 7523). The program sends the color every second - the strip turns off without data, so it stays lit while Tune Center runs (also when started with Windows). The SkyDimo app must be closed because it holds the port. Unticking turns the strip off and frees the port.",
-            ),
-        );
-        let (text, error) = match self.skydimo.status() {
-            skydimo::Status::Off => return,
-            skydimo::Status::Searching => (
-                crate::i18n::tr("Łączenie z taśmą...", "Connecting to the strip...").to_owned(),
-                false,
-            ),
-            skydimo::Status::Connected { port, model, leds } => (
-                crate::trf!(
-                    "Połączono: {port}, model {model}, {leds} diod.",
-                    "Connected: {port}, model {model}, {leds} LEDs."
-                ),
-                false,
-            ),
-            skydimo::Status::Error(e) => (e, true),
-        };
-        ui.label(
-            RichText::new(text)
-                .size(12.0)
-                .color(if error { warn() } else { accent() }),
-        );
     }
 
     /// Zakładka ABOUT: wersja, opis i użyte składniki.
@@ -1110,7 +922,9 @@ impl eframe::App for App {
     /// a gdy okno jest ukryte w zasobniku - zamiast `ui`, po każdym
     /// `request_repaint` (proces czujników budzi okno co sekundę).
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.leds_logic(ctx);
+        if self.rgb.logic(&mut self.fans.config.rgb) {
+            self.fans.config.save();
+        }
         self.update_logic(ctx);
         self.nvdriver_logic(ctx);
         if self.minimize {
@@ -1537,6 +1351,7 @@ impl eframe::App for App {
                     &self.sensor_hist,
                 ),
                 Tab::Tune => self.tune.ui(ui, self.elevated),
+                Tab::Rgb => self.rgb.ui(ui, &mut self.fans.config, self.elevated),
                 Tab::Bench => {
                     if self.bench.ui(
                         ui,

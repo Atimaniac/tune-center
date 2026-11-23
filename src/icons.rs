@@ -23,6 +23,7 @@ pub enum Icon {
     Gauge,
     Chip,
     Bench,
+    Rgb,
 }
 
 /// Rysuje ikonę wpisaną w kwadrat `rect`.
@@ -183,6 +184,12 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             painter.circle_filled(p(0.0, 0.12), w, color);
             painter.line_segment([p(-0.4, 0.12), p(-0.3, 0.12)], stroke);
             painter.line_segment([p(0.3, 0.12), p(0.4, 0.12)], stroke);
+        }
+        Icon::Rgb => {
+            // Trzy nakładające się okręgi (mieszanie kolorów światła).
+            painter.circle_stroke(p(0.0, -0.13), s * 0.22, stroke);
+            painter.circle_stroke(p(-0.14, 0.11), s * 0.22, stroke);
+            painter.circle_stroke(p(0.14, 0.11), s * 0.22, stroke);
         }
     }
 }

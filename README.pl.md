@@ -2,7 +2,7 @@
 
 *English: [README.md](README.md)*
 
-Jedno okno z siedmioma zakładkami (Windows 10/11, 64-bit). Zakładki
+Jedno okno z ośmioma zakładkami (Windows 10/11, 64-bit). Zakładki
 przełącza się przyciskami w nagłówku, obok logo:
 
 - **NVIDIA** - karta graficzna w podzakładkach:
@@ -22,6 +22,11 @@ przełącza się przyciskami w nagłówku, obok logo:
   oraz licznik energii zużytej w bieżącej sesji.
 - **TUNE** - ustawienia Windows wpływające na opóźnienia i DPC, z kopią
   oryginalnych wartości i przywracaniem.
+- **RGB** - podświetlenie RAM, taśm Skydimo, urządzeń Logitech G, kart
+  NVIDIA i (nietestowane) ASUS Aura, Gigabyte RGB Fusion 2, Corsair i MSI
+  Mystic Light: jeden kolor, wyłączenie albo efekt urządzenia.
+- **BENCH** - test wydajności procesora w stylu CPU-Z, stress test i test
+  stabilności karty graficznej.
 - **OPTIONS** - uruchamianie z Windows, minimalizowanie do zasobnika
   i jasny motyw.
 - **ABOUT** - wersja programu, opis i użyte składniki.
@@ -473,33 +478,48 @@ schowane). Obroty wentylatorów są w zakładce FAN.
   zasilacza nie są wliczone.
 - Moc procesora wymaga uprawnień administratora i sterownika PawnIO.
 
-## Podświetlenie LED (OPTIONS)
+## RGB - oświetlenie
 
-Opcja "Wyłącz podświetlenie LED (pamięć RAM)" wyłącza podświetlenie modułów
-RAM z kontrolerem ENE (np. G.Skill Trident Z RGB DDR4 - sprawdzone, kontroler
-"DIMM_LED-0103"). Dostęp do magistrali SMBus daje oficjalny moduł PawnIO
-`SmbusI801.bin` (chipsety Intel), pod tą samą blokadą co LibreHardwareMonitor,
-HWiNFO i OpenRGB. Wymaga uprawnień administratora i sterownika PawnIO.
+Wszystkie obsługiwane podświetlenia w jednej zakładce (od 0.28.0; wcześniej
+RAM i Skydimo były w OPTIONS - ustawienia przechodzą same). Dla każdego
+urządzenia: **Bez zmian** (program nie dotyka podświetlenia albo oddaje
+sterowanie urządzeniu), **Kolor** (jeden kolor z jasnością 0-100 %) albo
+**Wyłączone**. "To samo ustawienie na wszystkich urządzeniach" ustawia jeden
+kolor wszędzie. "Szukaj urządzeń ponownie" po podłączeniu nowego sprzętu.
 
-- Kontroler jest rozpoznawany wyłącznie odczytem (podpis w rejestrach
+Program niczego nie zapisuje w pamięci urządzeń: po wyłączeniu zasilania
+wracają do swoich efektów, a Tune Center ustawia kolor ponownie przy każdym
+starcie (także z autostartem Windows). Wykrywanie to same odczyty; pierwszy
+zapis następuje dopiero po wyborze trybu. Aplikacje producentów (G HUB,
+Armoury Crate, iCUE, MSI Center, RGB Fusion, SkyDimo) i OpenRGB mogą
+nadpisywać ustawienia - najlepiej, żeby nie działały jednocześnie.
+
+| Urządzenia | Jak | Sprawdzone |
+|---|---|---|
+| Pamięć RAM z kontrolerem ENE (np. G.Skill Trident Z RGB) | SMBus przez moduł PawnIO `SmbusI801.bin`; wymaga administratora | tak ("DIMM_LED-0103") |
+| Taśmy Skydimo (USB CH340 1A86:7523) | port szeregowy, protokół Adalight, kolor powtarzany co sekundę | tak (SK0127) |
+| Logitech G - klawiatury, myszy, odbiorniki LIGHTSPEED | HID++ 2.0, funkcje 0x8071 / 0x8070 wykrywane w urządzeniu | tak (G915 TKL na kablu) |
+| Karty NVIDIA ze strefami oświetlenia w sterowniku (np. Founders Edition) | publiczne NVAPI `ClientIllumZones*` | odczyt (MSI RTX 5070 nie ma stref) |
+| ASUS Aura (płyty główne i kontrolery ARGB na USB) | raporty HID 0xEC | nie |
+| Gigabyte RGB Fusion 2 (USB, ITE 8297/5702/5711) | raporty "feature" 0xCC | nie |
+| Corsair Lighting Node Core / Pro, Commander Pro, LS100 | raporty HID, tryb stałego koloru | nie |
+| MSI Mystic Light (płyty główne MSI) | raport "feature" 0x52 - odczyt, zmiana stref, zapis | nie |
+
+- RAM: kontroler jest rozpoznawany wyłącznie odczytem (podpis w rejestrach
   0xA0-0xAF); zapis idzie tylko pod adresy 0x70-0x77, nigdy do pamięci SPD
   modułów (0x50-0x57). Adresy nie są przemapowywane - po włączeniu komputera
-  wszystkie moduły odpowiadają razem pod 0x77.
-- Program ustawia tryb "wyłączone" i sprawdza go odczytem. Niczego nie
-  zapisuje na stałe w kontrolerze, więc po restarcie moduły wracają do
-  swojego efektu, a program wyłącza je ponownie przy starcie.
-- Poprzedni efekt jest zapamiętany; odznaczenie opcji go przywraca.
-- Podświetlenie płyty głównej i karty graficznej nie jest obsługiwane.
-
-### Taśma LED Skydimo
-
-Opcja "Podświetlenie Skydimo (taśma LED na USB)" steruje taśmą Skydimo
-(podświetlenie za monitorem, układ USB CH340, VID 1A86 PID 7523): jeden kolor
-na całej taśmie (wybór koloru) i jasność 0-100 %. Program pyta taśmę o model
-(np. SK0127 = 65 diod) i wysyła kolor w protokole Adalight, powtarzając go co
-sekundę - bez danych taśma gaśnie. Ustawienie działa od startu programu, także
-z autostartem Windows. Aplikacja SkyDimo musi być zamknięta (zajmuje port;
-warto wyłączyć jej autostart). Odznaczenie gasi taśmę i zwalnia port.
+  wszystkie moduły odpowiadają razem pod 0x77. Kolor i tryb są sprawdzane
+  odczytem. Efekt sprzed pierwszej zmiany jest zapamiętany i wraca po
+  wybraniu "Bez zmian".
+- Skydimo: aplikacja SkyDimo musi być zamknięta (zajmuje port). "Bez zmian"
+  gasi taśmę i zwalnia port.
+- Logitech, karta NVIDIA i MSI Mystic Light przywracają poprzedni efekt od
+  razu po wybraniu "Bez zmian"; ASUS, Gigabyte i Corsair - po wyłączeniu
+  zasilania.
+- Urządzenia nietestowane są oznaczone w zakładce. Karty graficzne partnerów
+  (MSI, ASUS, Gigabyte…) z własnym układem podświetlenia na magistrali I²C
+  karty nie są obsługiwane - zapis w złe miejsce tej magistrali mógłby
+  uszkodzić kartę.
 
 ## TUNE - opóźnienia i DPC
 
@@ -695,7 +715,7 @@ Wybór jest zapamiętywany.
 | Temperatura i moc procesora | LibreHardwareMonitor | tak |
 | Wentylatory i temperatury płyty głównej | LibreHardwareMonitor | tak |
 | Zakładka CPU (strojenie) | moduły PawnIO | tak |
-| Wyłączanie podświetlenia RAM | moduł PawnIO SmbusI801 | tak |
+| Podświetlenie RAM (zakładka RGB) | moduł PawnIO SmbusI801 | tak |
 
 PawnIO jest opcjonalny: instalator pozwala go odznaczyć, a program bez niego
 pokazuje wszystko z górnej części tabeli. Licznik energii w POWER działa wtedy

@@ -10,15 +10,11 @@
 //! Jasność to przeskalowanie kolorów - urządzenie nie ma osobnego ustawienia.
 
 use std::io::{Read, Write};
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub const VID: u16 = 0x1A86;
 pub const PID: u16 = 0x7523;
 const BAUD: u32 = 115_200;
-/// Co ile powtarzamy ramkę (OpenRGB: 1,5 s; taśma gaśnie bez danych).
-const KEEPALIVE: Duration = Duration::from_millis(1000);
 /// Liczba diod, gdy modelu nie ma w tabeli.
 const DEFAULT_LEDS: usize = 150;
 
@@ -93,54 +89,6 @@ pub fn frame(leds: usize, color: [u8; 3], brightness: u8) -> Vec<u8> {
     out
 }
 
-/// Ustawienie podświetlenia.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Setting {
-    pub on: bool,
-    pub color: [u8; 3],
-    /// 0-100 %.
-    pub brightness: u8,
-}
-
-/// Stan połączenia z taśmą.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Status {
-    Off,
-    Searching,
-    /// Połączono: port, model, liczba diod.
-    Connected {
-        port: String,
-        model: String,
-        leds: usize,
-    },
-    Error(String),
-}
-
-/// Wątek sterujący taśmą: łączy się z portem, wysyła kolor przy zmianie i
-/// co sekundę (podtrzymanie), przy wyłączeniu gasi taśmę i zwalnia port.
-pub struct Control {
-    tx: Sender<Setting>,
-    status: Arc<Mutex<Status>>,
-}
-
-impl Control {
-    pub fn start(initial: Setting, repaint: impl Fn() + Send + 'static) -> Self {
-        let (tx, rx) = channel();
-        let status = Arc::new(Mutex::new(Status::Off));
-        let st = status.clone();
-        crate::spawn("skydimo", move || worker(rx, initial, st, repaint));
-        Self { tx, status }
-    }
-
-    pub fn set(&self, setting: Setting) {
-        let _ = self.tx.send(setting);
-    }
-
-    pub fn status(&self) -> Status {
-        self.status.lock().map(|s| s.clone()).unwrap_or(Status::Off)
-    }
-}
-
 /// Port szeregowy taśmy (pierwszy z pasującym VID/PID).
 fn find_port() -> Result<String, String> {
     let ports = serialport::available_ports().map_err(|e| e.to_string())?;
@@ -211,74 +159,75 @@ fn open() -> Result<Device, String> {
     })
 }
 
-fn worker(
-    rx: Receiver<Setting>,
-    mut setting: Setting,
-    status: Arc<Mutex<Status>>,
-    repaint: impl Fn(),
-) {
-    let set_status = |s: Status| {
-        if let Ok(mut st) = status.lock() {
-            if *st != s {
-                *st = s;
-                repaint();
-            }
-        }
-    };
-    let mut device: Option<Device> = None;
-    loop {
-        if setting.on {
-            if device.is_none() {
-                set_status(Status::Searching);
-                match open() {
-                    Ok(d) => {
-                        set_status(Status::Connected {
-                            port: d.name.clone(),
-                            model: d.model.clone(),
-                            leds: d.leds,
-                        });
-                        device = Some(d);
-                    }
-                    Err(e) => set_status(Status::Error(e)),
-                }
-            }
-            if let Some(d) = &mut device {
-                let data = frame(d.leds, setting.color, setting.brightness);
-                if let Err(e) = d.port.write_all(&data).and_then(|_| d.port.flush()) {
-                    // Odłączona taśma albo port przejęty - spróbujemy ponownie.
-                    set_status(Status::Error(format!("{}: {e}", d.name)));
-                    device = None;
-                }
-            }
-        } else if let Some(mut d) = device.take() {
-            // Wyłączenie: gasimy taśmę i zwalniamy port (np. dla aplikacji SkyDimo).
-            let _ = d.port.write_all(&frame(d.leds, [0, 0, 0], 0));
-            let _ = d.port.flush();
-            set_status(Status::Off);
-        } else {
-            set_status(Status::Off);
-        }
+/// Taśma jako urządzenie RGB. Port jest otwierany dopiero przy pierwszym
+/// ustawieniu koloru i zwalniany przy oddaniu sterowania (aplikacja SkyDimo
+/// może wtedy z niego korzystać).
+struct Strip {
+    port_name: String,
+    device: Option<Device>,
+}
 
-        // Czekamy na zmianę albo na kolejne podtrzymanie; bez połączenia
-        // ponawiamy próbę co 3 s.
-        let wait = if setting.on && device.is_none() {
-            Duration::from_secs(3)
-        } else {
-            KEEPALIVE
+impl super::Device for Strip {
+    fn info(&self) -> super::Info {
+        let detail = match &self.device {
+            Some(d) => crate::trf!(
+                "{}, model {}, {} diod",
+                "{}, model {}, {} LEDs",
+                d.name,
+                d.model,
+                d.leds
+            ),
+            None => format!("{}, USB CH340 {VID:04X}:{PID:04X}", self.port_name),
         };
-        match rx.recv_timeout(wait) {
-            Ok(s) => {
-                setting = s;
-                // Kilka zmian naraz (przeciąganie suwaka) - bierzemy ostatnią.
-                while let Ok(s) = rx.try_recv() {
-                    setting = s;
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
+        super::Info {
+            id: "skydimo".into(),
+            name: "Skydimo".into(),
+            family: super::Family::Skydimo,
+            detail,
+            restores: true,
         }
     }
-    // Koniec programu: taśma zgaśnie sama po chwili bez ramek.
+
+    fn apply(&mut self, s: &super::Setting) -> Result<(), String> {
+        if self.device.is_none() {
+            self.device = Some(open()?);
+        }
+        let Some(d) = &mut self.device else {
+            return Ok(());
+        };
+        let data = frame(d.leds, s.rgb(), 100);
+        if let Err(e) = d.port.write_all(&data).and_then(|_| d.port.flush()) {
+            // Odłączona taśma albo port przejęty - następna próba otworzy go od nowa.
+            let name = d.name.clone();
+            self.device = None;
+            return Err(format!("{name}: {e}"));
+        }
+        Ok(())
+    }
+
+    fn release(&mut self) -> Result<(), String> {
+        // Gasimy taśmę i zwalniamy port.
+        if let Some(mut d) = self.device.take() {
+            let _ = d.port.write_all(&frame(d.leds, [0, 0, 0], 0));
+            let _ = d.port.flush();
+        }
+        Ok(())
+    }
+
+    fn needs_keepalive(&self) -> bool {
+        true
+    }
+}
+
+/// Taśma na liście portów (bez otwierania - port może trzymać aplikacja SkyDimo).
+pub fn discover() -> Result<Vec<Box<dyn super::Device>>, String> {
+    Ok(match find_port() {
+        Ok(port_name) => vec![Box::new(Strip {
+            port_name,
+            device: None,
+        })],
+        Err(_) => Vec::new(),
+    })
 }
 
 #[cfg(test)]

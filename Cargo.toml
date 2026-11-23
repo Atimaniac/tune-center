@@ -1,6 +1,6 @@
 [package]
 name = "tunecenter"
-version = "0.27.0"
+version = "0.28.0"
 edition = "2021"
 description = "Tune Center: karta graficzna (Nvidia, AMD), wentylatory, czujniki i pobor mocy w jednym oknie (Windows)"
 
@@ -23,6 +23,8 @@ zstd = "0.13"
 lz4_flex = "0.11"
 # Port szeregowy taśmy LED Skydimo (CH340, protokół Adalight).
 serialport = { version = "4", default-features = false }
+# Urządzenia RGB na USB HID (Logitech, ASUS Aura, Gigabyte, Corsair, MSI).
+hidapi = "2"
 # Direct3D 12: root signature i potoki przy kompilacji shaderów z góry.
 windows = { version = "0.62", features = [
     "Win32_Foundation",

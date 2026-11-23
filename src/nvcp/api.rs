@@ -159,11 +159,16 @@ const ID_DRS_DELETE_PROFILE_SETTING: u32 = 0xe4a2_6362;
 const ID_DRS_RESTORE_ALL_DEFAULTS: u32 = 0x5927_b094;
 const ID_DRS_RESTORE_PROFILE_DEFAULT: u32 = 0xfa5f_6134;
 const ID_DRS_RESTORE_PROFILE_DEFAULT_SETTING: u32 = 0x53f0_381e;
+const ID_GPU_CLIENT_ILLUM_ZONES_GET_INFO: u32 = 0x4b81_241b;
+const ID_GPU_CLIENT_ILLUM_ZONES_GET_CONTROL: u32 = 0x3dbf_5764;
+const ID_GPU_CLIENT_ILLUM_ZONES_SET_CONTROL: u32 = 0x197d_065e;
 
 // ------------------------------ typy funkcji -------------------------------
 
 pub type FnDriverVersion = unsafe extern "C" fn(*mut u32, *mut u8) -> Status;
 pub type FnEnumGpus = unsafe extern "C" fn(*mut Handle, *mut u32) -> Status;
+/// Funkcja z uchwytem karty i strukturą parametrów (np. oświetlenie).
+pub type FnGpuStruct = unsafe extern "C" fn(Handle, *mut c_void) -> Status;
 pub type FnConnectedDisplayIds = unsafe extern "C" fn(Handle, *mut c_void, *mut u32, u32) -> Status;
 pub type FnEnumDisplayHandle = unsafe extern "C" fn(u32, *mut Handle) -> Status;
 pub type FnDisplayName = unsafe extern "C" fn(Handle, *mut u8) -> Status;
@@ -252,6 +257,10 @@ pub struct Api {
     pub drs_restore_all: Option<FnSession>,
     pub drs_restore_profile: Option<FnProfile>,
     pub drs_restore_setting: Option<FnProfileSettingId>,
+
+    pub illum_zones_get_info: Option<FnGpuStruct>,
+    pub illum_zones_get_control: Option<FnGpuStruct>,
+    pub illum_zones_set_control: Option<FnGpuStruct>,
 }
 
 // Wskaźniki do funkcji sterownika można wołać z dowolnego wątku.
@@ -347,6 +356,9 @@ impl Api {
             drs_restore_all: f!(ID_DRS_RESTORE_ALL_DEFAULTS),
             drs_restore_profile: f!(ID_DRS_RESTORE_PROFILE_DEFAULT),
             drs_restore_setting: f!(ID_DRS_RESTORE_PROFILE_DEFAULT_SETTING),
+            illum_zones_get_info: f!(ID_GPU_CLIENT_ILLUM_ZONES_GET_INFO),
+            illum_zones_get_control: f!(ID_GPU_CLIENT_ILLUM_ZONES_GET_CONTROL),
+            illum_zones_set_control: f!(ID_GPU_CLIENT_ILLUM_ZONES_SET_CONTROL),
             _lib: lib,
         })
     }

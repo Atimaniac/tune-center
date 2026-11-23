@@ -81,18 +81,22 @@ pub struct Config {
     /// Sprawdzanie nowego sterownika NVIDIA (przy starcie i co 6 h).
     #[serde(default = "yes")]
     pub nv_driver_check: bool,
-    /// Wyłączone podświetlenie LED (pamięć RAM) - stosowane przy każdym starcie.
+    /// Oświetlenie RGB (zakładka RGB).
     #[serde(default)]
+    pub rgb: crate::rgb::Config,
+    // Do 0.27: podświetlenie w OPTIONS - tylko odczyt, przenoszone do `rgb`.
+    /// Wyłączone podświetlenie LED (pamięć RAM).
+    #[serde(default, skip_serializing)]
     pub leds_off: bool,
     /// Tryby LED sprzed wyłączenia: (adres SMBus, tryb bezpośredni, tryb).
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub leds_saved: Vec<(u8, u8, u8)>,
     /// Taśma LED Skydimo (USB): sterowanie włączone, kolor i jasność (0-100 %).
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub skydimo_on: bool,
-    #[serde(default = "white")]
+    #[serde(default = "white", skip_serializing)]
     pub skydimo_color: [u8; 3],
-    #[serde(default = "full")]
+    #[serde(default = "full", skip_serializing)]
     pub skydimo_brightness: u8,
     /// Historia wyników zakładki BENCH (najnowszy pierwszy).
     #[serde(default)]
@@ -147,6 +151,7 @@ impl Default for Config {
             check_updates: true,
             nv_driver_check: true,
             gpu_fans_direct: true,
+            rgb: crate::rgb::Config::default(),
             leds_off: false,
             leds_saved: Vec::new(),
             skydimo_on: false,
@@ -162,6 +167,7 @@ impl Default for Config {
             game_profiles: Vec::new(),
         };
         cfg.repair();
+        cfg.migrate_rgb();
         cfg
     }
 }
@@ -203,6 +209,34 @@ impl Config {
         // Po starcie obowiązuje profil globalny; profile gier włączy obserwator procesów.
         cfg.active = cfg.global_profile.clone();
         cfg
+    }
+
+    /// Ustawienia podświetlenia z OPTIONS (do 0.27) → zakładka RGB.
+    fn migrate_rgb(&mut self) {
+        if self.rgb.migrated {
+            return;
+        }
+        self.rgb.migrated = true;
+        if self.leds_off {
+            self.rgb.devices.insert(
+                "ram-ene".into(),
+                crate::rgb::Setting {
+                    mode: crate::rgb::Mode::Off,
+                    ..Default::default()
+                },
+            );
+            self.rgb.ram_saved = self.leds_saved.clone();
+        }
+        if self.skydimo_on {
+            self.rgb.devices.insert(
+                "skydimo".into(),
+                crate::rgb::Setting {
+                    mode: crate::rgb::Mode::Color,
+                    color: self.skydimo_color,
+                    brightness: self.skydimo_brightness,
+                },
+            );
+        }
     }
 
     /// Instalator zapisuje wybrany język w pliku `default-language.txt`.
@@ -264,5 +298,33 @@ impl Config {
                 .retain(|g| !g.profile.is_empty() || g.path.to_lowercase().ends_with(".exe"));
             self.repair();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::rgb::Mode;
+
+    /// Podświetlenie z OPTIONS (0.27) przechodzi do zakładki RGB raz.
+    #[test]
+    fn rgb_migration() {
+        let json = r#"{"leds_off": true, "leds_saved": [[119, 0, 5]],
+            "skydimo_on": true, "skydimo_color": [1, 2, 3], "skydimo_brightness": 40}"#;
+        let mut c: super::Config = serde_json::from_str(json).unwrap();
+        c.migrate_rgb();
+        assert_eq!(c.rgb.devices["ram-ene"].mode, Mode::Off);
+        assert_eq!(c.rgb.ram_saved, vec![(119, 0, 5)]);
+        let s = c.rgb.devices["skydimo"];
+        assert_eq!(
+            (s.mode, s.color, s.brightness),
+            (Mode::Color, [1, 2, 3], 40)
+        );
+        // Zapis bez starych pól; drugi odczyt niczego nie zmienia.
+        let saved = serde_json::to_string(&c).unwrap();
+        assert!(!saved.contains("skydimo_on"));
+        let mut again: super::Config = serde_json::from_str(&saved).unwrap();
+        again.rgb.devices.clear();
+        again.migrate_rgb();
+        assert!(again.rgb.devices.is_empty());
     }
 }

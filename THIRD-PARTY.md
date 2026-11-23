@@ -29,6 +29,13 @@ Tune Center uses the components below. They are included unchanged.
 - License: MPL-2.0
 - Serial port access for the Skydimo LED strip.
 
+## hidapi (Rust crate)
+
+- Source: https://github.com/ruabmbua/hidapi-rs (wraps the C library
+  https://github.com/libusb/hidapi)
+- License: MIT (crate); the bundled C library is used under its BSD-style license
+- USB HID access for RGB devices (Logitech, ASUS Aura, Gigabyte, Corsair, MSI).
+
 ## Audiowide (interface font)
 
 - File: `assets/Audiowide-Regular.ttf`, embedded in `tunecenter.exe`
@@ -47,8 +54,10 @@ No code was copied from these projects; they were used as documentation.
   (https://github.com/dvalfrid/rigstats): position of the PPT, TDC and EDC
   limits in the PM table of Ryzen 5000 and 9000.
 - OpenRGB (https://gitlab.com/CalcProgrammer1/OpenRGB, GPL-2.0-or-later):
-  Skydimo LED strip protocol ("Moni-A" query, model table, Adalight frame,
-  keep-alive).
+  lighting protocol facts - Skydimo strip ("Moni-A" query, model table,
+  Adalight frame), ENE RAM registers, Logitech HID++ RGB features,
+  ASUS Aura USB, Gigabyte RGB Fusion 2, Corsair Lighting Node and MSI Mystic
+  Light packet layouts and command numbers.
 - LibreHardwareMonitor (MPL-2.0): NVAPI structure layouts for reading and
   controlling graphics card fans (ClientFanCoolers) and the hotspot sensor.
 - AMD Display Library SDK (https://github.com/GPUOpen-LibrariesAndSDKs/display-library):

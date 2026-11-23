@@ -32,7 +32,7 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 - 🌡️ **Sensors & power** – key temperatures and CPU/GPU power with 2-minute charts, session energy and its cost.
 - 🛠️ **TUNE** – Windows latency and DPC settings with a backup of the original values and one-click restore.
 - ⏱️ **BENCH** – CPU-Z-style single-thread and multi-thread score, a CPU stress test that verifies every calculation (catches unstable undervolts) and stops at a temperature limit, and a 2-minute graphics card stability test with a result window, clock/temperature/power charts and a comparable score.
-- 💡 **Lighting** – turn off RAM RGB, drive a Skydimo LED strip.
+- 💡 **RGB** – one tab for all lighting: one color (with brightness) or off on every device or per device, or leave it to the device. RAM with an ENE controller (G.Skill Trident Z RGB and others), Skydimo LED strips, Logitech G keyboards and mice (HID++), NVIDIA cards with lighting zones in the driver, and – not yet tested on real hardware – ASUS Aura (USB), Gigabyte RGB Fusion 2 (USB), Corsair Lighting Node / Commander Pro and MSI Mystic Light. Nothing is written to device memory.
 - 🔄 **Auto-update** – checks GitHub every 15 minutes and updates silently with one click; also notifies you about new NVIDIA Game Ready drivers and installs just the driver with one click.
 
 ## Screenshots
@@ -84,7 +84,7 @@ Single-thread and multi-thread CPU score (10 s each, own scale for before/after 
 **Graphics card stability** – 2 minutes of full load through Direct3D 11: FP32 math on the whole GPU, a power-heavy mixed memory + math pass and write/read checks of 512 MB of video memory. Every calculation and memory read is verified, so an unstable overclock or undervolt shows up as errors. When the test ends, a window shows the score (GFLOPS FP32 and memory GB/s), STABLE / UNSTABLE, the comparison with your best result, and average/min/max with 2-minute charts of core clock, memory clock, temperature and power draw. Results are kept in the history.
 
 ### OPTIONS and ABOUT
-Both open from the buttons next to *UPDATE* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), light theme, GPU fans through the driver, update checks, turn off RAM RGB (G.Skill Trident Z RGB / ENE), Skydimo LED strip color and brightness, energy price.
+Both open from the buttons next to *UPDATE* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), light theme, GPU fans through the driver, update checks, energy price. Lighting moved to the RGB tab in 0.28.0 (settings are carried over).
 
 ## Installation
 
@@ -98,7 +98,7 @@ Running as administrator is optional – the GPU, NVIDIA settings, shader compil
 - Windows 10 or 11, 64-bit
 - NVIDIA (GTX/RTX) or AMD Radeon graphics card with a current driver
 - [.NET 11 Runtime](https://dotnet.microsoft.com/download/dotnet/11.0) – for the sensor process (installed by the setup)
-- [PawnIO](https://pawnio.eu) – optional; needed for CPU tuning, CPU sensors and RAM RGB (installed by the setup)
+- [PawnIO](https://pawnio.eu) – optional; needed for CPU tuning, CPU sensors and RAM lighting (installed by the setup)
 
 ### If something goes wrong
 When Tune Center or its sensor process crashes, a window shows what happened (error code, the module that failed, the .NET error of the sensor process). The report is saved next to the program in `tunecenter-crash.log` or `sensor-bridge-crash.log` – please attach it to a [GitHub issue](https://github.com/Atimaniac/tune-center/issues).
