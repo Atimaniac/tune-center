@@ -83,7 +83,10 @@ fn send_effect(bus: &Smbus, addr: u8, data: &[u8; 20]) -> Result<(), String> {
     }
     bus.write_byte_data(addr, REG_APPLY, ID_EFFECT)?;
     for _ in 0..20 {
-        if bus.read_byte_data(addr, REG_STATUS).is_ok_and(|s| s & 0x08 == 0) {
+        if bus
+            .read_byte_data(addr, REG_STATUS)
+            .is_ok_and(|s| s & 0x08 == 0)
+        {
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -100,7 +103,11 @@ struct CorsairRam {
 
 impl super::Device for CorsairRam {
     fn info(&self) -> super::Info {
-        let list: Vec<String> = self.addresses.iter().map(|a| format!("0x{a:02X}")).collect();
+        let list: Vec<String> = self
+            .addresses
+            .iter()
+            .map(|a| format!("0x{a:02X}"))
+            .collect();
         super::Info {
             id: "ram-corsair".into(),
             name: crate::i18n::tr("Pamięć RAM Corsair", "Corsair RAM").into(),

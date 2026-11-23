@@ -3,7 +3,9 @@
 //! tło okna, karty z poświatą, nagłówki sekcji z ikoną, wyróżnione przyciski,
 //! przyciski podzakładek i notatki z ikoną "i".
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
+use serde::{Deserialize, Serialize};
 
 use eframe::egui::{
     self, pos2, vec2, Color32, CornerRadius, Mesh, Painter, Pos2, Rect, RichText, Sense, Stroke,
@@ -12,11 +14,57 @@ use eframe::egui::{
 
 use crate::icons::{self, Icon};
 
+/// Motyw wyglądu programu.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Style {
+    /// Granat z niebieską poświatą (jasny wariant w opcji „Jasny motyw”).
+    #[default]
+    Tune,
+    /// Czerń z jaskrawą zielenią i ukośnymi smugami.
+    NeonGreen,
+    /// Fiolet, cyjan i magenta, miasto nocą w nagłówku.
+    NeonCity,
+    /// Czerń z czerwienią i ukośnymi smugami.
+    Crimson,
+}
+
+impl Style {
+    pub const ALL: [Style; 4] = [
+        Style::Tune,
+        Style::NeonGreen,
+        Style::NeonCity,
+        Style::Crimson,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Style::Tune => "Tune",
+            Style::NeonGreen => "Neon Green",
+            Style::NeonCity => "Neon City",
+            Style::Crimson => "Crimson",
+        }
+    }
+
+    fn index(self) -> u8 {
+        self as u8
+    }
+
+    fn from_index(i: u8) -> Self {
+        Self::ALL.get(i as usize).copied().unwrap_or_default()
+    }
+}
+
 /// Aktualny motyw; kolory poniżej czytają go przy każdym rysowaniu.
 static LIGHT: AtomicBool = AtomicBool::new(false);
+static STYLE: AtomicU8 = AtomicU8::new(0);
 
+pub fn style() -> Style {
+    Style::from_index(STYLE.load(Ordering::Relaxed))
+}
+
+/// Jasny wariant - tylko w motywie Tune.
 pub fn is_light() -> bool {
-    LIGHT.load(Ordering::Relaxed)
+    LIGHT.load(Ordering::Relaxed) && style() == Style::Tune
 }
 
 fn pick(dark: Color32, light: Color32) -> Color32 {
@@ -27,70 +75,268 @@ fn pick(dark: Color32, light: Color32) -> Color32 {
     }
 }
 
-/// Tło okna: bardzo ciemny granat albo jasny szaroniebieski.
-pub fn bg() -> Color32 {
-    pick(
-        Color32::from_rgb(5, 10, 20),
-        Color32::from_rgb(244, 247, 252),
+/// Kolory jednego motywu.
+struct Palette {
+    bg: Color32,
+    card_fill: Color32,
+    card_edge: Color32,
+    well: Color32,
+    track: Color32,
+    accent: Color32,
+    glow: Color32,
+    /// Drugi kolor (napis "CENTER", wybrana podzakładka w Neon City).
+    accent2: Color32,
+    muted: Color32,
+    wordmark: Color32,
+    text: Color32,
+    window: Color32,
+    faint: Color32,
+    /// Przyciski i pola: zwykłe, pod kursorem, wciśnięte, obwódka.
+    widget: [Color32; 4],
+    /// Wyróżniony przycisk: wyłączony, pod kursorem, zwykły.
+    primary: [Color32; 3],
+    /// Podzakładka: wybrana, pod kursorem.
+    sub_tab: [Color32; 2],
+    /// Zakładka: tło wybranej, pod kursorem, zwykłej; obwódka pod kursorem,
+    /// zwykła; tekst zwykłej.
+    tab: [Color32; 6],
+    /// Poświaty tła (dwie barwy).
+    bg_glow: [Color32; 2],
+}
+
+const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
+    Color32::from_rgb(r, g, b)
+}
+
+const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color32 {
+    Color32::from_rgba_premultiplied(
+        (r as u16 * a as u16 / 255) as u8,
+        (g as u16 * a as u16 / 255) as u8,
+        (b as u16 * a as u16 / 255) as u8,
+        a,
     )
+}
+
+const TUNE_DARK: Palette = Palette {
+    bg: rgb(5, 10, 20),
+    card_fill: rgba(9, 19, 36, 232),
+    card_edge: rgb(30, 66, 112),
+    well: rgb(5, 12, 24),
+    track: rgb(22, 40, 66),
+    accent: rgb(56, 182, 255),
+    glow: rgb(64, 190, 255),
+    accent2: rgb(64, 190, 255),
+    muted: rgb(180, 194, 216),
+    wordmark: rgb(214, 232, 252),
+    text: Color32::WHITE,
+    window: rgb(8, 17, 32),
+    faint: rgb(10, 22, 40),
+    widget: [
+        rgb(10, 24, 46),
+        rgb(16, 40, 74),
+        rgb(20, 52, 96),
+        rgb(36, 82, 138),
+    ],
+    primary: [rgb(10, 20, 36), rgb(16, 48, 92), rgb(10, 30, 60)],
+    sub_tab: [rgb(12, 36, 70), rgb(10, 24, 46)],
+    tab: [
+        rgb(12, 44, 88),
+        rgb(12, 30, 56),
+        rgb(8, 18, 34),
+        rgb(52, 110, 180),
+        rgb(30, 62, 104),
+        rgb(214, 226, 242),
+    ],
+    bg_glow: [rgb(20, 110, 230), rgb(20, 110, 230)],
+};
+
+const TUNE_LIGHT: Palette = Palette {
+    bg: rgb(244, 247, 252),
+    card_fill: rgba(255, 255, 255, 240),
+    card_edge: rgb(168, 198, 232),
+    well: rgb(233, 240, 249),
+    track: rgb(206, 218, 232),
+    accent: rgb(0, 108, 196),
+    glow: rgb(30, 140, 230),
+    accent2: rgb(30, 140, 230),
+    muted: rgb(78, 90, 110),
+    wordmark: rgb(20, 60, 110),
+    text: Color32::BLACK,
+    window: Color32::WHITE,
+    faint: rgb(238, 243, 250),
+    widget: [
+        rgb(236, 243, 252),
+        rgb(220, 234, 250),
+        rgb(204, 224, 248),
+        rgb(150, 186, 226),
+    ],
+    primary: [rgb(236, 240, 246), rgb(214, 232, 252), rgb(232, 242, 254)],
+    sub_tab: [rgb(220, 236, 252), rgb(234, 242, 252)],
+    tab: [
+        rgb(214, 234, 252),
+        rgb(232, 242, 252),
+        Color32::WHITE,
+        rgb(120, 170, 220),
+        rgb(170, 198, 230),
+        Color32::BLACK,
+    ],
+    bg_glow: [rgb(20, 110, 230), rgb(20, 110, 230)],
+};
+
+const NEON_GREEN: Palette = Palette {
+    bg: rgb(5, 8, 5),
+    card_fill: rgba(9, 14, 8, 235),
+    card_edge: rgb(44, 78, 20),
+    well: rgb(4, 7, 3),
+    track: rgb(28, 46, 16),
+    accent: rgb(140, 255, 30),
+    glow: rgb(128, 250, 36),
+    accent2: rgb(160, 255, 50),
+    muted: rgb(182, 200, 172),
+    wordmark: rgb(236, 246, 230),
+    text: Color32::WHITE,
+    window: rgb(9, 15, 8),
+    faint: rgb(12, 20, 9),
+    widget: [
+        rgb(12, 20, 8),
+        rgb(22, 38, 12),
+        rgb(30, 54, 14),
+        rgb(66, 118, 26),
+    ],
+    primary: [rgb(10, 16, 8), rgb(30, 60, 10), rgb(16, 32, 8)],
+    sub_tab: [rgb(22, 46, 10), rgb(13, 22, 9)],
+    tab: [
+        rgb(26, 58, 8),
+        rgb(16, 30, 10),
+        rgb(9, 14, 7),
+        rgb(90, 160, 34),
+        rgb(44, 78, 20),
+        rgb(222, 236, 212),
+    ],
+    bg_glow: [rgb(90, 210, 20), rgb(60, 160, 10)],
+};
+
+const NEON_CITY: Palette = Palette {
+    bg: rgb(9, 6, 24),
+    card_fill: rgba(16, 11, 40, 228),
+    card_edge: rgb(72, 46, 124),
+    well: rgb(8, 5, 22),
+    track: rgb(40, 28, 78),
+    accent: rgb(34, 227, 255),
+    glow: rgb(34, 227, 255),
+    accent2: rgb(255, 63, 184),
+    muted: rgb(194, 184, 224),
+    wordmark: rgb(242, 238, 255),
+    text: Color32::WHITE,
+    window: rgb(14, 10, 34),
+    faint: rgb(18, 12, 42),
+    widget: [
+        rgb(20, 14, 48),
+        rgb(34, 22, 74),
+        rgb(48, 28, 96),
+        rgb(96, 62, 156),
+    ],
+    primary: [rgb(16, 11, 38), rgb(62, 20, 84), rgb(36, 18, 66)],
+    sub_tab: [rgb(70, 18, 72), rgb(22, 15, 48)],
+    tab: [
+        rgb(40, 30, 92),
+        rgb(28, 20, 62),
+        rgb(16, 11, 36),
+        rgb(124, 84, 206),
+        rgb(72, 46, 124),
+        rgb(228, 222, 246),
+    ],
+    bg_glow: [rgb(255, 63, 184), rgb(34, 180, 255)],
+};
+
+const CRIMSON: Palette = Palette {
+    bg: rgb(9, 4, 4),
+    card_fill: rgba(18, 8, 8, 235),
+    card_edge: rgb(86, 26, 22),
+    well: rgb(7, 3, 3),
+    track: rgb(52, 20, 18),
+    accent: rgb(255, 64, 44),
+    glow: rgb(255, 52, 34),
+    accent2: rgb(255, 64, 44),
+    muted: rgb(212, 184, 180),
+    wordmark: rgb(246, 236, 234),
+    text: Color32::WHITE,
+    window: rgb(16, 8, 8),
+    faint: rgb(20, 10, 9),
+    widget: [
+        rgb(24, 10, 9),
+        rgb(42, 16, 14),
+        rgb(60, 20, 16),
+        rgb(124, 38, 30),
+    ],
+    primary: [rgb(18, 8, 8), rgb(72, 16, 12), rgb(40, 12, 10)],
+    sub_tab: [rgb(64, 16, 12), rgb(24, 10, 9)],
+    tab: [
+        rgb(74, 14, 10),
+        rgb(38, 12, 10),
+        rgb(16, 8, 7),
+        rgb(176, 52, 38),
+        rgb(86, 26, 22),
+        rgb(238, 224, 222),
+    ],
+    bg_glow: [rgb(220, 30, 20), rgb(160, 20, 14)],
+};
+
+fn pal() -> &'static Palette {
+    match style() {
+        Style::Tune if is_light() => &TUNE_LIGHT,
+        Style::Tune => &TUNE_DARK,
+        Style::NeonGreen => &NEON_GREEN,
+        Style::NeonCity => &NEON_CITY,
+        Style::Crimson => &CRIMSON,
+    }
+}
+
+/// Tło okna.
+pub fn bg() -> Color32 {
+    pal().bg
 }
 
 /// Główny kolor tekstu: biały na ciemnym tle, czarny na jasnym.
 pub fn text() -> Color32 {
-    pick(Color32::WHITE, Color32::BLACK)
+    pal().text
 }
 
 pub fn card_fill() -> Color32 {
-    pick(
-        Color32::from_rgba_unmultiplied(9, 19, 36, 232),
-        Color32::from_rgba_unmultiplied(255, 255, 255, 240),
-    )
+    pal().card_fill
 }
 
 pub fn card_edge() -> Color32 {
-    pick(
-        Color32::from_rgb(30, 66, 112),
-        Color32::from_rgb(168, 198, 232),
-    )
+    pal().card_edge
 }
 
 /// Tło wykresów, pól edycji i wnętrza wentylatora.
 pub fn well() -> Color32 {
-    pick(
-        Color32::from_rgb(5, 12, 24),
-        Color32::from_rgb(233, 240, 249),
-    )
+    pal().well
 }
 
 /// Linie siatki i tła pasków.
 pub fn track() -> Color32 {
-    pick(
-        Color32::from_rgb(22, 40, 66),
-        Color32::from_rgb(206, 218, 232),
-    )
+    pal().track
 }
 
 pub fn accent() -> Color32 {
-    pick(
-        Color32::from_rgb(56, 182, 255),
-        Color32::from_rgb(0, 108, 196),
-    )
+    pal().accent
 }
 
-/// Jasny błękit poświaty (obramowania aktywnych elementów).
+/// Kolor poświaty (obramowania aktywnych elementów).
 pub fn glow() -> Color32 {
-    pick(
-        Color32::from_rgb(64, 190, 255),
-        Color32::from_rgb(30, 140, 230),
-    )
+    pal().glow
+}
+
+/// Drugi kolor motywu (w Tune taki sam jak poświata).
+pub fn accent2() -> Color32 {
+    pal().accent2
 }
 
 /// Tekst pomocniczy.
 pub fn muted() -> Color32 {
-    pick(
-        Color32::from_rgb(180, 194, 216),
-        Color32::from_rgb(78, 90, 110),
-    )
+    pal().muted
 }
 
 pub fn warn() -> Color32 {
@@ -114,12 +360,32 @@ pub fn ok() -> Color32 {
     )
 }
 
-/// Kolor napisu "TUNE CENTER" w nagłówku.
+/// Kolor napisu "TUNE" w nagłówku.
 pub fn wordmark() -> Color32 {
-    pick(
-        Color32::from_rgb(214, 232, 252),
-        Color32::from_rgb(20, 60, 110),
-    )
+    pal().wordmark
+}
+
+/// Kolor napisu "CENTER" w nagłówku (w Tune taki sam jak "TUNE").
+pub fn wordmark2() -> Color32 {
+    match style() {
+        Style::Tune => pal().wordmark,
+        _ => pal().accent2,
+    }
+}
+
+/// Kolory przycisku zakładki: (tło, obwódka, tekst).
+pub fn tab_colors(selected: bool, hovered: bool) -> (Color32, Color32, Color32) {
+    let p = pal();
+    let selected_text = if is_light() {
+        Color32::BLACK
+    } else {
+        Color32::WHITE
+    };
+    match (selected, hovered) {
+        (true, _) => (p.tab[0], p.glow, selected_text),
+        (false, true) => (p.tab[1], p.tab[3], selected_text),
+        (false, false) => (p.tab[2], p.tab[4], p.tab[5]),
+    }
 }
 
 /// Nazwa rodziny czcionki przycisków zakładek.
@@ -149,8 +415,11 @@ pub fn tab_font(size: f32) -> egui::FontId {
 }
 
 /// Ustawia motyw całego programu.
-pub fn apply(ctx: &egui::Context, light: bool) {
+pub fn apply(ctx: &egui::Context, light: bool, style: Style) {
     LIGHT.store(light, Ordering::Relaxed);
+    STYLE.store(style.index(), Ordering::Relaxed);
+    // Jasny wariant istnieje tylko w motywie Tune.
+    let light = is_light();
 
     let mut visuals = if light {
         egui::Visuals::light()
@@ -158,13 +427,10 @@ pub fn apply(ctx: &egui::Context, light: bool) {
         egui::Visuals::dark()
     };
     visuals.panel_fill = bg();
-    visuals.window_fill = pick(Color32::from_rgb(8, 17, 32), Color32::WHITE);
+    visuals.window_fill = pal().window;
     visuals.window_stroke = Stroke::new(1.0_f32, card_edge());
     visuals.extreme_bg_color = well();
-    visuals.faint_bg_color = pick(
-        Color32::from_rgb(10, 22, 40),
-        Color32::from_rgb(238, 243, 250),
-    );
+    visuals.faint_bg_color = pal().faint;
     visuals.selection.bg_fill = accent().linear_multiply(0.45);
     visuals.selection.stroke = Stroke::new(1.0_f32, glow());
     visuals.hyperlink_color = accent();
@@ -174,22 +440,7 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     // Przyciski i pola: ciemny granat z niebieską obwódką, jaśniejszą pod kursorem.
     let w = &mut visuals.widgets;
     let radius = CornerRadius::same(6);
-    let base = pick(
-        Color32::from_rgb(10, 24, 46),
-        Color32::from_rgb(236, 243, 252),
-    );
-    let hover = pick(
-        Color32::from_rgb(16, 40, 74),
-        Color32::from_rgb(220, 234, 250),
-    );
-    let press = pick(
-        Color32::from_rgb(20, 52, 96),
-        Color32::from_rgb(204, 224, 248),
-    );
-    let line = pick(
-        Color32::from_rgb(36, 82, 138),
-        Color32::from_rgb(150, 186, 226),
-    );
+    let [base, hover, press, line] = pal().widget;
     w.inactive.bg_fill = base;
     w.inactive.weak_bg_fill = base;
     w.inactive.bg_stroke = Stroke::new(1.0_f32, line);
@@ -278,9 +529,189 @@ pub fn glow_line(painter: &Painter, points: &[Pos2], color: Color32, strength: f
     }
 }
 
-/// Tło całego okna: granat z niebieskimi poświatami i ukośnymi liniami
-/// w rogach (w jasnym motywie bardzo delikatne).
-pub fn paint_background(painter: &Painter, rect: Rect) {
+/// Tło całego okna w aktualnym motywie. `art` - grafika nagłówka motywu
+/// Neon City (postać w prawym górnym rogu).
+/// Grafiki motywu Neon City: postać w nagłówku i ulica na dole okna.
+pub struct CityArt<'a> {
+    pub top: &'a egui::TextureHandle,
+    pub bottom: &'a egui::TextureHandle,
+}
+
+pub fn paint_background(painter: &Painter, rect: Rect, art: Option<CityArt>) {
+    match style() {
+        Style::Tune => paint_tune(painter, rect),
+        Style::NeonGreen | Style::Crimson => paint_streaks(painter, rect),
+        Style::NeonCity => paint_city(painter, rect, art),
+    }
+}
+
+/// Kolor z przezroczystością 0..1.
+fn alpha(c: Color32, a: f32) -> Color32 {
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (a.clamp(0.0, 1.0) * 255.0) as u8)
+}
+
+/// Neon Green / Crimson: czerń, poświaty w kolorze motywu i ostre ukośne
+/// smugi światła w prawym górnym i lewym dolnym rogu.
+fn paint_streaks(painter: &Painter, rect: Rect) {
+    let p = pal();
+    painter.rect_filled(rect, CornerRadius::ZERO, p.bg);
+    radial_glow(
+        painter,
+        pos2(rect.right() - 60.0, rect.top() + 120.0),
+        pos2(420.0, 300.0),
+        alpha(p.bg_glow[0], 0.13),
+    );
+    radial_glow(
+        painter,
+        pos2(rect.left() + 80.0, rect.bottom() - 60.0),
+        pos2(360.0, 220.0),
+        alpha(p.bg_glow[1], 0.10),
+    );
+    radial_glow(
+        painter,
+        pos2(rect.left() + 110.0, rect.top() + 60.0),
+        pos2(240.0, 140.0),
+        alpha(p.bg_glow[0], 0.10),
+    );
+    // Smugi: szerokie przygaszone pasy i cienkie jasne linie.
+    let c = p.glow;
+    for (i, (width, a)) in [
+        (26.0, 0.05),
+        (2.0, 0.55),
+        (10.0, 0.08),
+        (1.5, 0.35),
+        (4.0, 0.18),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let o = i as f32 * 58.0;
+        painter.line_segment(
+            [
+                pos2(rect.right() - 520.0 + o, rect.bottom() + 20.0),
+                pos2(rect.right() - 40.0 + o, rect.top() - 20.0),
+            ],
+            Stroke::new(width, alpha(c, a * 0.8)),
+        );
+    }
+    for (i, (width, a)) in [(18.0, 0.05), (2.0, 0.45), (6.0, 0.10)]
+        .into_iter()
+        .enumerate()
+    {
+        let o = i as f32 * 46.0;
+        painter.line_segment(
+            [
+                pos2(rect.left() + 80.0 + o, rect.bottom() + 10.0),
+                pos2(rect.left() + 360.0 + o, rect.bottom() - 260.0),
+            ],
+            Stroke::new(width, alpha(c, a * 0.7)),
+        );
+    }
+}
+
+/// Neon City: fiolet z poświatami magenty i cyjanu, w nagłówku panorama
+/// miasta z oświetlonymi oknami i postać po prawej.
+fn paint_city(painter: &Painter, rect: Rect, art: Option<CityArt>) {
+    let p = pal();
+    painter.rect_filled(rect, CornerRadius::ZERO, p.bg);
+    radial_glow(
+        painter,
+        pos2(rect.right() - 120.0, rect.top() + 30.0),
+        pos2(420.0, 220.0),
+        alpha(p.bg_glow[0], 0.16),
+    );
+    radial_glow(
+        painter,
+        pos2(rect.left() + 100.0, rect.top() + 60.0),
+        pos2(260.0, 150.0),
+        alpha(p.bg_glow[1], 0.12),
+    );
+    radial_glow(
+        painter,
+        pos2(rect.center().x, rect.bottom() + 30.0),
+        pos2(rect.width() * 0.6, 170.0),
+        alpha(p.bg_glow[0], 0.10),
+    );
+    radial_glow(
+        painter,
+        pos2(rect.right() - 60.0, rect.bottom() - 80.0),
+        pos2(300.0, 240.0),
+        alpha(p.bg_glow[1], 0.08),
+    );
+
+    // Panorama miasta w pasie nagłówka (stałe "losowe" wymiary budynków).
+    let base = rect.top() + 112.0;
+    let art_w = 180.0;
+    let x_end = rect.right() - art_w + 20.0;
+    let mut x = (rect.right() - 720.0).max(rect.left() + 300.0);
+    let mut seed: u32 = 0x9E37_79B9;
+    let mut next = |n: u32| {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 16) % n
+    };
+    let building = alpha(rgb(26, 18, 62), 0.85);
+    while x < x_end {
+        let w = 14.0 + next(22) as f32;
+        let h = 30.0 + next(76) as f32;
+        let top = base - h;
+        painter.rect_filled(
+            Rect::from_min_max(pos2(x, top), pos2(x + w, base)),
+            CornerRadius::ZERO,
+            building,
+        );
+        let mut wy = top + 5.0;
+        while wy < base - 5.0 {
+            let mut wx = x + 3.0;
+            while wx < x + w - 3.0 {
+                if next(4) == 0 {
+                    let c = if next(2) == 0 { p.glow } else { p.accent2 };
+                    painter.rect_filled(
+                        Rect::from_min_size(pos2(wx, wy), vec2(2.0, 2.0)),
+                        CornerRadius::ZERO,
+                        alpha(c, 0.65),
+                    );
+                }
+                wx += 6.0;
+            }
+            wy += 7.0;
+        }
+        x += w + 1.0 + next(4) as f32;
+    }
+
+    // Postać (grafika motywu) w prawym górnym rogu, na wysokość nagłówka.
+    if let Some(art) = art {
+        // Ulica z odbiciami neonów na dole okna (wyśrodkowana, krawędzie
+        // wygaszone w samej grafice).
+        let size = art.bottom.size_vec2();
+        let w = size.x.max(rect.width());
+        let h = size.y * w / size.x;
+        let r = Rect::from_min_size(
+            pos2(rect.center().x - w / 2.0, rect.bottom() - h),
+            vec2(w, h),
+        );
+        painter.image(
+            art.bottom.id(),
+            r,
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        let tex = art.top;
+        let size = tex.size_vec2();
+        let h = 120.0;
+        let w = size.x * h / size.y;
+        let r = Rect::from_min_size(pos2(rect.right() - w, rect.top()), vec2(w, h));
+        painter.image(
+            tex.id(),
+            r,
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    }
+}
+
+/// Tune: granat z niebieskimi poświatami i ukośnymi liniami w rogach (w
+/// jasnym wariancie bardzo delikatne).
+fn paint_tune(painter: &Painter, rect: Rect) {
     painter.rect_filled(rect, CornerRadius::ZERO, bg());
     let k = if is_light() { 0.35 } else { 1.0 };
     let blue = |a: f32| Color32::from_rgba_unmultiplied(20, 110, 230, (a * k * 255.0) as u8);
@@ -454,19 +885,11 @@ pub fn primary_button(
         let p = ui.painter();
         let hovered = enabled && response.hovered();
         let edge = if enabled { glow() } else { card_edge() };
+        let [off, hot, normal] = pal().primary;
         let fill = match (enabled, hovered) {
-            (false, _) => pick(
-                Color32::from_rgb(10, 20, 36),
-                Color32::from_rgb(236, 240, 246),
-            ),
-            (true, true) => pick(
-                Color32::from_rgb(16, 48, 92),
-                Color32::from_rgb(214, 232, 252),
-            ),
-            (true, false) => pick(
-                Color32::from_rgb(10, 30, 60),
-                Color32::from_rgb(232, 242, 254),
-            ),
+            (false, _) => off,
+            (true, true) => hot,
+            (true, false) => normal,
         };
         if enabled {
             let strength = if hovered { 0.35 } else { 0.18 };
@@ -517,21 +940,15 @@ pub fn sub_tab(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response
         let hovered = response.hovered();
         if selected || hovered {
             let fill = if selected {
-                pick(
-                    Color32::from_rgb(12, 36, 70),
-                    Color32::from_rgb(220, 236, 252),
-                )
+                pal().sub_tab[0]
             } else {
-                pick(
-                    Color32::from_rgb(10, 24, 46),
-                    Color32::from_rgb(234, 242, 252),
-                )
+                pal().sub_tab[1]
             };
             p.rect(
                 rect,
                 CornerRadius::same(6),
                 fill,
-                Stroke::new(1.0_f32, if selected { glow() } else { card_edge() }),
+                Stroke::new(1.0_f32, if selected { accent2() } else { card_edge() }),
                 StrokeKind::Inside,
             );
         }
@@ -542,7 +959,7 @@ pub fn sub_tab(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response
                     pos2(rect.left() + 8.0, rect.bottom() - 1.0),
                     pos2(rect.right() - 8.0, rect.bottom() - 1.0),
                 ],
-                glow(),
+                accent2(),
                 1.0,
             );
         }
@@ -767,4 +1184,50 @@ pub fn switch(ui: &mut egui::Ui, id: &str, state: SwitchState, enabled: bool) ->
     } else {
         egui::CursorIcon::NotAllowed
     })
+}
+
+/// Logo (niebieskie RGBA) w kolorze aktualnego motywu: barwa kolorowych
+/// pikseli jest zamieniana na barwę motywu, jasność i nasycenie zostają.
+pub fn tint_logo(rgba: &[u8]) -> Vec<u8> {
+    let target = match style() {
+        Style::Tune => return rgba.to_vec(),
+        Style::NeonGreen => 92.0,
+        Style::NeonCity => 188.0,
+        Style::Crimson => 4.0,
+    };
+    let mut out = rgba.to_vec();
+    for px in out.chunks_exact_mut(4) {
+        let (r, g, b) = (
+            px[0] as f32 / 255.0,
+            px[1] as f32 / 255.0,
+            px[2] as f32 / 255.0,
+        );
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let s = if max > 0.0 { (max - min) / max } else { 0.0 };
+        // Szarości i biel (napis "TUNE") zostają bez zmian.
+        if s < 0.18 {
+            continue;
+        }
+        let [nr, ng, nb] = hsv_to_rgb(target, s, max);
+        px[0] = (nr * 255.0) as u8;
+        px[1] = (ng * 255.0) as u8;
+        px[2] = (nb * 255.0) as u8;
+    }
+    out
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    [r + m, g + m, b + m]
 }

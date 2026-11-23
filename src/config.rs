@@ -64,6 +64,9 @@ pub struct Config {
     /// Jasny motyw (białe tło, czarny tekst).
     #[serde(default)]
     pub light_theme: bool,
+    /// Motyw wyglądu (Tune, Neon Green, Neon City, Crimson).
+    #[serde(default)]
+    pub theme_style: crate::theme::Style,
     /// Język interfejsu: "pl" albo "en". `None`: użytkownik jeszcze nie
     /// wybierał - obowiązuje język wybrany w instalatorze, a bez niego polski.
     #[serde(default)]
@@ -146,6 +149,7 @@ impl Default for Config {
     fn default() -> Self {
         let mut cfg = Self {
             light_theme: false,
+            theme_style: crate::theme::Style::Tune,
             language: None,
             tray: true,
             check_updates: true,

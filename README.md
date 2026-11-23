@@ -84,7 +84,7 @@ Single-thread and multi-thread CPU score (10 s each, own scale for before/after 
 **Graphics card stability** – 2 minutes of full load through Direct3D 11: FP32 math on the whole GPU, a power-heavy mixed memory + math pass and write/read checks of 512 MB of video memory. Every calculation and memory read is verified, so an unstable overclock or undervolt shows up as errors. When the test ends, a window shows the score (GFLOPS FP32 and memory GB/s), STABLE / UNSTABLE, the comparison with your best result, and average/min/max with 2-minute charts of core clock, memory clock, temperature and power draw. Results are kept in the history.
 
 ### OPTIONS and ABOUT
-Both open from the buttons next to *UPDATE* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), light theme, GPU fans through the driver, update checks, energy price, **compatibility check**. Lighting moved to the RGB tab in 0.28.0 (settings are carried over).
+Both open from the buttons next to *UPDATE* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), themes (Tune with an optional light variant, Neon Green, Neon City, Crimson), GPU fans through the driver, update checks, energy price, **compatibility check**. Lighting moved to the RGB tab in 0.28.0 (settings are carried over).
 
 ## Installation
 

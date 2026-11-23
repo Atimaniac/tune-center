@@ -60,6 +60,21 @@ use theme::{accent, muted, warn};
 /// logo z makiety; ikona okna i zasobnika zostaje przy `icon-128.rgba`).
 const LOGO_SIZE: usize = 160;
 
+/// Rozmiar grafiki nagłówka motywu Neon City (`assets/theme-neon-city.rgba`).
+const THEME_ART_SIZE: [usize; 2] = [190, 126];
+/// Rozmiar grafiki dolnej krawędzi okna (`assets/theme-neon-city-bottom.rgba`).
+const THEME_ART_BOTTOM_SIZE: [usize; 2] = [1060, 96];
+
+/// Logo w kolorze aktualnego motywu (niebieskie logo przebarwione).
+fn load_logo(ctx: &egui::Context) -> egui::TextureHandle {
+    let rgba = theme::tint_logo(include_bytes!("../assets/logo-header.rgba"));
+    ctx.load_texture(
+        "logo",
+        egui::ColorImage::from_rgba_unmultiplied([LOGO_SIZE, LOGO_SIZE], &rgba),
+        egui::TextureOptions::LINEAR,
+    )
+}
+
 /// Odstęp między klatkami animacji (20 klatek/s): kręcące się wentylatory,
 /// pulsujące numery profili GPU.
 pub const ANIMATION_FRAME: Duration = Duration::from_millis(50);
@@ -120,36 +135,7 @@ fn tab_button(
             egui::pos2(rect.right() - TAB_SKEW, rect.bottom()),
             egui::pos2(rect.left(), rect.bottom()),
         ];
-        let light = theme::is_light();
-        let hovered = response.hovered();
-        let (fill, edge, text) = match (selected, hovered, light) {
-            (true, _, false) => (Color32::from_rgb(12, 44, 88), theme::glow(), Color32::WHITE),
-            (true, _, true) => (
-                Color32::from_rgb(214, 234, 252),
-                theme::glow(),
-                Color32::BLACK,
-            ),
-            (false, true, false) => (
-                Color32::from_rgb(12, 30, 56),
-                Color32::from_rgb(52, 110, 180),
-                Color32::WHITE,
-            ),
-            (false, false, false) => (
-                Color32::from_rgb(8, 18, 34),
-                Color32::from_rgb(30, 62, 104),
-                Color32::from_rgb(214, 226, 242),
-            ),
-            (false, true, true) => (
-                Color32::from_rgb(232, 242, 252),
-                Color32::from_rgb(120, 170, 220),
-                Color32::BLACK,
-            ),
-            (false, false, true) => (
-                Color32::WHITE,
-                Color32::from_rgb(170, 198, 230),
-                Color32::BLACK,
-            ),
-        };
+        let (fill, edge, text) = theme::tab_colors(selected, response.hovered());
         let mut closed = shape.to_vec();
         closed.push(shape[0]);
         if selected {
@@ -221,6 +207,10 @@ struct App {
     tray: Option<tray::Tray>,
     /// Logo programu pokazywane w nagłówku i w zakładce ABOUT.
     logo: egui::TextureHandle,
+    /// Grafika nagłówka motywu Neon City.
+    theme_art: egui::TextureHandle,
+    /// Grafika dolnej krawędzi okna w motywie Neon City.
+    theme_art_bottom: egui::TextureHandle,
     /// Wentylatory kart graficznych sterowane wprost przez sterownik karty;
     /// `None`, gdy opcja jest wyłączona albo sterownik tego nie udostępnia.
     gpu_fans: Option<gpu_fans::GpuFans>,
@@ -276,7 +266,11 @@ impl App {
             fans.start_games(move || ctx.request_repaint());
         }
         theme::install_fonts(&cc.egui_ctx);
-        theme::apply(&cc.egui_ctx, fans.config.light_theme);
+        theme::apply(
+            &cc.egui_ctx,
+            fans.config.light_theme,
+            fans.config.theme_style,
+        );
         autostart::migrate();
 
         let icon = window_icon();
@@ -324,11 +318,20 @@ impl App {
             skip_kinds,
         );
 
-        let logo = cc.egui_ctx.load_texture(
-            "logo",
+        let logo = load_logo(&cc.egui_ctx);
+        let theme_art = cc.egui_ctx.load_texture(
+            "theme-neon-city",
             egui::ColorImage::from_rgba_unmultiplied(
-                [LOGO_SIZE, LOGO_SIZE],
-                include_bytes!("../assets/logo-header.rgba"),
+                THEME_ART_SIZE,
+                include_bytes!("../assets/theme-neon-city.rgba"),
+            ),
+            egui::TextureOptions::LINEAR,
+        );
+        let theme_art_bottom = cc.egui_ctx.load_texture(
+            "theme-neon-city-bottom",
+            egui::ColorImage::from_rgba_unmultiplied(
+                THEME_ART_BOTTOM_SIZE,
+                include_bytes!("../assets/theme-neon-city-bottom.rgba"),
             ),
             egui::TextureOptions::LINEAR,
         );
@@ -353,6 +356,8 @@ impl App {
             notice: notice.or_else(oled_fix::reapply),
             tray,
             logo,
+            theme_art,
+            theme_art_bottom,
             gpu_fans,
             disks: disks::Disks::start(),
             rgb,
@@ -760,13 +765,51 @@ impl App {
                 );
             }
 
-            let mut light = theme::is_light();
-            if ui.checkbox(&mut light, crate::i18n::tr("Jasny motyw", "Light theme")).changed() {
-                theme::apply(ctx, light);
+            // Motyw wyglądu.
+            let mut style = self.fans.config.theme_style;
+            ui.horizontal(|ui| {
+                ui.label(crate::i18n::tr("Motyw:", "Theme:"));
+                egui::ComboBox::from_id_salt("theme_style")
+                    .selected_text(style.name())
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for s in theme::Style::ALL {
+                            ui.selectable_value(&mut style, s, s.name());
+                        }
+                    });
+            });
+            if style != self.fans.config.theme_style {
+                self.fans.config.theme_style = style;
+                self.fans.config.save();
+                theme::apply(ctx, self.fans.config.light_theme, style);
+                self.logo = load_logo(ctx);
+            }
+            option_note(
+                ui,
+                crate::i18n::tr(
+                    "Tune - granat z niebieską poświatą; Neon Green - czerń i zieleń; Neon City - fiolet, cyjan i magenta z miastem nocą; Crimson - czerń i czerwień.",
+                    "Tune - navy with a blue glow; Neon Green - black and green; Neon City - violet, cyan and magenta with a night city; Crimson - black and red.",
+                ),
+            );
+
+            let tune = style == theme::Style::Tune;
+            let mut light = self.fans.config.light_theme && tune;
+            if ui
+                .add_enabled(tune, egui::Checkbox::new(&mut light, crate::i18n::tr("Jasny motyw", "Light theme")))
+                .changed()
+            {
                 self.fans.config.light_theme = light;
                 self.fans.config.save();
+                theme::apply(ctx, light, style);
             }
-            option_note(ui, crate::i18n::tr("Białe tło i czarny tekst zamiast ciemnego motywu.", "White background and black text instead of the dark theme."));
+            option_note(
+                ui,
+                if tune {
+                    crate::i18n::tr("Białe tło i czarny tekst zamiast ciemnego motywu.", "White background and black text instead of the dark theme.")
+                } else {
+                    crate::i18n::tr("Dostępne tylko w motywie Tune - pozostałe motywy są zawsze ciemne.", "Available only in the Tune theme - the other themes are always dark.")
+                },
+            );
 
             let mut direct = self.fans.config.gpu_fans_direct;
             if ui
@@ -1036,7 +1079,14 @@ impl eframe::App for App {
         };
 
         // --- tło całego okna (granat z poświatą); panele są przezroczyste ---
-        theme::paint_background(ui.painter(), ctx.content_rect());
+        theme::paint_background(
+            ui.painter(),
+            ctx.content_rect(),
+            Some(theme::CityArt {
+                top: &self.theme_art,
+                bottom: &self.theme_art_bottom,
+            }),
+        );
 
         // --- nagłówek: logo, nazwa i przyciski zakładek ---
         let header = egui::Panel::top("header")
@@ -1064,11 +1114,18 @@ impl eframe::App for App {
                     ))
                     .paint_at(ui, logo_rect);
                     ui.add_space(8.0);
-                    ui.label(
-                        RichText::new("TUNE CENTER")
-                            .font(theme::tab_font(22.0))
-                            .color(theme::wordmark()),
-                    );
+                    // Dwukolorowy napis (w motywie Tune oba słowa w jednym kolorze).
+                    let mut job = egui::text::LayoutJob::default();
+                    for (word, color) in
+                        [("TUNE ", theme::wordmark()), ("CENTER", theme::wordmark2())]
+                    {
+                        job.append(
+                            word,
+                            0.0,
+                            egui::TextFormat::simple(theme::tab_font(22.0), color),
+                        );
+                    }
+                    ui.label(job);
                     ui.add_space(10.0);
                     let tabs_x = ui.cursor().left();
                     for (tab, label, icon) in TABS {
@@ -1093,7 +1150,7 @@ impl eframe::App for App {
                 x_step - 16.0,
                 1.5,
                 Color32::TRANSPARENT,
-                theme::glow().gamma_multiply(0.7),
+                theme::accent2().gamma_multiply(0.7),
             );
             theme::glow_line(
                 p,

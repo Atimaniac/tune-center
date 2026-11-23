@@ -135,10 +135,9 @@ impl Family {
     pub fn label(self) -> &'static str {
         match self {
             Family::EneRam => crate::i18n::tr("Pamięć RAM (ENE, SMBus)", "RAM (ENE, SMBus)"),
-            Family::CorsairRam => crate::i18n::tr(
-                "Pamięć RAM Corsair (SMBus)",
-                "Corsair RAM (SMBus)",
-            ),
+            Family::CorsairRam => {
+                crate::i18n::tr("Pamięć RAM Corsair (SMBus)", "Corsair RAM (SMBus)")
+            }
             Family::Skydimo => crate::i18n::tr("Taśma Skydimo (USB)", "Skydimo strip (USB)"),
             Family::Logitech => "Logitech G (HID++)",
             Family::NvidiaGpu => crate::i18n::tr("Karta NVIDIA (NVAPI)", "NVIDIA card (NVAPI)"),

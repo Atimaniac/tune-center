@@ -28,7 +28,8 @@ przełącza się przyciskami w nagłówku, obok logo:
 - **BENCH** - test wydajności procesora w stylu CPU-Z, stress test i test
   stabilności karty graficznej.
 - **OPTIONS** - uruchamianie z Windows, minimalizowanie do zasobnika
-  i jasny motyw.
+  i motyw wyglądu: Tune (z opcją jasnego), Neon Green, Neon City (miasto nocą
+  z postacią w nagłówku i ulicą na dole okna) i Crimson.
 - **ABOUT** - wersja programu, opis i użyte składniki.
 
 Stan połączenia z czujnikami ("Czujniki: połączono") jest na pasku na
@@ -702,8 +703,12 @@ Windows 10 i 11. Nazwę repozytorium ustawia stała `REPO` w `src/update.rs`.
 
 ## Motyw
 
-Pole "Jasny motyw" w zakładce OPTIONS przełącza białe tło z czarnym tekstem.
-Wybór jest zapamiętywany.
+Lista "Motyw" w zakładce OPTIONS: **Tune** (granat z niebieską poświatą),
+**Neon Green** (czerń i zieleń, ukośne smugi światła), **Neon City** (fiolet,
+cyjan i magenta, miasto nocą i postać w nagłówku, ulica z odbiciami neonów na
+dole okna) i **Crimson** (czerń i czerwień). Pole "Jasny motyw" (białe tło,
+czarny tekst) działa tylko w motywie Tune. Układ i działanie programu są we
+wszystkich motywach takie same. Wybór jest zapamiętywany.
 
 ## Ikona i nazwa
 
