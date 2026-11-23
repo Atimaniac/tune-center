@@ -165,6 +165,61 @@ pub(crate) mod reg {
         Ok(())
     }
 
+    /// Zapisuje tekst REG_SZ (`Some`) albo usuwa wartość (`None`); tworzy brakujący klucz.
+    pub fn set_string(
+        root: Hkey,
+        path: &str,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        let Some(text) = value else {
+            return set_dword(root, path, name, None);
+        };
+        let p = wide(path);
+        let n = wide(name);
+        let mut key = 0;
+        let mut disp = 0;
+        let r = unsafe {
+            RegCreateKeyExW(
+                root,
+                p.as_ptr(),
+                0,
+                std::ptr::null(),
+                0,
+                KEY_ALL | KEY_WOW64_64KEY,
+                std::ptr::null(),
+                &mut key,
+                &mut disp,
+            )
+        };
+        if r != 0 {
+            return Err(crate::trf!(
+                "rejestr {path}: błąd {r}",
+                "registry {path}: error {r}"
+            ));
+        }
+        let key = Key(key);
+        let data = wide(text);
+        // REG_SZ = 1; długość w bajtach razem z kończącym zerem.
+        let r = unsafe {
+            RegSetValueExW(
+                key.0,
+                n.as_ptr(),
+                0,
+                1,
+                data.as_ptr() as *const u8,
+                (data.len() * 2) as u32,
+            )
+        };
+        if r != 0 {
+            return Err(crate::trf!(
+                "rejestr {path}\\{name}: błąd {r}",
+                "registry {path}\\{name}: error {r}"
+            ));
+        }
+        Ok(())
+    }
+
     pub fn exists(root: Hkey, path: &str) -> bool {
         open(root, path, false).is_some()
     }
@@ -505,13 +560,65 @@ const REG_TWEAKS: &[RegTweak] = &[
         optimized: 1,
         absent: Some(1),
     },
+    // Game Bar: nagrywanie gier (dwie wartości - druga w `game_dvr_capture`).
     RegTweak {
-        key: "timer",
+        key: "game_dvr",
+        root: reg::HKCU,
+        path: r"System\GameConfigStore",
+        value: "GameDVR_Enabled",
+        optimized: 0,
+        absent: Some(1),
+    },
+    RegTweak {
+        key: "game_dvr_capture",
+        root: reg::HKCU,
+        path: r"SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR",
+        value: "AppCaptureEnabled",
+        optimized: 0,
+        absent: Some(1),
+    },
+    // Superfetch / Prefetch: usługa SysMain wyłączona (4), domyślnie automatyczna (2).
+    RegTweak {
+        key: "sysmain",
         root: reg::HKLM,
-        path: r"SYSTEM\CurrentControlSet\Control\Session Manager\kernel",
-        value: "GlobalTimerResolutionRequests",
-        optimized: 1,
-        absent: Some(0),
+        path: r"SYSTEM\CurrentControlSet\Services\SysMain",
+        value: "Start",
+        optimized: 4,
+        absent: Some(2),
+    },
+    // Odstęp danych z myszy dla okien w tle (ms): domyślnie 8, najmniej 3.
+    RegTweak {
+        key: "mouse_background",
+        root: reg::HKCU,
+        path: r"Control Panel\Mouse",
+        value: "RawMouseThrottleDuration",
+        optimized: 3,
+        absent: Some(8),
+    },
+    RegTweak {
+        key: "fth",
+        root: reg::HKLM,
+        path: r"SOFTWARE\Microsoft\FTH",
+        value: "Enabled",
+        optimized: 0,
+        absent: Some(1),
+    },
+    RegTweak {
+        key: "fast_startup",
+        root: reg::HKLM,
+        path: r"SYSTEM\CurrentControlSet\Control\Session Manager\Power",
+        value: "HiberbootEnabled",
+        optimized: 0,
+        absent: Some(1),
+    },
+    // Dynamic Lighting (Windows 11): sterowanie podświetleniem przez system.
+    RegTweak {
+        key: "dynamic_lighting",
+        root: reg::HKCU,
+        path: r"Software\Microsoft\Lighting",
+        value: "AmbientLightingEnabled",
+        optimized: 0,
+        absent: Some(1),
     },
     RegTweak {
         key: "priority",
@@ -557,8 +664,18 @@ fn reg_value_text(t: &RegTweak, raw: Option<u32>) -> String {
         ("hvci", _) => crate::i18n::tr(" - włączona", " - on"),
         ("game_mode", 0) => crate::i18n::tr(" - wyłączony", " - off"),
         ("game_mode", _) => crate::i18n::tr(" - włączony", " - on"),
-        ("timer", 0) => crate::i18n::tr(" - wyłączona", " - off"),
-        ("timer", _) => crate::i18n::tr(" - włączona", " - on"),
+        ("game_dvr" | "game_dvr_capture" | "fth" | "fast_startup" | "dynamic_lighting", 0) => {
+            crate::i18n::tr(" - wyłączone", " - off")
+        }
+        ("game_dvr" | "game_dvr_capture" | "fth" | "fast_startup" | "dynamic_lighting", _) => {
+            crate::i18n::tr(" - włączone", " - on")
+        }
+        ("sysmain", 4) => crate::i18n::tr(" - usługa wyłączona", " - service disabled"),
+        ("sysmain", 2) => {
+            crate::i18n::tr(" - uruchamiana automatycznie", " - starts automatically")
+        }
+        ("sysmain", 3) => crate::i18n::tr(" - uruchamiana ręcznie", " - manual start"),
+        ("mouse_background", _) => crate::i18n::tr(" ms", " ms"),
         ("mpo", 5) => crate::i18n::tr(" - MPO wyłączone", " - MPO off"),
         _ => "",
     };
@@ -645,9 +762,13 @@ fn reg_set(
             ));
         }
     } else {
-        let orig: Option<u32> = original(key)
-            .and_then(|v| serde_json::from_value(v).ok())
-            .flatten();
+        let orig: Option<u32> = match original(key) {
+            Some(v) => serde_json::from_value(v).ok().flatten(),
+            // Bez kopii: usunięcie wartości przywraca domyślne Windows - poza
+            // usługą SysMain, której wpis "Start" musi istnieć (2 = automatycznie).
+            None if key == "sysmain" => Some(2),
+            None => None,
+        };
         // Bez kopii (zmienione poza programem) - usuwamy wartość, Windows wraca do domyślnej.
         reg::set_dword(root, path, value, orig)?;
         if reg::get_dword(root, path, value) != orig {
@@ -656,6 +777,261 @@ fn reg_set(
                 "{value}: the restore was not confirmed by reading back"
             ));
         }
+        forget(key);
+    }
+    Ok(())
+}
+
+// ---- pozycje spoza pojedynczych wartości DWORD
+
+/// Numer kompilacji Windows (np. 26100); 0, gdy nie da się odczytać.
+#[cfg(windows)]
+fn windows_build() -> u32 {
+    reg::get_string(
+        reg::HKLM,
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+        "CurrentBuild",
+    )
+    .and_then(|s| s.trim().parse().ok())
+    .unwrap_or(0)
+}
+
+/// Ustawienia DirectX dla wszystkich gier: tekst "Klucz=wartość;Klucz2=wartość;".
+mod dx_settings {
+    pub const PATH: &str = r"Software\Microsoft\DirectX\UserGpuPreferences";
+    pub const VALUE: &str = "DirectXUserGlobalSettings";
+    /// Optymalizacje dla gier w oknie (nowoczesny model prezentacji).
+    pub const KEY: &str = "SwapEffectUpgradeEnable";
+
+    pub fn get<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+        text.split(';')
+            .filter_map(|p| p.split_once('='))
+            .find(|(k, _)| k.trim().eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.trim())
+    }
+
+    /// Tekst z ustawionym (`Some`) albo usuniętym (`None`) kluczem; inne bez zmian.
+    pub fn with(text: &str, key: &str, value: Option<&str>) -> String {
+        let mut out = String::new();
+        let mut done = false;
+        for part in text.split(';').filter(|p| !p.trim().is_empty()) {
+            let k = part.split_once('=').map_or(part, |(k, _)| k).trim();
+            if k.eq_ignore_ascii_case(key) {
+                if let (Some(v), false) = (value, done) {
+                    out.push_str(&format!("{key}={v};"));
+                    done = true;
+                }
+            } else {
+                out.push_str(part.trim());
+                out.push(';');
+            }
+        }
+        if let (Some(v), false) = (value, done) {
+            out.push_str(&format!("{key}={v};"));
+        }
+        out
+    }
+}
+
+#[cfg(windows)]
+fn windowed_state() -> State {
+    let text = reg::get_string(reg::HKCU, dx_settings::PATH, dx_settings::VALUE);
+    let on = text
+        .as_deref()
+        .and_then(|t| dx_settings::get(t, dx_settings::KEY))
+        == Some("1");
+    let desc = if on {
+        crate::i18n::tr("włączone", "on")
+    } else {
+        crate::i18n::tr("wyłączone", "off")
+    };
+    let raw = text.map_or_else(
+        || crate::i18n::tr("brak ustawień DirectX", "no DirectX settings").to_owned(),
+        |t| format!("{} = \"{t}\"", dx_settings::VALUE),
+    );
+    let text = format!("{desc} ({raw})");
+    if on {
+        State::Optimized(text)
+    } else {
+        State::Default(text)
+    }
+}
+
+#[cfg(windows)]
+fn windowed_set(on: bool) -> Result<(), String> {
+    let key = "windowed_games";
+    let current = reg::get_string(reg::HKCU, dx_settings::PATH, dx_settings::VALUE);
+    let target = if on {
+        remember(key, serde_json::json!(current));
+        Some(dx_settings::with(
+            current.as_deref().unwrap_or(""),
+            dx_settings::KEY,
+            Some("1"),
+        ))
+    } else {
+        match original(key) {
+            // Dokładnie poprzedni tekst (albo brak wartości).
+            Some(v) => serde_json::from_value::<Option<String>>(v).ok().flatten(),
+            // Bez kopii: usuwamy tylko nasz klucz.
+            None => Some(dx_settings::with(
+                current.as_deref().unwrap_or(""),
+                dx_settings::KEY,
+                None,
+            ))
+            .filter(|t| !t.is_empty()),
+        }
+    };
+    reg::set_string(
+        reg::HKCU,
+        dx_settings::PATH,
+        dx_settings::VALUE,
+        target.as_deref(),
+    )?;
+    if reg::get_string(reg::HKCU, dx_settings::PATH, dx_settings::VALUE) != target {
+        return Err(crate::i18n::tr(
+            "Zapis ustawień DirectX nie został potwierdzony odczytem.",
+            "The DirectX settings write was not confirmed by reading back.",
+        )
+        .into());
+    }
+    if !on {
+        forget(key);
+    }
+    Ok(())
+}
+
+/// Przyspieszanie wskaźnika myszy („Popraw precyzję wskaźnika”): progi 1 i 2
+/// oraz poziom przyspieszenia; 0 = ruch liniowy.
+#[cfg(windows)]
+mod mouse {
+    #[link(name = "user32")]
+    extern "system" {
+        fn SystemParametersInfoW(
+            action: u32,
+            param: u32,
+            pv: *mut core::ffi::c_void,
+            ini: u32,
+        ) -> i32;
+    }
+    const SPI_GETMOUSE: u32 = 0x0003;
+    const SPI_SETMOUSE: u32 = 0x0004;
+    const SPIF_UPDATEINIFILE: u32 = 0x01;
+    const SPIF_SENDCHANGE: u32 = 0x02;
+    /// Wartości domyślne Windows.
+    pub const DEFAULT: [i32; 3] = [6, 10, 1];
+
+    pub fn get() -> Option<[i32; 3]> {
+        let mut v = [0i32; 3];
+        // SAFETY: SPI_GETMOUSE zapisuje dokładnie trzy liczby int.
+        let ok = unsafe { SystemParametersInfoW(SPI_GETMOUSE, 0, v.as_mut_ptr().cast(), 0) };
+        (ok != 0).then_some(v)
+    }
+
+    /// Ustawia od razu i zapisuje w profilu użytkownika.
+    pub fn set(mut v: [i32; 3]) -> Result<(), String> {
+        // SAFETY: SPI_SETMOUSE czyta trzy liczby int.
+        let ok = unsafe {
+            SystemParametersInfoW(
+                SPI_SETMOUSE,
+                0,
+                v.as_mut_ptr().cast(),
+                SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
+            )
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn mouse_state() -> State {
+    match mouse::get() {
+        Some(v) if v[2] == 0 => State::Optimized(crate::trf!(
+            "przyspieszanie wyłączone (progi {} / {}, poziom {})",
+            "acceleration off (thresholds {} / {}, level {})",
+            v[0],
+            v[1],
+            v[2]
+        )),
+        Some(v) => State::Default(crate::trf!(
+            "przyspieszanie włączone (progi {} / {}, poziom {})",
+            "acceleration on (thresholds {} / {}, level {})",
+            v[0],
+            v[1],
+            v[2]
+        )),
+        None => State::Unknown(crate::i18n::tr("brak odczytu", "cannot read").into()),
+    }
+}
+
+#[cfg(windows)]
+fn mouse_set(on: bool) -> Result<(), String> {
+    let key = "mouse_accel";
+    let current = mouse::get().ok_or("SPI_GETMOUSE")?;
+    let target = if on {
+        remember(key, serde_json::json!(current));
+        [0, 0, 0]
+    } else {
+        original(key)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or(mouse::DEFAULT)
+    };
+    mouse::set(target)?;
+    if mouse::get() != Some(target) {
+        return Err(crate::i18n::tr(
+            "Ustawienie myszy nie zostało potwierdzone odczytem.",
+            "The mouse setting was not confirmed by reading back.",
+        )
+        .into());
+    }
+    if !on {
+        forget(key);
+    }
+    Ok(())
+}
+
+/// Kompresja pamięci i obecność dysków HDD - jedno wywołanie PowerShell.
+#[cfg(windows)]
+fn memory_and_disks() -> Result<(bool, usize), String> {
+    let out = powershell(
+        "$m=(Get-MMAgent).MemoryCompression; $h=@(Get-PhysicalDisk | Where-Object MediaType -eq 'HDD').Count; \"$m;$h\"",
+    )?;
+    let (m, h) = out
+        .trim()
+        .split_once(';')
+        .ok_or_else(|| out.trim().to_owned())?;
+    Ok((m.eq_ignore_ascii_case("true"), h.parse().unwrap_or(0)))
+}
+
+#[cfg(windows)]
+fn memory_compression_set(on: bool) -> Result<(), String> {
+    // `on` = zalecane, czyli kompresja WYŁĄCZONA.
+    let key = "memory_compression";
+    let (current, _) = memory_and_disks()?;
+    let target = if on {
+        remember(key, serde_json::json!(current));
+        false
+    } else {
+        original(key)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or(true)
+    };
+    let cmd = if target {
+        "Enable-MMAgent -MemoryCompression"
+    } else {
+        "Disable-MMAgent -MemoryCompression"
+    };
+    powershell(cmd)?;
+    if memory_and_disks()?.0 != target {
+        return Err(crate::i18n::tr(
+            "Zmiana kompresji pamięci nie została potwierdzona odczytem.",
+            "The memory compression change was not confirmed by reading back.",
+        )
+        .into());
+    }
+    if !on {
         forget(key);
     }
     Ok(())
@@ -1481,6 +1857,96 @@ pub(crate) fn read_all(cpu_x3d: bool) -> Vec<Item> {
         state: reg_state(t, t.path),
         warning: None,
     });
+
+    let build = windows_build();
+    items.push(Item {
+        key: "windowed_games".into(),
+        name: text(
+            "Optymalizacje dla gier w oknie (Windows 11)",
+            "Optimizations for windowed games (Windows 11)",
+        ),
+        desc: crate::i18n::tr(
+            "Gry DirectX 10 i 11 w oknie i w oknie bez ramki dostają nowoczesny model wyświetlania: mniejsze opóźnienie klatek, działające VRR (G-SYNC / FreeSync) i Auto HDR. To samo co przełącznik w Ustawieniach > System > Ekran > Grafika. Działa po ponownym uruchomieniu gry.",
+            "DirectX 10 and 11 games in windowed and borderless mode get the modern presentation model: lower frame latency, working VRR (G-SYNC / FreeSync) and Auto HDR. Same as the switch in Settings > System > Display > Graphics. Takes effect after restarting the game.",
+        ),
+        group: Group::Proven,
+        restart: false,
+        state: if build >= 22000 {
+            windowed_state()
+        } else {
+            State::Unsupported(text("wymaga Windows 11", "requires Windows 11"))
+        },
+        warning: None,
+    });
+
+    let (dvr, cap) = (reg_item("game_dvr"), reg_item("game_dvr_capture"));
+    let dvr_raw = reg::get_dword(dvr.root, dvr.path, dvr.value).or(dvr.absent);
+    let cap_raw = reg::get_dword(cap.root, cap.path, cap.value).or(cap.absent);
+    let dvr_text = format!(
+        "{}, {}",
+        reg_value_text(dvr, reg::get_dword(dvr.root, dvr.path, dvr.value)),
+        reg_value_text(cap, reg::get_dword(cap.root, cap.path, cap.value))
+    );
+    items.push(Item {
+        key: "game_dvr".into(),
+        name: text(
+            "Nagrywanie gier (Game Bar / Game DVR) wyłączone",
+            "Game recording (Game Bar / Game DVR) off",
+        ),
+        desc: crate::i18n::tr(
+            "Windows nie nagrywa ani nie buforuje obrazu gier w tle, co zdejmuje obciążenie z karty i procesora. Skrót Win+G nadal otwiera Game Bar. Działa po ponownym uruchomieniu gry.",
+            "Windows does not record or buffer game video in the background, which takes load off the card and CPU. Win+G still opens Game Bar. Takes effect after restarting the game.",
+        ),
+        group: Group::Proven,
+        restart: false,
+        state: if dvr_raw == Some(0) && cap_raw == Some(0) {
+            State::Optimized(dvr_text)
+        } else {
+            State::Default(dvr_text)
+        },
+        warning: None,
+    });
+
+    items.push(Item {
+        key: "mouse_accel".into(),
+        name: text(
+            "Przyspieszanie wskaźnika myszy wyłączone",
+            "Mouse pointer acceleration off",
+        ),
+        desc: crate::i18n::tr(
+            "Wyłącza „Popraw precyzję wskaźnika”: kursor przesuwa się zawsze o tyle samo przy tym samym ruchu myszy, niezależnie od szybkości ruchu. Gry z surowym wejściem (raw input) tego nie używają, ale menu, gry bez raw input i pulpit tak. Działa od razu.",
+            "Turns off \"Enhance pointer precision\": the cursor always moves the same distance for the same mouse movement, regardless of speed. Games with raw input ignore it, but menus, games without raw input and the desktop use it. Takes effect immediately.",
+        ),
+        group: Group::Proven,
+        restart: false,
+        state: mouse_state(),
+        warning: None,
+    });
+
+    // Kompresja pamięci i dyski HDD (jedno wywołanie PowerShell, potrzebne niżej).
+    let mem_disks = memory_and_disks();
+    let t = reg_item("sysmain");
+    items.push(Item {
+        key: t.key.into(),
+        name: text(
+            "SysMain (Superfetch / Prefetch) wyłączony",
+            "SysMain (Superfetch / Prefetch) off",
+        ),
+        desc: crate::i18n::tr(
+            "Usługa wstępnie wczytuje często używane programy do pamięci. Na dyskach SSD nie przyspiesza uruchamiania, a w tle czyta dysk i zajmuje pamięć. Microsoft zaleca jej wyłączenie w systemach czasu rzeczywistego. Tylko dla komputerów bez dysków HDD. Działa po restarcie.",
+            "The service preloads frequently used programs into memory. On SSDs it does not speed up launching, while it reads the disk and uses memory in the background. Microsoft recommends turning it off for real-time systems. Only for PCs without HDDs. Takes effect after a restart.",
+        ),
+        group: Group::Proven,
+        restart: true,
+        state: match &mem_disks {
+            Ok((_, hdd)) if *hdd > 0 => State::Unsupported(crate::trf!(
+                "w komputerze jest dysk HDD ({hdd}) - SysMain przyspiesza go",
+                "the PC has a hard disk ({hdd}) - SysMain speeds it up"
+            )),
+            _ => reg_state(t, t.path),
+        },
+        warning: None,
+    });
     items.extend(nvidia_items());
 
     // --- grupa B
@@ -1510,17 +1976,89 @@ pub(crate) fn read_all(cpu_x3d: bool) -> Vec<Item> {
             warning: None,
         });
     }
-    let t = reg_item("timer");
+    items.push(Item {
+        key: "memory_compression".into(),
+        name: text("Kompresja pamięci wyłączona", "Memory compression off"),
+        desc: crate::i18n::tr(
+            "Windows kompresuje rzadko używane strony pamięci zamiast zapisywać je na dysk; kosztuje to czas procesora przy dostępie do nich. Przy dużej ilości RAM (16 GB i więcej) kompresja rzadko jest potrzebna. Działa po restarcie.",
+            "Windows compresses rarely used memory pages instead of writing them to disk; accessing them costs CPU time. With plenty of RAM (16 GB or more) compression is rarely needed. Takes effect after a restart.",
+        ),
+        group: Group::Test,
+        restart: true,
+        state: match &mem_disks {
+            Ok((true, _)) => State::Default(text("włączona", "on")),
+            Ok((false, _)) => State::Optimized(text("wyłączona", "off")),
+            Err(e) => State::Unknown(e.clone()),
+        },
+        warning: Some(text(
+            "Przy małej ilości RAM może zwiększyć użycie pliku stronicowania.",
+            "With little RAM it may increase paging file use.",
+        )),
+    });
+    let t = reg_item("mouse_background");
     items.push(Item {
         key: t.key.into(),
-        name: text("Globalna rozdzielczość timera (Windows 11)", "Global timer resolution (Windows 11)"),
+        name: text(
+            "Dane myszy dla okien w tle co 3 ms (Windows 11)",
+            "Mouse data for background windows every 3 ms (Windows 11)",
+        ),
         desc: crate::i18n::tr(
-            "Od Windows 10 2004 dokładniejszy timer zamówiony przez jeden program nie działa dla pozostałych. Ta wartość przywraca działanie globalne - pomaga grom, które tego wymagają (np. ograniczenie do 64 FPS).",
-            "Since Windows 10 2004 a finer timer requested by one program does not apply to others. This value restores the global behavior - helps games that need it (e.g. a 64 FPS cap).",
+            "Windows 11 ogranicza dane z myszy dla programów w tle do jednej paczki co 8 ms (125 Hz). 3 ms to najmniejsza wartość, jaką system przyjmuje - pomaga nakładkom, programom do nagrywania i drugiemu oknu gry. Działa od razu dla nowych programów.",
+            "Windows 11 limits mouse data for background programs to one batch every 8 ms (125 Hz). 3 ms is the lowest value the system accepts - helps overlays, recording software and a second game window. Takes effect for newly started programs.",
+        ),
+        group: Group::Test,
+        restart: false,
+        state: if build >= 22621 {
+            reg_state(t, t.path)
+        } else {
+            State::Unsupported(text("wymaga Windows 11 22H2", "requires Windows 11 22H2"))
+        },
+        warning: None,
+    });
+    let t = reg_item("fth");
+    items.push(Item {
+        key: t.key.into(),
+        name: text("Fault Tolerant Heap wyłączony", "Fault Tolerant Heap off"),
+        desc: crate::i18n::tr(
+            "Po kilku awariach programu Windows na stałe włącza dla niego wolniejszy, „bezpieczniejszy” tryb przydzielania pamięci. Wyłączenie zapobiega spowolnieniu gier, które kiedyś się zawiesiły. Działa po restarcie.",
+            "After a program crashes a few times, Windows permanently switches it to a slower, \"safer\" memory allocation mode. Turning it off prevents slowing down games that once crashed. Takes effect after a restart.",
         ),
         group: Group::Test,
         restart: true,
         state: reg_state(t, t.path),
+        warning: None,
+    });
+    let t = reg_item("fast_startup");
+    items.push(Item {
+        key: t.key.into(),
+        name: text("Szybkie uruchamianie wyłączone", "Fast startup off"),
+        desc: crate::i18n::tr(
+            "Zamknięcie systemu jest pełne zamiast częściowej hibernacji jądra: sterowniki i urządzenia uruchamiają się od nowa przy każdym starcie (mniej problemów po aktualizacjach sterowników, zmianach BIOS-u i podkręcaniu). Start trwa kilka sekund dłużej.",
+            "Shutdown is complete instead of a partial kernel hibernation: drivers and devices start fresh at every boot (fewer problems after driver updates, BIOS changes and overclocking). Booting takes a few seconds longer.",
+        ),
+        group: Group::Test,
+        restart: false,
+        state: reg_state(t, t.path),
+        warning: None,
+    });
+    let t = reg_item("dynamic_lighting");
+    items.push(Item {
+        key: t.key.into(),
+        name: text(
+            "Dynamic Lighting Windows wyłączone",
+            "Windows Dynamic Lighting off",
+        ),
+        desc: crate::i18n::tr(
+            "Windows 11 sam steruje podświetleniem zgodnych urządzeń (klawiatury, myszy). Wyłączenie zostawia podświetlenie zakładce RGB i aplikacjom producentów - bez nadpisywania kolorów przez system.",
+            "Windows 11 controls the lighting of compatible devices (keyboards, mice) itself. Turning it off leaves lighting to the RGB tab and vendor apps - the system no longer overrides colors.",
+        ),
+        group: Group::Test,
+        restart: false,
+        state: if build >= 22621 {
+            reg_state(t, t.path)
+        } else {
+            State::Unsupported(text("wymaga Windows 11", "requires Windows 11"))
+        },
         warning: None,
     });
     let t = reg_item("priority");
@@ -1574,6 +2112,20 @@ pub(crate) fn read_all(cpu_x3d: bool) -> Vec<Item> {
 /// Zmienia pozycję: `on` = wartość zalecana, `off` = oryginał.
 #[cfg(windows)]
 fn set(key: &str, on: bool) -> Result<(), String> {
+    match key {
+        // Dwie wartości: Game Bar (nagrywanie) i przechwytywanie aplikacji.
+        "game_dvr" => {
+            for k in ["game_dvr", "game_dvr_capture"] {
+                let t = REG_TWEAKS.iter().find(|t| t.key == k).unwrap();
+                reg_set(t.key, t.root, t.path, t.value, t.optimized, on)?;
+            }
+            return Ok(());
+        }
+        "windowed_games" => return windowed_set(on),
+        "mouse_accel" => return mouse_set(on),
+        "memory_compression" => return memory_compression_set(on),
+        _ => {}
+    }
     if let Some(t) = REG_TWEAKS.iter().find(|t| t.key == key) {
         return reg_set(t.key, t.root, t.path, t.value, t.optimized, on);
     }
@@ -2152,21 +2704,49 @@ fn item_ui(
 
 #[cfg(all(test, windows))]
 mod hardware {
-    /// Zapis i przywrócenie na pozycji, która działa dopiero po restarcie
-    /// (GlobalTimerResolutionRequests): `cargo test tune_roundtrip -- --ignored`.
+    /// Zapis i przywrócenie nowych pozycji (ZMIENIA SYSTEM na chwilę, kopia w
+    /// pliku tymczasowym): `cargo test tune_new_roundtrip -- --ignored --nocapture`.
+    /// Pozycje, które są już włączone, najpierw wyłącza i potem przywraca.
     #[test]
     #[ignore]
-    fn tune_roundtrip() {
-        let t = super::REG_TWEAKS.iter().find(|t| t.key == "timer").unwrap();
-        let before = super::reg::get_dword(t.root, t.path, t.value);
-        super::set("timer", true).unwrap();
-        assert_eq!(super::reg::get_dword(t.root, t.path, t.value), Some(1));
-        super::set("timer", false).unwrap();
-        assert_eq!(super::reg::get_dword(t.root, t.path, t.value), before);
-        println!(
-            "przed {before:?}, po przywróceniu {:?}",
-            super::reg::get_dword(t.root, t.path, t.value)
-        );
+    fn tune_new_roundtrip() {
+        let backup = std::env::temp_dir().join("tc-tune-new-backup.json");
+        let _ = std::fs::remove_file(&backup);
+        std::env::set_var("TC_TUNE_BACKUP", &backup);
+        let list = std::env::var("TC_ROUNDTRIP_KEYS").unwrap_or_else(|_| {
+            "windowed_games,game_dvr,mouse_accel,mouse_background,dynamic_lighting".into()
+        });
+        let keys: Vec<&str> = list.split(',').collect();
+        let state = |k: &str| {
+            super::read_all(false)
+                .into_iter()
+                .find(|i| i.key == k)
+                .map(|i| i.state)
+        };
+        for k in keys {
+            let before = state(k);
+            let was_on = matches!(before, Some(super::State::Optimized(_)));
+            // Przełączamy w drugą stronę i z powrotem.
+            let a = super::set(k, !was_on);
+            let mid = state(k);
+            let b = super::set(k, was_on);
+            let after = state(k);
+            println!(
+                "{k}: przed {before:?}\n  zmiana {a:?} -> {mid:?}\n  powrót {b:?} -> {after:?}"
+            );
+            assert!(a.is_ok() && b.is_ok());
+            assert_eq!(
+                matches!(mid, Some(super::State::Optimized(_))),
+                !was_on,
+                "{k}: stan po zmianie"
+            );
+            assert_eq!(
+                matches!(after, Some(super::State::Optimized(_))),
+                was_on,
+                "{k}: powrót"
+            );
+        }
+        let _ = std::fs::remove_file(backup);
     }
 }
 
@@ -2211,5 +2791,25 @@ mod mpo_test {
         println!("przed {before:?}, po włączeniu {on:?}, po przywróceniu {after:?}");
         assert_eq!(on, Some(5));
         assert_eq!(after, before);
+    }
+}
+
+#[cfg(test)]
+mod dx_tests {
+    use super::dx_settings::{get, with};
+
+    #[test]
+    fn dx_settings_text() {
+        let t = "VRROptimizeEnable=0;";
+        assert_eq!(get(t, "SwapEffectUpgradeEnable"), None);
+        let on = with(t, "SwapEffectUpgradeEnable", Some("1"));
+        assert_eq!(on, "VRROptimizeEnable=0;SwapEffectUpgradeEnable=1;");
+        assert_eq!(get(&on, "swapeffectupgradeenable"), Some("1"));
+        assert_eq!(
+            with(&on, "SwapEffectUpgradeEnable", Some("0")),
+            "VRROptimizeEnable=0;SwapEffectUpgradeEnable=0;"
+        );
+        assert_eq!(with(&on, "SwapEffectUpgradeEnable", None), t);
+        assert_eq!(with("", "A", Some("1")), "A=1;");
     }
 }

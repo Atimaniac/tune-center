@@ -544,6 +544,11 @@ Sprawdzone (Microsoft, producenci sprzętu):
 - Plan zasilania: USB Selective Suspend i PCI Express Link State Power
   Management wyłączone; plan Ultimate Performance (nie dla Ryzen X3D).
 - Tryb gry Windows.
+- Optymalizacje dla gier w oknie (Windows 11, gry DX10/11 w oknie: mniejsze
+  opóźnienie, VRR, Auto HDR).
+- Nagrywanie gier (Game Bar / Game DVR) wyłączone.
+- Przyspieszanie wskaźnika myszy wyłączone (ruch liniowy, działa od razu).
+- SysMain (Superfetch / Prefetch) wyłączony - tylko bez dysków HDD.
 - Procesor: parkowanie rdzeni P i E wyłączone (bez wybudzania rdzeni przy
   nagłym obciążeniu; brakujący zakres ustawienia w rejestrze jest uzupełniany).
 - NVIDIA (profil globalny): V-Sync włączona i limit klatek nieco poniżej
@@ -552,7 +557,10 @@ Sprawdzone (Microsoft, producenci sprzętu):
 Do przetestowania na własnym sprzęcie (porównaj LatencyMon przed i po):
 - NVIDIA: tryb energii „maksymalna wydajność” (wyższy pobór w spoczynku).
 - Tryb MSI przerwań dla karty graficznej, sieci, audio i USB.
-- Globalna rozdzielczość timera (`GlobalTimerResolutionRequests`).
+- Kompresja pamięci wyłączona (przy 16 GB RAM i więcej).
+- Dane myszy dla okien w tle co 3 ms zamiast 8 ms (Windows 11 22H2+).
+- Fault Tolerant Heap wyłączony, szybkie uruchamianie wyłączone.
+- Dynamic Lighting Windows wyłączone (podświetlenie zostaje zakładce RGB).
 - `Win32PrioritySeparation` = 0x26, `SystemResponsiveness` = 10.
 - Multi-Plane Overlay (MPO) wyłączone (`OverlayTestMode` = 5, jak w poprawce
   NVIDIA) - przy migotaniu i przycięciach w grach w oknie bez ramki i przy
