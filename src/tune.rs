@@ -2273,12 +2273,37 @@ pub(crate) fn read_all(cpu_x3d: bool) -> Vec<Item> {
             "Not an official Microsoft setting - newer Windows 11 builds may ignore it. Without display problems it is better to keep MPO on (less GPU load).",
         )),
     });
+    items.retain(|i| !user_registry_item(&i.key));
     items
+}
+
+/// Pozycje zapisujące ustawienia użytkownika w HKEY_CURRENT_USER: Tryb gry,
+/// nagrywanie Game Bar, dane myszy dla okien w tle, Dynamic Lighting
+/// i optymalizacje gier w oknie.
+///
+/// Od 0.32.2 nie ma ich w zakładce TUNE: pakiet do Microsoft Store nie może
+/// zapisywać do rejestru użytkownika (sklep odmówił uprawnienia
+/// `unvirtualizedResources`), a zakładka ma wyglądać tak samo w obu wersjach.
+/// `set` nadal je obsługuje, żeby "Przywróć ustawienia Windows" cofnęło
+/// zmiany zrobione wcześniejszą wersją programu.
+#[cfg(windows)]
+fn user_registry_item(key: &str) -> bool {
+    key == "windowed_games"
+        || REG_TWEAKS
+            .iter()
+            .any(|t| t.key == key && t.root == reg::HKCU)
 }
 
 /// Zmienia pozycję: `on` = wartość zalecana, `off` = oryginał.
 #[cfg(windows)]
 fn set(key: &str, on: bool) -> Result<(), String> {
+    // Usunięte pozycje można tylko przywrócić do oryginału.
+    if on && user_registry_item(key) {
+        return Err(text(
+            "ta pozycja została usunięta z programu",
+            "this item was removed from the program",
+        ));
+    }
     match key {
         // Dwie wartości: Game Bar (nagrywanie) i przechwytywanie aplikacji.
         "game_dvr" => {
