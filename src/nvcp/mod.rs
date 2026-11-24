@@ -1,4 +1,6 @@
-//! Zakładka NVIDIA - odpowiednik panelu sterowania Nvidia.
+//! Zakładka NVIDIA - odpowiednik panelu sterowania Nvidia. Na karcie AMD
+//! zakładka nazywa się RADEON i pokazuje Overclock, ustawienia 3D, FSR,
+//! FREESYNC (`crate::radeon`, AMD ADLX) oraz Shader compilation.
 //!
 //! - Overclock: dawna zakładka GPU (`crate::gpu::GpuTab`) - zegary, krzywa
 //!   V/F, profile; ma własne zaplecze (także karty AMD i funkcje NVAPI spoza
@@ -52,6 +54,15 @@ enum Page {
     Shaders,
     /// Migotanie OLED przy VRR (crate::oled_fix).
     OledFix,
+    /// Karta AMD: technologie FidelityFX (zamiast DLSS).
+    Fsr,
+    /// Karta AMD: FreeSync (zamiast G-SYNC).
+    FreeSync,
+}
+
+/// Czy kompilujemy i ustawiamy dla karty AMD (zakładka RADEON).
+fn amd() -> bool {
+    crate::shaders::vendor() == Some(crate::shaders::Vendor::Amd)
 }
 
 /// Zmiana ekranu czekająca na potwierdzenie.
@@ -112,6 +123,8 @@ pub struct NvcpTab {
     shaders: crate::shaders::ShaderTab,
     /// Podzakładka OLED fix (vrrFrameSplitBehavior).
     oled: crate::oled_fix::Panel,
+    /// Karta AMD: FSR, FREESYNC i ustawienia 3D przez ADLX.
+    radeon: crate::radeon::Radeon,
 }
 
 impl NvcpTab {
@@ -126,6 +139,8 @@ impl NvcpTab {
             "custom" => Page::Custom,
             "shaders" => Page::Shaders,
             "oled" => Page::OledFix,
+            "fsr" => Page::Fsr,
+            "freesync" => Page::FreeSync,
             _ => Page::Overclock,
         };
     }
@@ -169,6 +184,7 @@ impl NvcpTab {
             pending: None,
             shaders: crate::shaders::ShaderTab::new(),
             oled: Default::default(),
+            radeon: Default::default(),
         }
     }
 
@@ -199,7 +215,14 @@ impl NvcpTab {
         if self.api.is_none() {
             let _ = self.api();
         }
-        let driver = self.driver.clone();
+        // Karta AMD: wersja AMD Software z ADLX (wczytywanego raz).
+        if self.driver.is_none() && amd() {
+            self.driver = self.radeon.driver_version();
+            if self.driver.is_none() {
+                self.driver = Some(String::new());
+            }
+        }
+        let driver = self.driver.clone().filter(|d| !d.is_empty());
         self.shaders.tick(driver.as_deref(), ctx);
         if self
             .pending
@@ -223,40 +246,63 @@ impl NvcpTab {
     ) {
         // Brak panelu NVAPI (np. karta AMD) nie blokuje podzakładki Overclock.
         let api = self.api().ok();
+        let amd = amd();
+        // Karta AMD: bez podzakładek zależnych od NVAPI.
+        if amd
+            && !matches!(
+                self.page,
+                Page::Overclock | Page::Settings3d | Page::Fsr | Page::FreeSync | Page::Shaders
+            )
+        {
+            self.page = Page::Overclock;
+        }
 
         egui::Panel::top("nvcp_header")
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    for (page, label) in [
-                        (Page::Overclock, "Overclock"),
-                        (Page::Settings3d, tr("Ustawienia 3D", "3D settings")),
-                        (Page::Dlss, "DLSS"),
-                        (Page::Display, tr("Ekran", "Display")),
-                        (Page::Color, tr("Kolor i HDR", "Color and HDR")),
-                        (Page::Gsync, "G-SYNC"),
-                        (
-                            Page::Custom,
-                            tr("Rozdzielczości niestandardowe", "Custom resolutions"),
-                        ),
-                        (Page::Shaders, "Shader compilation"),
-                        (Page::OledFix, "OLED fix"),
-                    ] {
+                    let pages: Vec<(Page, &str)> = if amd {
+                        vec![
+                            (Page::Overclock, "Overclock"),
+                            (Page::Settings3d, tr("Ustawienia 3D", "3D settings")),
+                            (Page::Fsr, "FSR"),
+                            (Page::FreeSync, "FREESYNC"),
+                            (Page::Shaders, "Shader compilation"),
+                        ]
+                    } else {
+                        vec![
+                            (Page::Overclock, "Overclock"),
+                            (Page::Settings3d, tr("Ustawienia 3D", "3D settings")),
+                            (Page::Dlss, "DLSS"),
+                            (Page::Display, tr("Ekran", "Display")),
+                            (Page::Color, tr("Kolor i HDR", "Color and HDR")),
+                            (Page::Gsync, "G-SYNC"),
+                            (
+                                Page::Custom,
+                                tr("Rozdzielczości niestandardowe", "Custom resolutions"),
+                            ),
+                            (Page::Shaders, "Shader compilation"),
+                            (Page::OledFix, "OLED fix"),
+                        ]
+                    };
+                    for (page, label) in pages {
                         if crate::theme::sub_tab(ui, label, self.page == page).clicked() {
                             self.page = page;
                             self.status = None;
                         }
                     }
-                    if let Some(driver) = &self.driver {
+                    if let Some(driver) = self.driver.as_ref().filter(|d| !d.is_empty()) {
                         // Sam numer wersji (bez gałęzi), żeby mieścił się w wierszu
                         // podzakładek; pełna nazwa w podpowiedzi.
                         let short = driver.split(" (").next().unwrap_or(driver);
+                        let text = if amd {
+                            format!("AMD Software {short}")
+                        } else {
+                            crate::trf!("Sterownik {short}", "Driver {short}")
+                        };
                         ui.separator();
-                        ui.label(
-                            RichText::new(crate::trf!("Sterownik {short}", "Driver {short}"))
-                                .color(muted()),
-                        )
-                        .on_hover_text(driver.as_str());
+                        ui.label(RichText::new(text).color(muted()))
+                            .on_hover_text(driver.as_str());
                     }
                 });
                 ui.separator();
@@ -270,6 +316,21 @@ impl NvcpTab {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| gpu.ui(ui, snap));
+        } else if amd {
+            // Karta AMD: panele RADEON (ADLX) i kompilacja shaderów bez NVAPI.
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match self.page {
+                            Page::Settings3d => self.radeon.ui(ui, crate::radeon::Page::Settings3d),
+                            Page::Fsr => self.radeon.ui(ui, crate::radeon::Page::Fsr),
+                            Page::FreeSync => self.radeon.ui(ui, crate::radeon::Page::FreeSync),
+                            Page::Shaders => self.shaders_ui(ui, None),
+                            _ => {}
+                        });
+                });
         } else {
             let api = match api {
                 Some(a) => a,
@@ -313,8 +374,9 @@ impl NvcpTab {
                             Page::Color => self.color_ui(ui, &api),
                             Page::Gsync => self.gsync_ui(ui, &api),
                             Page::Custom => self.custom_ui(ui, &api),
-                            Page::Shaders => self.shaders_ui(ui, &api),
+                            Page::Shaders => self.shaders_ui(ui, Some(&api)),
                             Page::OledFix => self.oled.ui(ui, self.driver.as_deref()),
+                            Page::Fsr | Page::FreeSync => {}
                         });
                 });
         }
@@ -1591,7 +1653,8 @@ impl NvcpTab {
 
     // --------------------------- Shader compilation -------------------------
 
-    fn shaders_ui(&mut self, ui: &mut egui::Ui, api: &Arc<Api>) {
+    /// `api` - NVAPI na karcie NVIDIA; na karcie AMD bez ustawień DRS.
+    fn shaders_ui(&mut self, ui: &mut egui::Ui, api: Option<&Arc<Api>>) {
         ui.label(
             RichText::new(tr(
                 "Kompilacja shaderów z góry: Tune Center czyta shadery z plików gry i kompiluje je do pamięci podręcznej sterownika, zanim gra musi to zrobić w trakcie rozgrywki (przycięcia \"shader stutter\").",
@@ -1605,9 +1668,11 @@ impl NvcpTab {
                 .strong()
                 .color(accent()),
         );
-        self.global_items(ui, api, catalog::SHADER_ITEMS, "nvcp_shader_cache");
+        if let Some(api) = api {
+            self.global_items(ui, api, catalog::SHADER_ITEMS, "nvcp_shader_cache");
+        }
         ui.horizontal_wrapped(|ui| {
-            if let Some(dir) = crate::shaders::nvidia_cache_dir() {
+            if let Some(dir) = crate::shaders::main_cache_dir() {
                 let size = self
                     .shaders
                     .cache_bytes()

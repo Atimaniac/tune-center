@@ -37,13 +37,13 @@ mod d3d {
     use windows::core::Interface;
     use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_12_0;
     use windows::Win32::Graphics::Direct3D12::*;
-    use windows::Win32::Graphics::Dxgi::*;
 
-    pub const NVIDIA: u32 = 0x10DE;
+    use super::super::Vendor;
 
     pub struct Device {
         pub device: ID3D12Device,
         pub adapter: String,
+        pub vendor: Vendor,
         signatures: std::sync::Mutex<HashMap<Vec<u8>, ID3D12RootSignature>>,
     }
 
@@ -51,33 +51,21 @@ mod d3d {
     unsafe impl Send for Device {}
     unsafe impl Sync for Device {}
 
-    /// Urządzenie D3D12 na pierwszej karcie Nvidia.
-    pub fn nvidia_device() -> Result<Device, String> {
-        // SAFETY: wywołania DXGI/D3D12 z poprawnymi argumentami.
+    /// Urządzenie D3D12 na karcie NVIDIA albo AMD (patrz `pick_adapter`).
+    pub fn gpu_device() -> Result<Device, String> {
+        let (adapter, vendor, name) = super::super::pick_adapter()?;
+        // SAFETY: karta z DXGI, poprawne argumenty.
         unsafe {
-            let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(|e| format!("DXGI: {e}"))?;
-            let mut index = 0;
-            loop {
-                let adapter = factory
-                    .EnumAdapters1(index)
-                    .map_err(|_| "nie znaleziono karty Nvidia / no Nvidia GPU found".to_string())?;
-                index += 1;
-                let desc = adapter.GetDesc1().map_err(|e| e.to_string())?;
-                if desc.VendorId != NVIDIA {
-                    continue;
-                }
-                let name = String::from_utf16_lossy(&desc.Description);
-                let name = name.trim_end_matches('\0').to_owned();
-                let mut device: Option<ID3D12Device> = None;
-                D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, &mut device)
-                    .map_err(|e| format!("D3D12CreateDevice: {e}"))?;
-                let device = device.ok_or("D3D12CreateDevice: brak urządzenia")?;
-                return Ok(Device {
-                    device,
-                    adapter: name,
-                    signatures: Default::default(),
-                });
-            }
+            let mut device: Option<ID3D12Device> = None;
+            D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, &mut device)
+                .map_err(|e| format!("D3D12CreateDevice: {e}"))?;
+            let device = device.ok_or("D3D12CreateDevice: brak urządzenia")?;
+            Ok(Device {
+                device,
+                adapter: name,
+                vendor,
+                signatures: Default::default(),
+            })
         }
     }
 
@@ -118,6 +106,36 @@ mod d3d {
 
         pub fn raw(&self) -> *mut c_void {
             self.device.as_raw()
+        }
+
+        /// Prosi sterownik o zapisanie wyników kompilacji w tle i czeka na
+        /// koniec (`ID3D12Device6::SetBackgroundProcessingMode`, publiczne
+        /// D3D12). Sterownik AMD zapisuje pamięć podręczną za wywołaniami
+        /// `Create*PipelineState`; zakończenie procesu przed zapisem gubi
+        /// resztę.
+        pub fn commit(&self, max: std::time::Duration) -> Result<(), String> {
+            use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+            let device6: ID3D12Device6 = self
+                .device
+                .cast()
+                .map_err(|e| format!("ID3D12Device6: {e}"))?;
+            // SAFETY: zdarzenie tworzone i zamykane tutaj; urządzenie żyje.
+            unsafe {
+                let event = CreateEventW(None, true, false, None)
+                    .map_err(|e| format!("CreateEventW: {e}"))?;
+                let result = device6.SetBackgroundProcessingMode(
+                    D3D12_BACKGROUND_PROCESSING_MODE_ALLOWED,
+                    D3D12_MEASUREMENTS_ACTION_COMMIT_RESULTS,
+                    Some(event),
+                    None,
+                );
+                if result.is_ok() {
+                    let ms = max.as_millis().min(u32::MAX as u128) as u32;
+                    WaitForSingleObject(event, ms);
+                }
+                let _ = windows::Win32::Foundation::CloseHandle(event);
+                result.map_err(|e| format!("SetBackgroundProcessingMode: {e}"))
+            }
         }
     }
 }
@@ -193,7 +211,7 @@ pub fn run_host(args: &[String]) -> i32 {
             return 3;
         }
     };
-    let device = match d3d::nvidia_device() {
+    let device = match d3d::gpu_device() {
         Ok(d) => d,
         Err(e) => {
             say(format!("fatal {e}"));
@@ -201,8 +219,11 @@ pub fn run_host(args: &[String]) -> i32 {
         }
     };
     say(format!("adapter {}", device.adapter));
-    if let Err(e) = set_nvidia_extension_slot(device.raw()) {
-        say(format!("warning {e}"));
+    // Gniazdo rozszerzeń NVAPI tylko na karcie NVIDIA (AMD go nie ma).
+    if device.vendor == super::Vendor::Nvidia {
+        if let Err(e) = set_nvidia_extension_slot(device.raw()) {
+            say(format!("warning {e}"));
+        }
     }
 
     // Lista zadań: shadery compute z rozpakowanym kodem.
@@ -276,6 +297,12 @@ pub fn run_host(args: &[String]) -> i32 {
         total - ok,
         cached.into_inner()
     ));
+    // AMD: sterownik zapisuje pamięć podręczną w tle - czekamy na zapis.
+    if device.vendor == super::Vendor::Amd {
+        if let Err(e) = device.commit(std::time::Duration::from_secs(1800)) {
+            say(format!("warning {e}"));
+        }
+    }
     // Zwolnienie urządzenia przed końcem procesu - sterownik dopisuje wtedy
     // pamięć podręczną na dysk.
     drop(device);
@@ -292,7 +319,6 @@ mod d3d11 {
     use windows::Win32::Foundation::HMODULE;
     use windows::Win32::Graphics::Direct3D::*;
     use windows::Win32::Graphics::Direct3D11::*;
-    use windows::Win32::Graphics::Dxgi::*;
 
     use super::super::unity::Stage;
 
@@ -306,21 +332,12 @@ mod d3d11 {
     unsafe impl Send for Device {}
     unsafe impl Sync for Device {}
 
-    pub fn nvidia_device() -> Result<Device, String> {
-        // SAFETY: wywołania DXGI/D3D11 z poprawnymi argumentami.
+    /// Urządzenie D3D11 na karcie NVIDIA albo AMD (patrz `pick_adapter`).
+    pub fn gpu_device() -> Result<Device, String> {
+        let (adapter, _vendor, name) = super::super::pick_adapter()?;
+        // SAFETY: karta z DXGI, poprawne argumenty.
         unsafe {
-            let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(|e| format!("DXGI: {e}"))?;
-            let mut index = 0;
-            loop {
-                let adapter = factory
-                    .EnumAdapters1(index)
-                    .map_err(|_| "nie znaleziono karty Nvidia / no Nvidia GPU found".to_string())?;
-                index += 1;
-                let desc = adapter.GetDesc1().map_err(|e| e.to_string())?;
-                if desc.VendorId != super::d3d::NVIDIA {
-                    continue;
-                }
-                let name = String::from_utf16_lossy(&desc.Description);
+            {
                 let mut device = None;
                 D3D11CreateDevice(
                     &adapter,
@@ -334,10 +351,10 @@ mod d3d11 {
                     None,
                 )
                 .map_err(|e| format!("D3D11CreateDevice: {e}"))?;
-                return Ok(Device {
+                Ok(Device {
                     device: device.ok_or("D3D11CreateDevice: brak urządzenia")?,
-                    adapter: name.trim_end_matches('\0').to_owned(),
-                });
+                    adapter: name,
+                })
             }
         }
     }
@@ -476,7 +493,7 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
     } else {
         None
     };
-    let device = match d3d11::nvidia_device() {
+    let device = match d3d11::gpu_device() {
         Ok(d) => d,
         Err(e) => {
             say(format!("fatal {e}"));
@@ -608,7 +625,7 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
         while jobs.peek().is_some() {
             // Każda partia na nowym urządzeniu: sterownik trzyma wyniki w pamięci
             // do zwolnienia urządzenia (jedno urządzenie dla Last Epoch - 12,5 GB).
-            let device = match device.take().map_or_else(d3d11::nvidia_device, Ok) {
+            let device = match device.take().map_or_else(d3d11::gpu_device, Ok) {
                 Ok(d) => d,
                 Err(e) => {
                     say(format!("fatal {e}"));
@@ -686,11 +703,12 @@ pub fn run_cache_probe() -> i32 {
         let _ = writeln!(o, "{line}");
         let _ = o.flush();
     };
-    let Some(dir) = super::nvidia_cache_dir() else {
-        say("fatal brak folderu DXCache".into());
+    let dirs = super::cache_dirs();
+    if dirs.is_empty() {
+        say("fatal brak karty NVIDIA ani AMD".into());
         return 2;
-    };
-    for name in opened_cache_files(&dir, &say) {
+    }
+    for name in opened_cache_files(&dirs, &say) {
         say(format!("file {name}"));
     }
     0
@@ -699,10 +717,13 @@ pub fn run_cache_probe() -> i32 {
 /// Pliki pamięci podręcznej, które sterownik otwiera dla nazwy tego procesu:
 /// różnica zajętych plików przed i po utworzeniu urządzeń D3D11 i D3D12.
 #[cfg(windows)]
-fn opened_cache_files(dir: &Path, say: &dyn Fn(String)) -> Vec<String> {
-    let before = locked_files(dir);
-    let dx11 = d3d11::nvidia_device();
-    let dx12 = d3d::nvidia_device();
+fn opened_cache_files(dirs: &[PathBuf], say: &dyn Fn(String)) -> Vec<String> {
+    let all = |dirs: &[PathBuf]| -> std::collections::BTreeSet<String> {
+        dirs.iter().flat_map(|d| locked_files(d)).collect()
+    };
+    let before = all(dirs);
+    let dx11 = d3d11::gpu_device();
+    let dx12 = d3d::gpu_device();
     if let Err(e) = &dx11 {
         say(format!("warning D3D11: {e}"));
     }
@@ -711,7 +732,7 @@ fn opened_cache_files(dir: &Path, say: &dyn Fn(String)) -> Vec<String> {
     }
     // Sterownik otwiera pliki przy tworzeniu urządzenia; chwila zapasu.
     std::thread::sleep(std::time::Duration::from_millis(1500));
-    let after = locked_files(dir);
+    let after = all(dirs);
     let names = after.difference(&before).cloned().collect();
     drop((dx11, dx12));
     names
@@ -742,19 +763,22 @@ fn say_line(line: String) {
 /// Wypisuje `linked <pliki> <bajty> <nieudane>`.
 #[cfg(windows)]
 pub fn run_cache_link(args: &[String]) -> i32 {
-    let (Some(store), Some(dir)) = (args.first(), super::nvidia_cache_dir()) else {
-        say_line("fatal brak folderu DXCache albo folderu gry".into());
+    let dirs = super::cache_dirs();
+    let Some(store) = args.first().filter(|_| !dirs.is_empty()) else {
+        say_line("fatal brak folderu pamięci podręcznej albo folderu gry".into());
         return 2;
     };
-    let keys: Vec<u32> = opened_cache_files(&dir, &say_line)
+    let mut keys: Vec<String> = opened_cache_files(&dirs, &say_line)
         .iter()
         .filter_map(|n| cache_key(n))
         .collect();
+    keys.sort();
+    keys.dedup();
     if keys.is_empty() {
         say_line("fatal sterownik nie otworzył plików pamięci podręcznej gry".into());
         return 2;
     }
-    match super::store::link_game(&dir, Path::new(store), &keys) {
+    match super::store::link_game(&dirs, Path::new(store), &keys) {
         Ok(l) => {
             say_line(format!("linked {} {} {}", l.files, l.bytes, l.failed));
             0
@@ -768,11 +792,12 @@ pub fn run_cache_link(args: &[String]) -> i32 {
 
 /// Wypisuje `restored <przywrócone> <nieudane>`.
 pub fn run_cache_restore(args: &[String]) -> i32 {
-    let (Some(store), Some(dir)) = (args.first(), super::nvidia_cache_dir()) else {
-        say_line("fatal brak folderu DXCache albo folderu gry".into());
+    let dirs = super::cache_dirs();
+    let Some(store) = args.first().filter(|_| !dirs.is_empty()) else {
+        say_line("fatal brak folderu pamięci podręcznej albo folderu gry".into());
         return 2;
     };
-    match super::store::restore(&dir, Path::new(store)) {
+    match super::store::restore(&dirs, Path::new(store)) {
         Ok((restored, failed)) => {
             say_line(format!("restored {restored} {failed}"));
             0
@@ -786,17 +811,17 @@ pub fn run_cache_restore(args: &[String]) -> i32 {
 
 /// Wypisuje `cleaned <pliki> <bajty> <zajęte>`.
 pub fn run_cache_delete(args: &[String]) -> i32 {
-    let (Some(store), Some(exe), Some(dir)) = (args.first(), args.get(1), super::nvidia_cache_dir())
-    else {
-        say_line("fatal brak folderu DXCache albo nazwy gry".into());
+    let dirs = super::cache_dirs();
+    let (Some(store), Some(exe)) = (args.first(), args.get(1)) else {
+        say_line("fatal brak folderu gry albo nazwy gry".into());
         return 2;
     };
-    let keys: Vec<u32> = args[2..]
-        .iter()
-        .filter_map(|k| u32::from_str_radix(k, 16).ok())
-        .collect();
+    let keys: Vec<String> = args[2..].to_vec();
     let (mut files, mut bytes, mut locked) = (0, 0, 0);
-    for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+    for e in dirs
+        .iter()
+        .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten())
+    {
         let name = e.file_name().to_string_lossy().into_owned();
         if !in_family(&name, &keys) {
             continue;
@@ -820,23 +845,48 @@ pub fn run_cache_delete(args: &[String]) -> i32 {
     0
 }
 
-/// Ile kolejnych numerów pliku traktujemy jako tę samą grę (sterownik
+/// NVIDIA: ile kolejnych numerów pliku traktujemy jako tę samą grę (sterownik
 /// zakłada plik o numerze +1, gdy poprzedni jest pełny albo zajęty).
 const CACHE_FAMILY: u32 = 8;
 
-/// Ostatnie 8 cyfr szesnastkowych nazwy pliku pamięci podręcznej
-/// (`1c68a91ac748b201.nvph` -> 0xC748B201).
-pub fn cache_key(name: &str) -> Option<u32> {
-    let stem = name.split('.').next()?;
-    if stem.len() < 16 || !stem.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    u32::from_str_radix(&stem[stem.len() - 8..], 16).ok()
+fn hex(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Czy plik należy do gry o kluczach `keys` (ten sam skrót lub kolejne numery).
-pub fn in_family(name: &str, keys: &[u32]) -> bool {
-    cache_key(name).is_some_and(|k| keys.iter().any(|&g| k.abs_diff(g) <= CACHE_FAMILY))
+/// Klucz gry z nazwy pliku pamięci podręcznej sterownika:
+/// - NVIDIA (`1c68a91ac748b201.nvph`): `nv:` + ostatnie 8 cyfr nazwy,
+/// - AMD DirectX 12 (`207c35a9.dfac411e.71efbc0e.2b1a674a.0.parc`): `amd:` +
+///   pierwszy człon - skrót nazwy .exe, wspólny dla wszystkich plików gry,
+/// - AMD DirectX 11 (`<48 cyfr>.bin` / `.bin2`): `amd:` + pierwsze 16 cyfr.
+pub fn cache_key(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    let mut parts = lower.split('.');
+    let stem = parts.next()?;
+    if lower.ends_with(".parc") && stem.len() == 8 && hex(stem) {
+        return Some(format!("amd:{stem}."));
+    }
+    if (lower.ends_with(".bin") || lower.ends_with(".bin2")) && stem.len() >= 32 && hex(stem) {
+        return Some(format!("amd:{}", &stem[..16]));
+    }
+    if stem.len() >= 16 && hex(stem) {
+        return Some(format!("nv:{}", &stem[stem.len() - 8..]));
+    }
+    None
+}
+
+/// Czy plik należy do gry o kluczach `keys` (NVIDIA: ten sam skrót lub
+/// kolejne numery; AMD: ten sam skrót nazwy .exe).
+pub fn in_family(name: &str, keys: &[String]) -> bool {
+    let Some(key) = cache_key(name) else {
+        return false;
+    };
+    keys.iter().any(|g| match (key.strip_prefix("nv:"), g.strip_prefix("nv:")) {
+        (Some(a), Some(b)) => match (u32::from_str_radix(a, 16), u32::from_str_radix(b, 16)) {
+            (Ok(a), Ok(b)) => a.abs_diff(b) <= CACHE_FAMILY,
+            _ => false,
+        },
+        _ => key == *g,
+    })
 }
 
 /// Wynik czyszczenia pamięci podręcznej gry.
@@ -990,7 +1040,7 @@ fn clean_game(exe: &str) -> Result<(usize, u64, usize), String> {
         super::store::game_dir(exe).map_or("-".into(), |d| d.display().to_string()),
         exe.to_owned(),
     ];
-    args.extend(keys.iter().map(|k| format!("{k:x}")));
+    args.extend(keys.iter().cloned());
     let nums = staged_result(exe, &args, "cleaned")?;
     match nums.as_slice() {
         [files, bytes, locked] => Ok((*files as usize, *bytes, *locked as usize)),
@@ -1083,15 +1133,17 @@ pub fn finish_game(exe: &str) -> Result<(u64, Option<usize>), String> {
     }
 }
 
-/// Klucze plików pamięci podręcznej sterownika NVIDIA dla gry: proces
-/// pomiaru uruchomiony pod nazwą jej .exe (patrz `run_cache_probe`).
-fn game_cache_keys(exe: &str) -> Result<Vec<u32>, String> {
+/// Klucze plików pamięci podręcznej sterownika (NVIDIA albo AMD) dla gry:
+/// proces pomiaru uruchomiony pod nazwą jej .exe (patrz `run_cache_probe`).
+fn game_cache_keys(exe: &str) -> Result<Vec<String>, String> {
     let text = run_staged(exe, &[HOST_ARG_PROBE.to_owned()])?;
-    let keys: Vec<u32> = text
+    let mut keys: Vec<String> = text
         .lines()
         .filter_map(|l| l.strip_prefix("file "))
         .filter_map(cache_key)
         .collect();
+    keys.sort();
+    keys.dedup();
     if keys.is_empty() {
         let detail = text
             .lines()
@@ -1108,18 +1160,18 @@ fn game_cache_keys(exe: &str) -> Result<Vec<u32>, String> {
     Ok(keys)
 }
 
-/// Rozmiar pamięci podręcznej gry: pliki sterownika NVIDIA (DXCache) i
-/// foldery D3DSCache tej gry. Nic nie usuwa. Gra musi być zamknięta.
+/// Rozmiar pamięci podręcznej gry: pliki sterownika karty (NVIDIA DXCache,
+/// AMD DxcCache i DxCache) i foldery D3DSCache tej gry. Nic nie usuwa. Gra
+/// musi być zamknięta.
 pub fn game_cache_bytes(exe: &str) -> Result<u64, String> {
     #[cfg(windows)]
     if process_running(exe) {
         return Err(crate::i18n::tr("gra jest uruchomiona", "the game is running").into());
     }
-    let dir = super::nvidia_cache_dir().ok_or("brak folderu DXCache")?;
     let keys = game_cache_keys(exe)?;
-    let mut bytes: u64 = std::fs::read_dir(&dir)
-        .map_err(|e| e.to_string())?
-        .flatten()
+    let mut bytes: u64 = super::cache_dirs()
+        .iter()
+        .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten())
         .filter(|e| in_family(&e.file_name().to_string_lossy(), &keys))
         .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
         .sum();
@@ -1421,14 +1473,33 @@ mod tests {
 
     #[test]
     fn cache_file_family() {
-        assert_eq!(cache_key("1c68a91ac748b201.nvph"), Some(0xC748_B201));
-        assert_eq!(cache_key("0002a91a62c6cdf9.nvph"), Some(0x62C6_CDF9));
+        assert_eq!(cache_key("1c68a91ac748b201.nvph").as_deref(), Some("nv:c748b201"));
+        assert_eq!(cache_key("0002a91a62c6cdf9.nvph").as_deref(), Some("nv:62c6cdf9"));
         assert_eq!(cache_key("index.toc"), None);
-        let keys = [0x62C6_CDFA];
+        let keys = vec!["nv:62c6cdfa".to_string()];
         assert!(in_family("1c68a91a62c6cdf9.nvph", &keys));
         assert!(in_family("0002a91a62c6cdfa.nvph", &keys));
         assert!(!in_family("1c68a91a62c6ce10.nvph", &keys));
         assert!(!in_family("1c68a91ac748b201.nvph", &keys));
+    }
+
+    #[test]
+    fn amd_cache_file_family() {
+        // DirectX 12: pierwszy człon nazwy to skrót nazwy .exe.
+        let parc = "207c35a9.dfac411e.71efbc0e.2b1a674a.0.parc";
+        assert_eq!(cache_key(parc).as_deref(), Some("amd:207c35a9."));
+        let keys = vec![cache_key(parc).unwrap()];
+        assert!(in_family("207c35a9.11111111.22222222.33333333.1.parc", &keys));
+        assert!(!in_family("207c35aa.dfac411e.71efbc0e.2b1a674a.0.parc", &keys));
+        // Klucz AMD nie łapie plików NVIDIA i odwrotnie.
+        assert!(!in_family("1c68a91a207c35a9.nvph", &keys));
+        // DirectX 11: 48 cyfr, grupą jest pierwsze 16.
+        let bin = "0123456789abcdef0011223344556677889900aabbccddee.bin";
+        assert_eq!(cache_key(bin).as_deref(), Some("amd:0123456789abcdef"));
+        assert!(in_family(
+            "0123456789ABCDEFffffffffffffffffffffffffffffffff.bin2",
+            &[cache_key(bin).unwrap()]
+        ));
     }
 
     #[test]

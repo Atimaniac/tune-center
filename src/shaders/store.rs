@@ -1,8 +1,9 @@
 //! Folder shaderów gier w danych aplikacji i dowiązania do pamięci podręcznej
 //! sterownika.
 //!
-//! Sterownik Nvidia trzyma skompilowane shadery wszystkich gier w jednym
-//! folderze (`%LOCALAPPDATA%\NVIDIA\DXCache`) i tylko tam ich szuka. Tune
+//! Sterownik karty trzyma skompilowane shadery wszystkich gier we wspólnym
+//! folderze (NVIDIA: `%LOCALAPPDATA%\NVIDIA\DXCache`; AMD: `AMD\DxcCache` dla
+//! DirectX 12 i `AMD\DxCache` dla DirectX 11) i tylko tam ich szuka. Tune
 //! Center prowadzi obok własny folder - osobny podfolder na każdą grę - w
 //! miejscu, które Windows przeznacza na dane aplikacji:
 //! - program z Microsoft Store (pakiet MSIX):
@@ -96,32 +97,54 @@ pub struct Linked {
     pub failed: usize,
 }
 
-/// Dowiązuje do folderu gry `store` wszystkie pliki z `cache` należące do gry
-/// (klucze `keys`, patrz `warm::in_family`). Folder gry po tej operacji
+/// Pary (folder pamięci podręcznej, jego folder w folderze gry): pliki
+/// pierwszego (głównego) folderu leżą wprost w folderze gry, pozostałych -
+/// w podfolderze o tej samej nazwie (np. `DxCache` dla DirectX 11 na AMD).
+fn pairs(caches: &[PathBuf], store: &Path) -> Vec<(PathBuf, PathBuf)> {
+    caches
+        .iter()
+        .enumerate()
+        .map(|(i, cache)| {
+            let dir = match (i, cache.file_name()) {
+                (0, _) | (_, None) => store.to_path_buf(),
+                (_, Some(name)) => store.join(name),
+            };
+            (cache.clone(), dir)
+        })
+        .collect()
+}
+
+/// Dowiązuje do folderu gry `store` wszystkie pliki z `caches` należące do
+/// gry (klucze `keys`, patrz `warm::in_family`). Folder gry po tej operacji
 /// odpowiada stanowi pamięci podręcznej: stare pliki, których w niej już nie
 /// ma, są usuwane.
-pub fn link_game(cache: &Path, store: &Path, keys: &[u32]) -> std::io::Result<Linked> {
-    std::fs::create_dir_all(store)?;
-    let current: Vec<String> = file_names(cache)
-        .into_iter()
-        .filter(|n| in_family(n, keys))
-        .collect();
-    for old in file_names(store) {
-        if !current.contains(&old) {
-            let _ = std::fs::remove_file(store.join(old));
-        }
-    }
+pub fn link_game(caches: &[PathBuf], store: &Path, keys: &[String]) -> std::io::Result<Linked> {
     let mut out = Linked::default();
-    for name in current {
-        let (from, to) = (cache.join(&name), store.join(&name));
-        // Dowiązanie zakłada się od nowa: sterownik mógł zastąpić plik nowym.
-        let _ = std::fs::remove_file(&to);
-        match std::fs::hard_link(&from, &to) {
-            Ok(()) => {
-                out.files += 1;
-                out.bytes += std::fs::metadata(&to).map(|m| m.len()).unwrap_or(0);
+    for (cache, dir) in pairs(caches, store) {
+        let current: Vec<String> = file_names(&cache)
+            .into_iter()
+            .filter(|n| in_family(n, keys))
+            .collect();
+        if current.is_empty() && !dir.exists() {
+            continue;
+        }
+        std::fs::create_dir_all(&dir)?;
+        for old in file_names(&dir) {
+            if !current.contains(&old) {
+                let _ = std::fs::remove_file(dir.join(old));
             }
-            Err(_) => out.failed += 1,
+        }
+        for name in current {
+            let (from, to) = (cache.join(&name), dir.join(&name));
+            // Dowiązanie zakłada się od nowa: sterownik mógł zastąpić plik nowym.
+            let _ = std::fs::remove_file(&to);
+            match std::fs::hard_link(&from, &to) {
+                Ok(()) => {
+                    out.files += 1;
+                    out.bytes += std::fs::metadata(&to).map(|m| m.len()).unwrap_or(0);
+                }
+                Err(_) => out.failed += 1,
+            }
         }
     }
     Ok(out)
@@ -136,38 +159,45 @@ pub struct Info {
     pub missing: usize,
 }
 
-pub fn info(cache: &Path, store: &Path) -> Info {
+pub fn info(caches: &[PathBuf], store: &Path) -> Info {
     let mut out = Info::default();
-    for name in file_names(store) {
-        out.files += 1;
-        out.bytes += std::fs::metadata(store.join(&name))
-            .map(|m| m.len())
-            .unwrap_or(0);
-        if !cache.join(&name).exists() {
-            out.missing += 1;
+    for (cache, dir) in pairs(caches, store) {
+        for name in file_names(&dir) {
+            out.files += 1;
+            out.bytes += std::fs::metadata(dir.join(&name))
+                .map(|m| m.len())
+                .unwrap_or(0);
+            if !cache.join(&name).exists() {
+                out.missing += 1;
+            }
         }
     }
     out
 }
 
-/// Przywraca w `cache` pliki, które są w folderze gry, a z pamięci podręcznej
+/// Przywraca w pamięci podręcznej pliki, które są w folderze gry, a z niej
 /// zniknęły. Zwraca (przywrócone, nieudane). Istniejących plików nie rusza.
-pub fn restore(cache: &Path, store: &Path) -> std::io::Result<(usize, usize)> {
-    std::fs::create_dir_all(cache)?;
+pub fn restore(caches: &[PathBuf], store: &Path) -> std::io::Result<(usize, usize)> {
     let (mut restored, mut failed) = (0, 0);
-    for name in file_names(store) {
-        let to = cache.join(&name);
-        if to.exists() {
+    for (cache, dir) in pairs(caches, store) {
+        let names = file_names(&dir);
+        if names.is_empty() {
             continue;
         }
-        match std::fs::hard_link(store.join(&name), &to) {
-            Ok(()) => restored += 1,
-            Err(_) => failed += 1,
+        std::fs::create_dir_all(&cache)?;
+        for name in names {
+            let to = cache.join(&name);
+            if to.exists() {
+                continue;
+            }
+            match std::fs::hard_link(dir.join(&name), &to) {
+                Ok(()) => restored += 1,
+                Err(_) => failed += 1,
+            }
         }
     }
     Ok((restored, failed))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,9 +220,9 @@ mod tests {
         std::fs::write(cache.join("1c68a91ac748b201.nvph"), b"abcd").unwrap();
         std::fs::write(cache.join("1c68a91ac748b202.bin"), b"ef").unwrap();
         std::fs::write(cache.join("00000000aaaaaaaa.nvph"), b"other").unwrap();
-        let keys = [0xC748_B201];
+        let keys = vec!["nv:c748b201".to_string()];
 
-        let linked = link_game(&cache, &store, &keys).unwrap();
+        let linked = link_game(std::slice::from_ref(&cache), &store, &keys).unwrap();
         assert_eq!(
             linked,
             Linked {
@@ -203,7 +233,7 @@ mod tests {
         );
         assert!(!store.join("00000000aaaaaaaa.nvph").exists());
         assert_eq!(
-            info(&cache, &store),
+            info(std::slice::from_ref(&cache), &store),
             Info {
                 files: 2,
                 bytes: 6,
@@ -220,17 +250,17 @@ mod tests {
 
         // Plik zniknął z pamięci podręcznej - dane zostają w folderze gry.
         std::fs::remove_file(cache.join("1c68a91ac748b201.nvph")).unwrap();
-        assert_eq!(info(&cache, &store).missing, 1);
-        assert_eq!(restore(&cache, &store).unwrap(), (1, 0));
+        assert_eq!(info(std::slice::from_ref(&cache), &store).missing, 1);
+        assert_eq!(restore(std::slice::from_ref(&cache), &store).unwrap(), (1, 0));
         assert_eq!(
             std::fs::read(cache.join("1c68a91ac748b201.nvph")).unwrap(),
             b"abcd"
         );
-        assert_eq!(info(&cache, &store).missing, 0);
+        assert_eq!(info(std::slice::from_ref(&cache), &store).missing, 0);
 
         // Ponowne dowiązanie usuwa z folderu gry pliki, których już nie ma.
         std::fs::remove_file(cache.join("1c68a91ac748b202.bin")).unwrap();
-        let linked = link_game(&cache, &store, &keys).unwrap();
+        let linked = link_game(std::slice::from_ref(&cache), &store, &keys).unwrap();
         assert_eq!(linked.files, 1);
         assert!(!store.join("1c68a91ac748b202.bin").exists());
         let _ = std::fs::remove_dir_all(&root);

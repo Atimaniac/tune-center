@@ -53,6 +53,7 @@ mod nvdriver;
 mod oled_fix;
 mod power;
 mod power_tab;
+mod radeon;
 mod rebar;
 mod rgb;
 mod rgb_tab;
@@ -1206,6 +1207,8 @@ impl eframe::App for App {
                     ui.add_space(10.0);
                     let tabs_x = ui.cursor().left();
                     for (tab, label, icon) in TABS {
+                        // Karta AMD: zakładka nazywa się RADEON.
+                        let label = if tab == Tab::Nvidia && shaders::vendor() == Some(shaders::Vendor::Amd) { "RADEON" } else { label };
                         if tab_button(ui, label, icon, self.tab == tab, 38.0).clicked() {
                             self.tab = tab;
                         }

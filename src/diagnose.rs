@@ -532,6 +532,27 @@ fn cpu(r: &mut Report, hw: &mut Vec<String>) {
     }
 }
 
+/// Karta AMD: ADLX (zakładka RADEON) i foldery pamięci shaderów.
+fn radeon(r: &mut Report) {
+    if crate::shaders::vendor() != Some(crate::shaders::Vendor::Amd) {
+        return;
+    }
+    match crate::radeon::adlx::Adlx::load() {
+        Ok(a) => r.ok(format!(
+            "ADLX loaded: {} | AMD Software {} | 3D settings services v{} | display services v{} | displays {}",
+            a.name,
+            a.software_version.as_deref().unwrap_or("?"),
+            a.level_3d,
+            a.level_display,
+            a.displays().len()
+        )),
+        Err(e) => r.warn(format!("ADLX (RADEON tab): {e}")),
+    }
+    for dir in crate::shaders::cache_dirs() {
+        r.info(format!("shader cache folder {} exists: {}", dir.display(), dir.is_dir()));
+    }
+}
+
 fn gpu(r: &mut Report, hw: &mut Vec<String>) {
     r.section("Graphics card");
     for (dev, bars) in crate::rebar::display_windows() {
@@ -550,6 +571,7 @@ fn gpu(r: &mut Report, hw: &mut Vec<String>) {
             r.info(line)
         }
     }
+    radeon(r);
     let Some(mut backend) = crate::gpu::load_drivers() else {
         // Sama grafika zintegrowana (np. Intel) to nie błąd - zakładka NVIDIA
         // nie ma wtedy czym sterować.

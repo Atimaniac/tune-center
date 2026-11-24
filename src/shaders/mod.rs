@@ -1,4 +1,4 @@
-//! Podzakładka NVIDIA > Shader compilation: wyszukiwanie zainstalowanych gier,
+//! Podzakładka NVIDIA / RADEON > Shader compilation: wyszukiwanie zainstalowanych gier,
 //! rozpoznanie silnika i plików shaderów oraz (w kolejnych etapach)
 //! kompilacja shaderów do pamięci podręcznej sterownika z góry, zanim gra
 //! musi to zrobić w trakcie rozgrywki.
@@ -62,7 +62,7 @@ pub struct ShaderTab {
     queue_note: Option<String>,
     /// Rozmiary pamięci podręcznej gier liczone w tle po kompilacji.
     sizes: Arc<Mutex<Vec<(String, Option<(u64, Option<usize>)>)>>>,
-    /// Bieżąca wersja sterownika NVIDIA (z `tick`).
+    /// Bieżąca wersja sterownika karty (NVIDIA albo AMD Software, z `tick`).
     driver: Option<String>,
     /// Stan folderów shaderów gier (odświeżany co kilka sekund), po grze.
     stores: std::collections::HashMap<String, (std::time::Instant, store::Info)>,
@@ -88,11 +88,98 @@ struct Track {
     stamp: String,
 }
 
-/// Folder pamięci podręcznej shaderów DirectX sterownika Nvidia.
-pub fn nvidia_cache_dir() -> Option<PathBuf> {
-    let local = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
-    let dir = local.join("NVIDIA").join("DXCache");
-    Some(dir)
+/// Producent karty, dla której kompilujemy shadery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Vendor {
+    Nvidia,
+    Amd,
+}
+
+pub const VENDOR_NVIDIA: u32 = 0x10DE;
+pub const VENDOR_AMD: u32 = 0x1002;
+
+impl Vendor {
+    pub fn from_id(id: u32) -> Option<Vendor> {
+        match id {
+            VENDOR_NVIDIA => Some(Vendor::Nvidia),
+            VENDOR_AMD => Some(Vendor::Amd),
+            _ => None,
+        }
+    }
+
+}
+
+/// Karta do kompilacji: spośród kart NVIDIA i AMD ta z największą pamięcią
+/// własną (karta osobna, nie układ zintegrowany w procesorze).
+#[cfg(windows)]
+pub fn pick_adapter() -> Result<(windows::Win32::Graphics::Dxgi::IDXGIAdapter1, Vendor, String), String> {
+    use windows::Win32::Graphics::Dxgi::*;
+    // SAFETY: wywołania DXGI z poprawnymi argumentami.
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(|e| format!("DXGI: {e}"))?;
+        let mut best: Option<(usize, IDXGIAdapter1, Vendor, String)> = None;
+        let mut index = 0;
+        while let Ok(adapter) = factory.EnumAdapters1(index) {
+            index += 1;
+            let Ok(desc) = adapter.GetDesc1() else { continue };
+            let Some(vendor) = Vendor::from_id(desc.VendorId) else {
+                continue;
+            };
+            let memory = desc.DedicatedVideoMemory;
+            if best.as_ref().is_some_and(|(m, ..)| *m >= memory) {
+                continue;
+            }
+            let name = String::from_utf16_lossy(&desc.Description)
+                .trim_end_matches('\0')
+                .to_owned();
+            best = Some((memory, adapter, vendor, name));
+        }
+        best.map(|(_, a, v, n)| (a, v, n)).ok_or_else(|| {
+            tr(
+                "nie znaleziono karty NVIDIA ani AMD",
+                "no NVIDIA or AMD graphics card found",
+            )
+            .to_string()
+        })
+    }
+}
+
+/// Producent karty do kompilacji (ustalany raz).
+pub fn vendor() -> Option<Vendor> {
+    static VENDOR: std::sync::OnceLock<Option<Vendor>> = std::sync::OnceLock::new();
+    #[cfg(windows)]
+    {
+        *VENDOR.get_or_init(|| pick_adapter().ok().map(|(_, v, _)| v))
+    }
+    #[cfg(not(windows))]
+    {
+        *VENDOR.get_or_init(|| None)
+    }
+}
+
+/// Foldery pamięci podręcznej shaderów DirectX sterownika karty:
+/// - NVIDIA: `%LOCALAPPDATA%\NVIDIA\DXCache` (DirectX 11 i 12),
+/// - AMD: `%LOCALAPPDATA%\AMD\DxcCache` (DirectX 12) i `AMD\DxCache` (DirectX 11).
+///
+/// Pierwszy folder jest główny (jego pliki leżą wprost w folderze shaderów
+/// gry, patrz `store`).
+pub fn cache_dirs() -> Vec<PathBuf> {
+    let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    match vendor() {
+        Some(Vendor::Nvidia) => vec![local.join("NVIDIA").join("DXCache")],
+        Some(Vendor::Amd) => vec![
+            local.join("AMD").join("DxcCache"),
+            local.join("AMD").join("DxCache"),
+        ],
+        None => Vec::new(),
+    }
+}
+
+/// Główny folder pamięci podręcznej (pierwszy z `cache_dirs`).
+pub fn main_cache_dir() -> Option<PathBuf> {
+    cache_dirs().into_iter().next()
 }
 
 fn dir_size(dir: &std::path::Path) -> u64 {
@@ -435,9 +522,8 @@ impl ShaderTab {
                     Entry { game, info }
                 })
                 .collect();
-            let cache = nvidia_cache_dir()
-                .filter(|d| d.is_dir())
-                .map(|d| dir_size(&d));
+            let dirs: Vec<PathBuf> = cache_dirs().into_iter().filter(|d| d.is_dir()).collect();
+            let cache = (!dirs.is_empty()).then(|| dirs.iter().map(|d| dir_size(d)).sum());
             let mut s = shared.lock().unwrap();
             s.entries = Some(entries);
             s.cache_bytes = cache;
@@ -803,8 +889,8 @@ impl ShaderTab {
             .checkbox(
                 &mut auto,
                 tr(
-                    "Po instalacji nowego sterownika NVIDIA kompiluj ponownie w tle gry, które były skompilowane (sterownik czyści pamięć podręczną shaderów)",
-                    "After a new NVIDIA driver is installed, recompile in the background the games that were compiled (the driver clears its shader cache)",
+                    "Po instalacji nowego sterownika karty kompiluj ponownie w tle gry, które były skompilowane (sterownik czyści pamięć podręczną shaderów)",
+                    "After a new graphics driver is installed, recompile in the background the games that were compiled (the driver clears its shader cache)",
                 ),
             )
             .changed()
@@ -902,8 +988,8 @@ fn job_for(e: &Entry, api: Api) -> Result<Option<(String, warm::Job, String)>, &
     Ok(Some(if let Some(dump) = dagor_dx11 {
         let exe = warm::dagor_game_exe(&e.game.dir).ok_or(no_exe)?;
         let about = crate::trf!(
-            "Sterownik Nvidia kompiluje wszystkie shadery DirectX 11 ze zrzutu gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
-            "The Nvidia driver compiles every DirectX 11 shader from the game's dump into its cache under the name {exe}, as the game would. The game must be closed."
+            "Sterownik karty kompiluje wszystkie shadery DirectX 11 ze zrzutu gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
+            "The graphics driver compiles every DirectX 11 shader from the game's dump into its cache under the name {exe}, as the game would. The game must be closed."
         );
         let job = warm::Job::DagorDx11 {
             dump: dump.path.clone(),
@@ -912,8 +998,8 @@ fn job_for(e: &Entry, api: Api) -> Result<Option<(String, warm::Job, String)>, &
     } else if let Some(dump) = dagor_dx12 {
         let exe = warm::dagor_game_exe(&e.game.dir).ok_or(no_exe)?;
         let about = crate::trf!(
-            "Sterownik Nvidia kompiluje shadery gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta. Teraz: shadery obliczeniowe (compute); graficzne w następnej wersji.",
-            "The Nvidia driver compiles the game's shaders into its cache under the name {exe}, as the game would. The game must be closed. Now: compute shaders; graphics shaders in the next version."
+            "Sterownik karty kompiluje shadery gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta. Teraz: shadery obliczeniowe (compute); graficzne w następnej wersji.",
+            "The graphics driver compiles the game's shaders into its cache under the name {exe}, as the game would. The game must be closed. Now: compute shaders; graphics shaders in the next version."
         );
         let job = warm::Job::Dagor {
             dump: dump.path.clone(),
@@ -926,8 +1012,8 @@ fn job_for(e: &Entry, api: Api) -> Result<Option<(String, warm::Job, String)>, &
             "Game .exe and _Data folder not found.",
         ))?;
         let about = crate::trf!(
-            "Tune Center wyszukuje w plikach gry wszystkie shadery DirectX 11 (ze wszystkimi wariantami), a sterownik Nvidia kompiluje je do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
-            "Tune Center finds every DirectX 11 shader in the game files (with all variants) and the Nvidia driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
+            "Tune Center wyszukuje w plikach gry wszystkie shadery DirectX 11 (ze wszystkimi wariantami), a sterownik karty kompiluje je do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
+            "Tune Center finds every DirectX 11 shader in the game files (with all variants) and the graphics driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
         );
         (exe, warm::Job::Unity { data_dir }, about)
     } else if d3d11 && e.info.engine == Engine::Unreal {
@@ -938,8 +1024,8 @@ fn job_for(e: &Entry, api: Api) -> Result<Option<(String, warm::Job, String)>, &
         let pak = unreal_pak::find_pak(&e.game.dir).ok_or(missing)?;
         let exe = warm::unreal_game_exe(&e.game.dir).ok_or(missing)?;
         let about = crate::trf!(
-            "Tune Center czyta archiwa shaderów DirectX 11 (SM5) z paczki gry, a sterownik Nvidia kompiluje je do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
-            "Tune Center reads the DirectX 11 (SM5) shader archives from the game package and the Nvidia driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
+            "Tune Center czyta archiwa shaderów DirectX 11 (SM5) z paczki gry, a sterownik karty kompiluje je do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
+            "Tune Center reads the DirectX 11 (SM5) shader archives from the game package and the graphics driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
         );
         (exe, warm::Job::Unreal { pak }, about)
     } else {
@@ -957,7 +1043,8 @@ fn store_ui(
     stores: &mut std::collections::HashMap<String, (std::time::Instant, store::Info)>,
     restores: &Restores,
 ) {
-    let (Some(cache), Some(dir)) = (nvidia_cache_dir(), store::game_dir(exe)) else {
+    let cache = cache_dirs();
+    let Some(dir) = store::game_dir(exe).filter(|_| !cache.is_empty()) else {
         return;
     };
     let restore = restores.lock().unwrap().get(id).cloned();
@@ -1170,8 +1257,8 @@ fn compile_ui(
                 egui::Button::new(tr("Wyczyść shadery", "Clean shaders")),
             )
             .on_hover_text(crate::trf!(
-                "Usuwa skompilowane shadery gry {exe} z pamięci podręcznej sterownika Nvidia i Windows (DXCache i D3DSCache, DirectX 11 i 12) oraz z folderu shaderów gry.",
-                "Removes the compiled shaders of {exe} from the Nvidia driver and Windows caches (DXCache and D3DSCache, DirectX 11 and 12) and from the game shader folder."
+                "Usuwa skompilowane shadery gry {exe} z pamięci podręcznej sterownika karty i Windows (DXCache / DxcCache i D3DSCache, DirectX 11 i 12) oraz z folderu shaderów gry.",
+                "Removes the compiled shaders of {exe} from the graphics driver and Windows caches (DXCache / DxcCache and D3DSCache, DirectX 11 and 12) and from the game shader folder."
             ))
             .clicked()
         {
@@ -1197,8 +1284,8 @@ fn compile_ui(
             );
             ui.add_space(6.0);
             ui.label(crate::trf!(
-                "Skompilowane shadery gry {exe} zostaną usunięte z pamięci podręcznej sterownika Nvidia i Windows (DXCache i D3DSCache, DirectX 11 i 12) oraz z folderu shaderów gry. Gra skompiluje je ponownie w trakcie rozgrywki - albo użyj \"Kompiluj shadery\". Gra musi być zamknięta.",
-                "The compiled shaders of {exe} will be removed from the Nvidia driver and Windows caches (DXCache and D3DSCache, DirectX 11 and 12) and from the game shader folder. The game will compile them again while playing - or use \"Compile shaders\". The game must be closed."
+                "Skompilowane shadery gry {exe} zostaną usunięte z pamięci podręcznej sterownika karty i Windows (DXCache / DxcCache i D3DSCache, DirectX 11 i 12) oraz z folderu shaderów gry. Gra skompiluje je ponownie w trakcie rozgrywki - albo użyj \"Kompiluj shadery\". Gra musi być zamknięta.",
+                "The compiled shaders of {exe} will be removed from the graphics driver and Windows caches (DXCache / DxcCache and D3DSCache, DirectX 11 and 12) and from the game shader folder. The game will compile them again while playing - or use \"Compile shaders\". The game must be closed."
             ));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -1346,7 +1433,7 @@ mod hardware {
         println!("czas: {:?}", t.elapsed());
         println!(
             "cache sterownika: {:?}",
-            nvidia_cache_dir().map(|d| engine::human(dir_size(&d)))
+            cache_dirs().iter().map(|d| engine::human(dir_size(d))).collect::<Vec<_>>()
         );
     }
 }
