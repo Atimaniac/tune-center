@@ -7,11 +7,16 @@
 //! Gry są tylko czytane - Tune Center niczego w nich nie zmienia.
 
 pub mod dagor;
+pub mod dagor_cache;
 pub mod engine;
 pub mod games;
+pub mod loose;
+pub mod probe;
 #[cfg(windows)]
 mod registry;
 pub mod rootsig;
+pub mod source2;
+pub mod ue12;
 pub mod state;
 pub mod store;
 pub mod unity;
@@ -220,20 +225,29 @@ fn has_pak(info: &Info) -> bool {
     })
 }
 
+/// Unreal 5 z kontenerami IoStore (`.utoc`).
+fn has_utoc(info: &Info) -> bool {
+    info.shaders.iter().any(|s| {
+        s.path
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("utoc"))
+    })
+}
+
 pub fn plan(info: &Info) -> (&'static str, bool) {
     let has = |k: ShaderKind| info.shaders.iter().any(|s| s.kind == k);
     match info.engine {
         Engine::Dagor if has(ShaderKind::DagorDx11) && has(ShaderKind::DagorDx12) => (
             tr(
-                "DX11: wszystkie shadery; DX12: compute (graficzne w przygotowaniu)",
-                "DX11: every shader; DX12: compute (graphics in progress)",
+                "DX11: wszystkie shadery; DX12: compute i potoki graficzne z pamięci potoków gry",
+                "DX11: every shader; DX12: compute and graphics pipelines from the game's pipeline cache",
             ),
             true,
         ),
         Engine::Dagor if has(ShaderKind::DagorDx12) => (
             tr(
-                "DirectX 12: compute gotowe, graficzne w przygotowaniu",
-                "DirectX 12: compute ready, graphics in progress",
+                "DirectX 12: compute i potoki graficzne z pamięci potoków gry",
+                "DirectX 12: compute and graphics pipelines from the game's pipeline cache",
             ),
             true,
         ),
@@ -267,8 +281,15 @@ pub fn plan(info: &Info) -> (&'static str, bool) {
         ),
         Engine::Unreal if has_pak(info) => (
             tr(
-                "DirectX 11: shadery SM5 z paczki gry (DX12 w przygotowaniu)",
-                "DirectX 11: SM5 shaders from the game package (DX12 in progress)",
+                "DirectX 11: shadery SM5 z paczki gry; DX12: potoki z pamięci potoków gry, jeśli ją ma",
+                "DirectX 11: SM5 shaders from the game package; DX12: pipelines from the game's pipeline cache, if it has one",
+            ),
+            true,
+        ),
+        Engine::Unreal if has_utoc(info) => (
+            tr(
+                "DirectX 11: shadery SM5 z kontenerów IoStore, jeśli gra je ma; DX12: potoki z pamięci potoków gry",
+                "DirectX 11: SM5 shaders from the IoStore containers, if the game has them; DX12: pipelines from the game's pipeline cache",
             ),
             true,
         ),
@@ -278,6 +299,20 @@ pub fn plan(info: &Info) -> (&'static str, bool) {
                 "Unreal - not supported yet",
             ),
             false,
+        ),
+        Engine::Source2 => (
+            tr(
+                "DirectX 11: shadery z paczek VPK gry",
+                "DirectX 11: shaders from the game's VPK packages",
+            ),
+            true,
+        ),
+        Engine::Unknown if has(ShaderKind::LooseDxbc) => (
+            tr(
+                "DirectX 11: wyszukiwanie shaderów w plikach gry (próba)",
+                "DirectX 11: searching the game files for shaders (attempt)",
+            ),
+            true,
         ),
         _ => (
             tr(
@@ -650,6 +685,13 @@ impl ShaderTab {
                     ui.label(e.info.api.clone().unwrap_or_else(|| "?".into()));
                     ui.label(if e.info.shaders.is_empty() {
                         "-".to_owned()
+                    } else if e.info.engine == Engine::Unknown {
+                        crate::trf!(
+                            "{} plików ({})",
+                            "{} files ({})",
+                            e.info.shaders.len(),
+                            engine::human(e.info.shader_bytes())
+                        )
                     } else if e.info.engine == Engine::Unity {
                         // Shadery Unity są w środku paczek z resztą danych gry -
                         // ich rozmiar będzie znany dopiero po przeczytaniu paczek.
@@ -765,13 +807,26 @@ impl ShaderTab {
                     .iter()
                     .filter(|s| s.kind != ShaderKind::UnityAssets)
                     .collect();
-                for s in &shown {
+                if shown.len() > 20 {
+                    ui.label(
+                        RichText::new(crate::trf!(
+                            "(pierwsze 20 z {} plików)",
+                            "(first 20 of {} files)",
+                            shown.len()
+                        ))
+                        .small()
+                        .color(muted()),
+                    );
+                }
+                for s in shown.iter().take(20) {
                     let kind = match s.kind {
                         ShaderKind::DagorDx11 => "DirectX 11",
                         ShaderKind::DagorDx12 => "DirectX 12",
                         ShaderKind::DagorVulkan => "Vulkan",
                         ShaderKind::UnrealArchive => "Unreal",
                         ShaderKind::UnityAssets => "Unity",
+                        ShaderKind::Source2Vpk => "Source 2",
+                        ShaderKind::LooseDxbc => tr("plik shaderów", "shader file"),
                     };
                     let file = s.path.strip_prefix(&e.game.dir).unwrap_or(&s.path);
                     ui.label(format!("{kind}: {} ({})", file.display(), engine::human(s.bytes)));
@@ -949,11 +1004,29 @@ fn api_options(info: &Info) -> ApiOptions {
                 "Unity on DirectX 12 builds pipelines at run time - they cannot be compiled from the files alone",
             )),
         ),
-        Engine::Unreal if !info.encrypted && has_pak(info) => (
+        Engine::Unreal if !info.encrypted && (has_pak(info) || has_utoc(info)) => (
+            Ok(()),
+            if info.ue_pso_cache {
+                Ok(())
+            } else {
+                Err(tr(
+                    "Unreal w DirectX 12: gra nie ma pamięci potoków (*.upipelinecache) - nie ma z czego odtworzyć potoków",
+                    "Unreal on DirectX 12: the game has no pipeline cache (*.upipelinecache) - nothing to rebuild pipelines from",
+                ))
+            },
+        ),
+        Engine::Source2 => (
             Ok(()),
             Err(tr(
-                "Unreal w DirectX 12: w przygotowaniu (potrzebne potoki i root signature)",
-                "Unreal on DirectX 12: in progress (needs pipelines and root signatures)",
+                "Source 2 w DirectX 12/Vulkan: nieobsługiwane - Counter-Strike 2 działa w DirectX 11",
+                "Source 2 on DirectX 12/Vulkan: not supported - Counter-Strike 2 runs on DirectX 11",
+            )),
+        ),
+        Engine::Unknown if has(ShaderKind::LooseDxbc) => (
+            Ok(()),
+            Err(tr(
+                "DirectX 12 wymaga stanu potoków gry - z samych plików nieznanego silnika się nie da",
+                "DirectX 12 needs the game's pipeline state - not possible from an unknown engine's files",
             )),
         ),
         _ => {
@@ -1006,13 +1079,23 @@ fn job_for(e: &Entry, api: Api) -> Result<Option<(String, warm::Job, String)>, &
         (exe, job, about)
     } else if let Some(dump) = dagor_dx12 {
         let exe = warm::dagor_game_exe(&e.game.dir).ok_or(no_exe)?;
-        let about = crate::trf!(
-            "Sterownik karty kompiluje shadery gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta. Teraz: shadery obliczeniowe (compute); graficzne w następnej wersji.",
-            "The graphics driver compiles the game's shaders into its cache under the name {exe}, as the game would. The game must be closed. Now: compute shaders; graphics shaders in the next version."
-        );
+        let pipelines = e.game.dir.join("cache").join("dx12.cache");
+        let pipelines = pipelines.is_file().then_some(pipelines);
+        let about = if pipelines.is_some() {
+            crate::trf!(
+                "Sterownik karty kompiluje shadery gry do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra: wszystkie shadery obliczeniowe (compute) i potoki graficzne, których gra używała (z jej pliku cache\\dx12.cache - ze stanem gry, więc także na AMD i Intel). Gra musi być zamknięta.",
+                "The graphics driver compiles the game's shaders into its cache under the name {exe}, as the game would: every compute shader and the graphics pipelines the game has used (from its cache\\dx12.cache file - with the game's state, so on AMD and Intel too). The game must be closed."
+            )
+        } else {
+            crate::trf!(
+                "Sterownik karty kompiluje shadery obliczeniowe (compute) gry pod nazwą {exe}. Potoki graficzne pojawią się po pierwszej grze w DirectX 12 (gra zapisuje wtedy cache\\dx12.cache). Gra musi być zamknięta.",
+                "The graphics driver compiles the game's compute shaders under the name {exe}. Graphics pipelines become available after the first DirectX 12 session (the game then writes cache\\dx12.cache). The game must be closed."
+            )
+        };
         let job = warm::Job::Dagor {
             dump: dump.path.clone(),
             cbv_ranges: warm::dagor_cbv_ranges(&e.game.dir),
+            pipelines,
         };
         (exe, job, about)
     } else if d3d11 && e.info.engine == Engine::Unity {
@@ -1025,6 +1108,26 @@ fn job_for(e: &Entry, api: Api) -> Result<Option<(String, warm::Job, String)>, &
             "Tune Center finds every DirectX 11 shader in the game files (with all variants) and the graphics driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
         );
         (exe, warm::Job::Unity { data_dir }, about)
+    } else if !d3d11 && e.info.engine == Engine::Unreal && e.info.ue_pso_cache {
+        let exe = warm::unreal_game_exe(&e.game.dir).ok_or(tr(
+            "Nie znaleziono pliku *-Shipping.exe gry.",
+            "Game *-Shipping.exe not found.",
+        ))?;
+        let about = crate::trf!(
+            "Tune Center czyta pamięć potoków DirectX 12 gry (*.upipelinecache z paczki albo z folderu Saved) i shadery SM6 z jej archiwów, buduje root signature tak jak silnik, a sterownik karty kompiluje potoki pod nazwą {exe} - ze stanem gry (formaty, układ wejścia, mieszanie), więc także na AMD i Intel. Gra musi być zamknięta.",
+            "Tune Center reads the game's DirectX 12 pipeline cache (*.upipelinecache from the package or the Saved folder) and the SM6 shaders from its archives, builds root signatures as the engine does, and the graphics driver compiles the pipelines under the name {exe} - with the game's state (formats, input layout, blending), so on AMD and Intel too. The game must be closed."
+        );
+        (exe, warm::Job::UnrealDx12 { game: e.game.dir.clone() }, about)
+    } else if d3d11 && e.info.engine == Engine::Unreal && !has_pak(&e.info) {
+        let exe = warm::unreal_game_exe(&e.game.dir).ok_or(tr(
+            "Nie znaleziono pliku *-Shipping.exe gry.",
+            "Game *-Shipping.exe not found.",
+        ))?;
+        let about = crate::trf!(
+            "Tune Center czyta shadery DirectX 11 (SM5) z kontenerów IoStore gry (.utoc/.ucas), a sterownik karty kompiluje je pod nazwą {exe}, tak jak zrobiłaby to gra. Jeśli gra ma tylko shadery DirectX 12, kompilacja to zgłosi. Gra musi być zamknięta.",
+            "Tune Center reads the DirectX 11 (SM5) shaders from the game's IoStore containers (.utoc/.ucas) and the graphics driver compiles them under the name {exe}, as the game would. If the game only has DirectX 12 shaders, the compile will say so. The game must be closed."
+        );
+        (exe, warm::Job::UnrealIo { game: e.game.dir.clone() }, about)
     } else if d3d11 && e.info.engine == Engine::Unreal {
         let missing = tr(
             "Nie znaleziono paczki .pak albo pliku *-Shipping.exe gry.",
@@ -1037,6 +1140,26 @@ fn job_for(e: &Entry, api: Api) -> Result<Option<(String, warm::Job, String)>, &
             "Tune Center reads the DirectX 11 (SM5) shader archives from the game package and the graphics driver compiles them into its cache under the name {exe}, as the game would. The game must be closed."
         );
         (exe, warm::Job::Unreal { pak }, about)
+    } else if d3d11 && e.info.engine == Engine::Source2 {
+        let exe = source2::game_exe(&e.game.dir).ok_or(tr(
+            "Nie znaleziono pliku .exe gry w game\\bin\\win64.",
+            "Game .exe not found in game\\bin\\win64.",
+        ))?;
+        let about = crate::trf!(
+            "Tune Center czyta shadery DirectX 11 (pliki .vcs) z paczek VPK gry, a sterownik karty kompiluje je do swojej pamięci podręcznej pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta. Gra nie jest uruchamiana, więc VAC nie ma czego wykryć.",
+            "Tune Center reads the DirectX 11 shaders (.vcs files) from the game's VPK packages and the graphics driver compiles them into its cache under the name {exe}, as the game would. The game must be closed. The game is never started, so VAC has nothing to detect."
+        );
+        (exe, warm::Job::Source2 { game: e.game.dir.clone() }, about)
+    } else if d3d11 && e.info.engine == Engine::Unknown {
+        let exe = loose::game_exe(&e.game.dir).ok_or(tr(
+            "Nie znaleziono pliku .exe gry.",
+            "Game .exe not found.",
+        ))?;
+        let about = crate::trf!(
+            "Silnik nierozpoznany: Tune Center szuka jawnych shaderów DirectX 11 (DXBC) w plikach shaderów gry, a sterownik karty kompiluje je pod nazwą {exe}. Spakowanych archiwów nie rozpakowuje - jeśli gra trzyma shadery tylko w nich, nic się nie znajdzie. Sprawdź, czy {exe} to plik, który uruchamia grę. Gra musi być zamknięta.",
+            "Unknown engine: Tune Center looks for plain DirectX 11 (DXBC) shaders in the game's shader files and the graphics driver compiles them under the name {exe}. Packed archives are not unpacked - if the game keeps its shaders only there, nothing will be found. Check that {exe} is the file that runs the game. The game must be closed."
+        );
+        (exe, warm::Job::Loose { game: e.game.dir.clone() }, about)
     } else {
         return Ok(None);
     }))

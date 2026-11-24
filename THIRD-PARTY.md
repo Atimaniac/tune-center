@@ -64,7 +64,13 @@ No code was copied from these projects; they were used as documentation.
   `ControlLib.dll`, on Intel platforms only.
 - CUE4Parse (https://github.com/FabianFG/CUE4Parse, Apache-2.0): layout of
   Unreal Engine `.pak` / IoStore containers and shader code archives
-  (`.ushaderbytecode`) used by shader pre-compilation.
+  (`.ushaderbytecode`), DirectX 12 pipeline caches (`.upipelinecache`) and
+  packed SM6 shaders used by shader pre-compilation.
+- DagorEngine (https://github.com/GaijinEntertainment/DagorEngine, BSD-3-Clause):
+  layout of the DirectX 12 pipeline cache (`cache\dx12.cache`), shader dump
+  and root signatures, used to rebuild graphics pipelines of Dagor games.
+- Valve Developer Community (https://developer.valvesoftware.com/wiki/VPK):
+  VPK archive format, used to read Source 2 shader packages.
 
 ## oozextract (Rust crate)
 

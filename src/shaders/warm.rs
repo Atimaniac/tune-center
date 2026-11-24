@@ -104,6 +104,148 @@ mod d3d {
             pso.map(|_| ()).map_err(|e| format!("{e}"))
         }
 
+        /// Potok graficzny ze stanem `state` (etapy puste = brak etapu).
+        pub fn graphics(
+            &self,
+            rs: &ID3D12RootSignature,
+            stages: &super::GraphicsStages,
+            state: &super::GraphicsState,
+        ) -> Result<(), String> {
+            use windows::Win32::Graphics::Dxgi::Common::*;
+            let code = |b: &[u8]| D3D12_SHADER_BYTECODE {
+                pShaderBytecode: if b.is_empty() { std::ptr::null() } else { b.as_ptr() as *const c_void },
+                BytecodeLength: b.len(),
+            };
+            // Nazwy semantyk: teksty zakończone zerem, żyją do końca wywołania.
+            let names: Vec<std::ffi::CString> = state
+                .inputs
+                .iter()
+                .map(|i| std::ffi::CString::new(i.semantic.as_str()).unwrap_or_default())
+                .collect();
+            let inputs: Vec<D3D12_INPUT_ELEMENT_DESC> = state
+                .inputs
+                .iter()
+                .zip(&names)
+                .map(|(i, n)| D3D12_INPUT_ELEMENT_DESC {
+                    SemanticName: windows::core::PCSTR(n.as_ptr() as *const u8),
+                    SemanticIndex: i.index,
+                    Format: DXGI_FORMAT(i.format as i32),
+                    InputSlot: i.slot,
+                    AlignedByteOffset: i.offset,
+                    InputSlotClass: if i.instance_rate > 0 {
+                        D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA
+                    } else {
+                        D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA
+                    },
+                    InstanceDataStepRate: i.instance_rate,
+                })
+                .collect();
+            let s = state;
+            let mut blend = D3D12_BLEND_DESC {
+                AlphaToCoverageEnable: s.alpha_to_coverage.into(),
+                IndependentBlendEnable: s.independent_blend.into(),
+                ..Default::default()
+            };
+            for (rt, b) in blend.RenderTarget.iter_mut().zip(&s.blend) {
+                rt.BlendEnable = b.enable.into();
+                rt.SrcBlend = D3D12_BLEND(b.src as i32);
+                rt.DestBlend = D3D12_BLEND(b.dst as i32);
+                rt.BlendOp = D3D12_BLEND_OP(b.op as i32);
+                rt.SrcBlendAlpha = D3D12_BLEND(b.src_alpha as i32);
+                rt.DestBlendAlpha = D3D12_BLEND(b.dst_alpha as i32);
+                rt.BlendOpAlpha = D3D12_BLEND_OP(b.op_alpha as i32);
+                rt.LogicOp = D3D12_LOGIC_OP_NOOP;
+                rt.RenderTargetWriteMask = b.mask;
+            }
+            let mut rtv = [DXGI_FORMAT_UNKNOWN; 8];
+            for (slot, f) in rtv.iter_mut().zip(&s.render_targets) {
+                *slot = DXGI_FORMAT(*f as i32);
+            }
+            let stencil_op = D3D12_DEPTH_STENCILOP_DESC {
+                StencilFailOp: D3D12_STENCIL_OP(s.stencil_fail as i32),
+                StencilDepthFailOp: D3D12_STENCIL_OP(s.stencil_depth_fail as i32),
+                StencilPassOp: D3D12_STENCIL_OP(s.stencil_pass as i32),
+                StencilFunc: D3D12_COMPARISON_FUNC(s.stencil_func as i32),
+            };
+            let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+                // SAFETY: kopia wskaźnika bez AddRef (jak w `compute`).
+                pRootSignature: unsafe { std::mem::transmute_copy(rs) },
+                VS: code(&stages.vs),
+                PS: code(&stages.ps),
+                DS: code(&stages.ds),
+                HS: code(&stages.hs),
+                GS: code(&stages.gs),
+                StreamOutput: D3D12_STREAM_OUTPUT_DESC::default(),
+                BlendState: blend,
+                SampleMask: u32::MAX,
+                RasterizerState: D3D12_RASTERIZER_DESC {
+                    FillMode: if s.wireframe { D3D12_FILL_MODE_WIREFRAME } else { D3D12_FILL_MODE_SOLID },
+                    CullMode: D3D12_CULL_MODE(s.cull as i32),
+                    FrontCounterClockwise: s.front_ccw.into(),
+                    DepthBias: s.depth_bias,
+                    DepthBiasClamp: 0.0,
+                    SlopeScaledDepthBias: s.slope_bias,
+                    DepthClipEnable: s.depth_clip.into(),
+                    MultisampleEnable: false.into(),
+                    AntialiasedLineEnable: false.into(),
+                    ForcedSampleCount: s.forced_samples,
+                    ConservativeRaster: if s.conservative && !s.wireframe {
+                        D3D12_CONSERVATIVE_RASTERIZATION_MODE_ON
+                    } else {
+                        D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF
+                    },
+                },
+                DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
+                    DepthEnable: s.depth_enable.into(),
+                    DepthWriteMask: if s.depth_write { D3D12_DEPTH_WRITE_MASK_ALL } else { D3D12_DEPTH_WRITE_MASK_ZERO },
+                    DepthFunc: D3D12_COMPARISON_FUNC(s.depth_func as i32),
+                    StencilEnable: s.stencil_enable.into(),
+                    StencilReadMask: s.stencil_read,
+                    StencilWriteMask: s.stencil_write,
+                    FrontFace: stencil_op,
+                    BackFace: stencil_op,
+                },
+                InputLayout: D3D12_INPUT_LAYOUT_DESC {
+                    pInputElementDescs: if inputs.is_empty() { std::ptr::null() } else { inputs.as_ptr() },
+                    NumElements: inputs.len() as u32,
+                },
+                IBStripCutValue: D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED,
+                PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE(s.topology as i32),
+                NumRenderTargets: s.render_targets.len().min(8) as u32,
+                RTVFormats: rtv,
+                DSVFormat: DXGI_FORMAT(s.depth_format as i32),
+                SampleDesc: DXGI_SAMPLE_DESC { Count: s.samples.max(1), Quality: 0 },
+                NodeMask: 0,
+                CachedPSO: D3D12_CACHED_PIPELINE_STATE::default(),
+                Flags: D3D12_PIPELINE_STATE_FLAG_NONE,
+            };
+            // SAFETY: opis z poprawnymi wskaźnikami na czas wywołania.
+            let pso: windows::core::Result<ID3D12PipelineState> =
+                unsafe { self.device.CreateGraphicsPipelineState(&desc) };
+            pso.map(|_| ()).map_err(|e| format!("{e}"))
+        }
+
+        /// Potok compute z gotowego bloba root signature.
+        pub fn compute_with(&self, rs_blob: &[u8], cs: &[u8]) -> Result<(), String> {
+            let rs = self.root_signature(rs_blob)?;
+            self.compute(&rs, cs)
+        }
+
+        /// Czy karta obsługuje mesh shadery (D3D12_OPTIONS7).
+        pub fn mesh_shaders(&self) -> bool {
+            let mut o = D3D12_FEATURE_DATA_D3D12_OPTIONS7::default();
+            // SAFETY: struktura opcji o właściwym rozmiarze.
+            unsafe {
+                self.device.CheckFeatureSupport(
+                    D3D12_FEATURE_D3D12_OPTIONS7,
+                    &mut o as *mut _ as *mut c_void,
+                    std::mem::size_of_val(&o) as u32,
+                )
+            }
+            .is_ok()
+                && o.MeshShaderTier != D3D12_MESH_SHADER_TIER_NOT_SUPPORTED
+        }
+
         pub fn raw(&self) -> *mut c_void {
             self.device.as_raw()
         }
@@ -136,6 +278,137 @@ mod d3d {
                 let _ = windows::Win32::Foundation::CloseHandle(event);
                 result.map_err(|e| format!("SetBackgroundProcessingMode: {e}"))
             }
+        }
+    }
+}
+
+/// Shader ze zrzutu Dagora potrzebny potokom graficznym: nagłówek i kod.
+enum Stored {
+    Pixel((dagor::Header, Vec<u8>)),
+    Vertex {
+        vs: (dagor::Header, Vec<u8>),
+        hs: Option<(dagor::Header, Vec<u8>)>,
+        ds: Option<(dagor::Header, Vec<u8>)>,
+        gs: Option<(dagor::Header, Vec<u8>)>,
+    },
+}
+
+/// Urządzenie D3D12 dla testów sprzętowych innych modułów.
+#[cfg(all(test, windows))]
+pub fn test_device() -> Result<d3d::Device, String> {
+    d3d::gpu_device()
+}
+
+/// Kod etapów potoku graficznego (pusty = brak etapu).
+#[derive(Clone, Debug, Default)]
+pub struct GraphicsStages {
+    pub vs: Vec<u8>,
+    pub ps: Vec<u8>,
+    pub hs: Vec<u8>,
+    pub ds: Vec<u8>,
+    pub gs: Vec<u8>,
+}
+
+/// Element układu wejścia (format jako wartość DXGI_FORMAT).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct InputElement {
+    pub semantic: String,
+    pub index: u32,
+    pub format: u32,
+    pub slot: u32,
+    pub offset: u32,
+    /// 0 = dane wierzchołków, >0 = dane instancji co tyle instancji.
+    pub instance_rate: u32,
+}
+
+/// Mieszanie jednego celu renderowania (wartości wyliczeń D3D12).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Blend {
+    pub enable: bool,
+    pub src: u32,
+    pub dst: u32,
+    pub op: u32,
+    pub src_alpha: u32,
+    pub dst_alpha: u32,
+    pub op_alpha: u32,
+    /// D3D12_COLOR_WRITE_ENABLE (4 bity).
+    pub mask: u8,
+}
+
+impl Default for Blend {
+    fn default() -> Self {
+        // ONE, ZERO, ADD - mieszanie wyłączone.
+        Self { enable: false, src: 2, dst: 1, op: 1, src_alpha: 2, dst_alpha: 1, op_alpha: 1, mask: 0xF }
+    }
+}
+
+/// Stan potoku graficznego (wartości wyliczeń D3D12 i DXGI_FORMAT).
+/// Domyślny jest neutralny: sterownik NVIDIA nie wlicza stanu do klucza
+/// pamięci podręcznej, AMD i Intel - tak, więc tam stan musi być gry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GraphicsState {
+    pub inputs: Vec<InputElement>,
+    /// Formaty celów renderowania, do 8 (0 = brak celu w tym gnieździe).
+    pub render_targets: Vec<u32>,
+    pub samples: u32,
+    /// DXGI_FORMAT bufora głębi (0 = brak).
+    pub depth_format: u32,
+    /// D3D12_PRIMITIVE_TOPOLOGY_TYPE (3 = trójkąty, 4 = łaty).
+    pub topology: u32,
+    pub wireframe: bool,
+    /// D3D12_CULL_MODE (1 brak, 2 przód, 3 tył).
+    pub cull: u32,
+    /// Przód trójkąta przeciwnie do wskazówek zegara (UE: tak, Dagor: nie).
+    pub front_ccw: bool,
+    pub depth_bias: i32,
+    pub slope_bias: f32,
+    pub depth_clip: bool,
+    pub forced_samples: u32,
+    pub conservative: bool,
+    pub depth_enable: bool,
+    pub depth_write: bool,
+    pub depth_func: u32,
+    pub stencil_enable: bool,
+    pub stencil_read: u8,
+    pub stencil_write: u8,
+    pub stencil_func: u32,
+    pub stencil_fail: u32,
+    pub stencil_depth_fail: u32,
+    pub stencil_pass: u32,
+    pub alpha_to_coverage: bool,
+    pub independent_blend: bool,
+    pub blend: [Blend; 8],
+}
+
+impl Default for GraphicsState {
+    fn default() -> Self {
+        Self {
+            inputs: Vec::new(),
+            render_targets: Vec::new(),
+            samples: 1,
+            depth_format: 0,
+            topology: 3,
+            wireframe: false,
+            cull: 1,
+            front_ccw: false,
+            depth_bias: 0,
+            slope_bias: 0.0,
+            depth_clip: true,
+            forced_samples: 0,
+            conservative: false,
+            depth_enable: false,
+            depth_write: false,
+            depth_func: 7, // GREATER_EQUAL
+            stencil_enable: false,
+            stencil_read: 0xFF,
+            stencil_write: 0xFF,
+            stencil_func: 8, // ALWAYS
+            stencil_fail: 1, // KEEP
+            stencil_depth_fail: 1,
+            stencil_pass: 1,
+            alpha_to_coverage: false,
+            independent_blend: false,
+            blend: [Blend::default(); 8],
         }
     }
 }
@@ -226,14 +499,61 @@ pub fn run_host(args: &[String]) -> i32 {
         }
     }
 
+    // Pamięć potoków gry (cache\dx12.cache): potoki graficzne do odtworzenia.
+    let pipelines = args.get(2).and_then(|p| match super::dagor_cache::Cache::open(Path::new(p)) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            say(format!("warning {e}"));
+            None
+        }
+    });
+    // Skróty shaderów potrzebnych potokom graficznym.
+    let wanted: std::collections::HashSet<[u8; 20]> = pipelines
+        .iter()
+        .flat_map(|c| c.graphics.iter().flat_map(|g| [g.vs, g.ps]))
+        .collect();
+    let mut stages: std::collections::HashMap<[u8; 20], Stored> = Default::default();
+
     // Lista zadań: shadery compute z rozpakowanym kodem.
     let mut jobs: Vec<(usize, StageCode, Vec<u8>)> = Vec::new();
     let read = dump.for_each_shader(|i, data| {
-        if let Some(Container::Single(s)) = dump.container(i) {
-            if s.header.stage == dagor::Stage::Compute && s.bytecode.end <= data.len() {
-                let code = data[s.bytecode.clone()].to_vec();
-                jobs.push((i, s, code));
+        let hash = dump
+            .metadata(i)
+            .and_then(|m| m.get(4..24))
+            .map(|h| <[u8; 20]>::try_from(h).unwrap());
+        let code = |s: &StageCode| data.get(s.bytecode.clone()).map(|c| (s.header, c.to_vec()));
+        match dump.container(i) {
+            Some(Container::Single(s)) => {
+                if s.header.stage == dagor::Stage::Compute && s.bytecode.end <= data.len() {
+                    let code = data[s.bytecode.clone()].to_vec();
+                    jobs.push((i, s, code));
+                } else if let Some(h) = hash.filter(|h| wanted.contains(h)) {
+                    // Shader wierzchołków bez innych etapów też bywa
+                    // kontenerem pojedynczym.
+                    if let Some(c) = code(&s) {
+                        let stored = if s.header.stage == dagor::Stage::Vertex {
+                            Stored::Vertex { vs: c, hs: None, ds: None, gs: None }
+                        } else {
+                            Stored::Pixel(c)
+                        };
+                        stages.insert(h, stored);
+                    }
+                }
             }
+            Some(Container::Vertex { vertex, hull, domain, geometry }) => {
+                if let (Some(h), Some(vs)) = (hash.filter(|h| wanted.contains(h)), code(&vertex)) {
+                    stages.insert(
+                        h,
+                        Stored::Vertex {
+                            vs,
+                            hs: hull.as_ref().and_then(code),
+                            ds: domain.as_ref().and_then(code),
+                            gs: geometry.as_ref().and_then(code),
+                        },
+                    );
+                }
+            }
+            _ => {}
         }
         true
     });
@@ -241,7 +561,20 @@ pub fn run_host(args: &[String]) -> i32 {
         say(format!("fatal {e}"));
         return 3;
     }
-    let total = jobs.len();
+    // Potoki graficzne: (para VS+PS, wariant); siatki (topologia 0) pomijamy.
+    let graphics_jobs: Vec<(usize, usize)> = pipelines
+        .iter()
+        .flat_map(|c| {
+            c.graphics.iter().enumerate().flat_map(|(g, p)| {
+                p.variants
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, v)| v.topology != 0)
+                    .map(move |(v, _)| (g, v))
+            })
+        })
+        .collect();
+    let total = jobs.len() + graphics_jobs.len();
     say(format!("progress 0 {total}"));
 
     let done = std::sync::atomic::AtomicUsize::new(0);
@@ -253,8 +586,86 @@ pub fn run_host(args: &[String]) -> i32 {
     let threads = std::thread::available_parallelism()
         .map_or(4, |n| n.get())
         .clamp(2, 16);
-    let chunk = total.div_ceil(threads).max(1);
+    let chunk = jobs.len().div_ceil(threads).max(1);
+    let graphics_chunk = graphics_jobs.len().div_ceil(threads).max(1);
+    // Potoki graficzne bez shadera pikseli w zrzucie: gra używa wtedy
+    // pustego shadera pikseli sterownika Dagora - tworzymy potok bez niego.
+    let null_ps = std::sync::atomic::AtomicUsize::new(0);
+    let missing_vs = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|scope| {
+        if let Some(cache) = &pipelines {
+            for part in graphics_jobs.chunks(graphics_chunk) {
+                let (device, done, ok, cached, errors, say, stages, null_ps, missing_vs) = (
+                    &device, &done, &ok, &cached, &errors, &say, &stages, &null_ps, &missing_vs,
+                );
+                scope.spawn(move || {
+                    use std::sync::atomic::Ordering::Relaxed;
+                    for &(g, v) in part {
+                        let pair = &cache.graphics[g];
+                        let variant = &cache.graphics[g].variants[v];
+                        let result = match stages.get(&pair.vs) {
+                            Some(Stored::Vertex { vs, hs, ds, gs }) => {
+                                let ps = match stages.get(&pair.ps) {
+                                    Some(Stored::Pixel(ps)) => Some(ps),
+                                    _ => {
+                                        null_ps.fetch_add(1, Relaxed);
+                                        None
+                                    }
+                                };
+                                let mut headers = vec![&vs.0];
+                                headers.extend([ps, hs.as_ref(), ds.as_ref(), gs.as_ref()].into_iter().flatten().map(|s| &s.0));
+                                let props = properties(&headers, vs.0.in_out_semantic_mask != 0);
+                                let empty = dagor::Usage::default();
+                                let sig = rootsig::graphics(
+                                    props,
+                                    &vs.0.usage,
+                                    ps.map_or(&empty, |p| &p.0.usage),
+                                    hs.as_ref().map(|s| &s.0.usage),
+                                    ds.as_ref().map(|s| &s.0.usage),
+                                    gs.as_ref().map(|s| &s.0.usage),
+                                    cbv_root_descriptors,
+                                );
+                                let code = GraphicsStages {
+                                    vs: vs.1.clone(),
+                                    ps: ps.map(|p| p.1.clone()).unwrap_or_default(),
+                                    hs: hs.as_ref().map(|s| s.1.clone()).unwrap_or_default(),
+                                    ds: ds.as_ref().map(|s| s.1.clone()).unwrap_or_default(),
+                                    gs: gs.as_ref().map(|s| s.1.clone()).unwrap_or_default(),
+                                };
+                                let state = cache.state(variant);
+                                let started = std::time::Instant::now();
+                                let r = rootsig::serialize(&sig)
+                                    .and_then(|blob| device.root_signature(&blob))
+                                    .and_then(|rs| device.graphics(&rs, &code, &state));
+                                if r.is_ok() && started.elapsed() < std::time::Duration::from_millis(CACHED_MS) {
+                                    cached.fetch_add(1, Relaxed);
+                                }
+                                r
+                            }
+                            _ => {
+                                missing_vs.fetch_add(1, Relaxed);
+                                Err("brak shadera wierzchołków w zrzucie / vertex shader not in dump".into())
+                            }
+                        };
+                        match result {
+                            Ok(()) => {
+                                ok.fetch_add(1, Relaxed);
+                            }
+                            Err(e) => {
+                                let mut list = errors.lock().unwrap();
+                                if list.len() < 10 {
+                                    list.push(format!("G{g}/{v}: {e}"));
+                                }
+                            }
+                        }
+                        let n = done.fetch_add(1, Relaxed) + 1;
+                        if n % 50 == 0 || n == total {
+                            say(format!("progress {n} {total}"));
+                        }
+                    }
+                });
+            }
+        }
         for part in jobs.chunks(chunk) {
             let (device, done, ok, cached, errors, say) =
                 (&device, &done, &ok, &cached, &errors, &say);
@@ -292,6 +703,14 @@ pub fn run_host(args: &[String]) -> i32 {
     for e in errors.into_inner().unwrap() {
         say(format!("error {e}"));
     }
+    if !graphics_jobs.is_empty() {
+        say(format!(
+            "warning potoki graficzne z dx12.cache / graphics pipelines from dx12.cache: {}, bez shadera pikseli / without pixel shader: {}, brak VS / missing VS: {}",
+            graphics_jobs.len(),
+            null_ps.into_inner(),
+            missing_vs.into_inner()
+        ));
+    }
     say(format!(
         "result {ok} {} {}",
         total - ok,
@@ -305,6 +724,204 @@ pub fn run_host(args: &[String]) -> i32 {
     }
     // Zwolnienie urządzenia przed końcem procesu - sterownik dopisuje wtedy
     // pamięć podręczną na dysk.
+    drop(device);
+    0
+}
+
+// ------------------------ Unreal 5, Direct3D 12 -----------------------------
+
+/// Argument procesu kompilującego potoki DirectX 12 gry Unreal 5.
+pub const HOST_ARG_UE12: &str = "--shader-warm-ue12";
+
+/// Proces kompilujący: `--shader-warm-ue12 <folder gry>`. Potoki z pamięci
+/// potoków gry (`*.upipelinecache`), shadery SM6 z archiwów gry, root
+/// signature jak w RHI D3D12 silnika.
+#[cfg(windows)]
+pub fn run_host_ue12(args: &[String]) -> i32 {
+    use super::ue12;
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+    let out = std::io::stdout();
+    let say = |line: String| {
+        let mut o = out.lock();
+        let _ = writeln!(o, "{line}");
+        let _ = o.flush();
+    };
+    let Some(game) = args.first().map(PathBuf::from) else {
+        say("fatal użycie: --shader-warm-ue12 <folder gry>".into());
+        return 2;
+    };
+    // Potoki ze wszystkich pamięci potoków SM6 gry, bez powtórzeń.
+    let mut graphics: Vec<ue12::GraphicsPso> = Vec::new();
+    let mut compute: Vec<ue12::Hash> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (name, bytes) in ue12::pso_caches(&game) {
+        match ue12::PsoCache::parse(&bytes) {
+            Ok(c) => {
+                say(format!(
+                    "warning {name}: v{} platforma / platform {}, potoki graficzne / graphics {}, compute {}, pominięte / skipped {}",
+                    c.version,
+                    c.platform,
+                    c.graphics.len(),
+                    c.compute.len(),
+                    c.skipped
+                ));
+                for g in c.graphics {
+                    if seen.insert(format!("{g:?}")) {
+                        graphics.push(g);
+                    }
+                }
+                for h in c.compute {
+                    if !compute.contains(&h) {
+                        compute.push(h);
+                    }
+                }
+            }
+            Err(e) => say(format!("warning {name}: {e}")),
+        }
+    }
+    if graphics.is_empty() && compute.is_empty() {
+        say("fatal gra nie ma pamięci potoków DirectX 12 (*.upipelinecache) - nie ma z czego odtworzyć potoków".into());
+        return 3;
+    }
+    // Siatki (mesh/amplification) wymagają opisu strumieniowego - pomijamy.
+    let mesh = graphics.iter().filter(|g| g.ms != [0; 20]).count();
+    graphics.retain(|g| g.ms == [0; 20] && g.vs != [0; 20]);
+    let zero = [0u8; 20];
+    let wanted: std::collections::HashSet<ue12::Hash> = graphics
+        .iter()
+        .flat_map(|g| [g.vs, g.ps, g.gs])
+        .chain(compute.iter().copied())
+        .filter(|h| *h != zero)
+        .collect();
+    let mut notes = Vec::new();
+    let shaders = ue12::load_shaders(&game, &wanted, &mut notes);
+    for n in notes.iter().take(5) {
+        say(format!("warning {n}"));
+    }
+    let minor = ue12::game_minor(&game);
+    say(format!(
+        "warning UE 5.{}, shadery / shaders {} z / of {}, siatki pominięte / mesh skipped {mesh}",
+        minor.map_or("?".into(), |m| m.to_string()),
+        shaders.len(),
+        wanted.len()
+    ));
+    let device = match d3d::gpu_device() {
+        Ok(d) => d,
+        Err(e) => {
+            say(format!("fatal {e}"));
+            return 4;
+        }
+    };
+    say(format!("adapter {}", device.adapter));
+    let target = ue12::Target {
+        // Bez wersji: 5.4 (próg zmian samplerów); wynik w ostrzeżeniu wyżej.
+        minor: minor.unwrap_or(4),
+        mesh_shaders: device.mesh_shaders(),
+    };
+    let total = graphics.len() + compute.len();
+    say(format!("progress 0 {total}"));
+    let (done, ok, cached, missing) = (
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    );
+    let errors = Mutex::new(Vec::<String>::new());
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(2, 16);
+    // Zadanie: Ok(indeks potoku graficznego) albo Err(indeks compute).
+    let jobs: Vec<Result<usize, usize>> = (0..graphics.len()).map(Ok).chain((0..compute.len()).map(Err)).collect();
+    let chunk = jobs.len().div_ceil(threads).max(1);
+    std::thread::scope(|scope| {
+        for part in jobs.chunks(chunk) {
+            let (device, graphics, compute, shaders, done, ok, cached, missing, errors, say) = (
+                &device, &graphics, &compute, &shaders, &done, &ok, &cached, &missing, &errors, &say,
+            );
+            scope.spawn(move || {
+                let packed = |h: &ue12::Hash| shaders.get(h).and_then(|b| ue12::parse_packed(b));
+                for job in part {
+                    let started = std::time::Instant::now();
+                    let result: Result<(), String> = match *job {
+                        Ok(i) => {
+                            let g = &graphics[i];
+                            match (packed(&g.vs), (g.ps != zero).then(|| packed(&g.ps)), (g.gs != zero).then(|| packed(&g.gs))) {
+                                (Some(vs), Some(None), _) | (Some(vs), _, Some(None)) => {
+                                    let _ = vs;
+                                    missing.fetch_add(1, Relaxed);
+                                    Err("brak shadera w archiwach / shader not in archives".into())
+                                }
+                                (Some(vs), ps, gs) => {
+                                    let (ps, gs) = (ps.flatten(), gs.flatten());
+                                    let mut stages = vec![(ue12::Stage::Vertex, vs.counts)];
+                                    if let Some(p) = &ps {
+                                        stages.push((ue12::Stage::Pixel, p.counts));
+                                    }
+                                    if let Some(s) = &gs {
+                                        stages.push((ue12::Stage::Geometry, s.counts));
+                                    }
+                                    let code = GraphicsStages {
+                                        vs: vs.container.to_vec(),
+                                        ps: ps.map(|p| p.container.to_vec()).unwrap_or_default(),
+                                        gs: gs.map(|s| s.container.to_vec()).unwrap_or_default(),
+                                        ..Default::default()
+                                    };
+                                    ue12::serialize(&ue12::root_signature(&stages, target))
+                                        .and_then(|blob| device.root_signature(&blob))
+                                        .and_then(|rs| device.graphics(&rs, &code, &g.state()))
+                                }
+                                (None, ..) => {
+                                    missing.fetch_add(1, Relaxed);
+                                    Err("brak shadera w archiwach / shader not in archives".into())
+                                }
+                            }
+                        }
+                        Err(i) => match packed(&compute[i]) {
+                            Some(cs) => ue12::serialize(&ue12::root_signature(&[(ue12::Stage::Compute, cs.counts)], target))
+                                .and_then(|blob| device.compute_with(&blob, cs.container)),
+                            None => {
+                                missing.fetch_add(1, Relaxed);
+                                Err("brak shadera w archiwach / shader not in archives".into())
+                            }
+                        },
+                    };
+                    match result {
+                        Ok(()) => {
+                            ok.fetch_add(1, Relaxed);
+                            if started.elapsed() < std::time::Duration::from_millis(CACHED_MS) {
+                                cached.fetch_add(1, Relaxed);
+                            }
+                        }
+                        Err(e) => {
+                            let mut list = errors.lock().unwrap();
+                            if list.len() < 10 {
+                                list.push(match job {
+                                    Ok(i) => format!("G{i}: {e}"),
+                                    Err(i) => format!("C{i}: {e}"),
+                                });
+                            }
+                        }
+                    }
+                    let n = done.fetch_add(1, Relaxed) + 1;
+                    if n % 50 == 0 || n == total {
+                        say(format!("progress {n} {total}"));
+                    }
+                }
+            });
+        }
+    });
+    for e in errors.into_inner().unwrap() {
+        say(format!("error {e}"));
+    }
+    let missing = missing.into_inner();
+    if missing > 0 {
+        say(format!("warning potoki bez shadera w archiwach / pipelines with a shader missing: {missing}"));
+    }
+    let ok = ok.into_inner();
+    say(format!("result {ok} {} {}", total - ok, cached.into_inner()));
+    if device.vendor == super::Vendor::Amd {
+        if let Err(e) = device.commit(std::time::Duration::from_secs(1800)) {
+            say(format!("warning {e}"));
+        }
+    }
     drop(device);
     0
 }
@@ -325,6 +942,7 @@ mod d3d11 {
     pub struct Device {
         device: ID3D11Device,
         pub adapter: String,
+        pub vendor: super::super::Vendor,
     }
 
     // Metody Create* urządzenia D3D11 są wolnowątkowe (bez flagi
@@ -334,7 +952,7 @@ mod d3d11 {
 
     /// Urządzenie D3D11 na karcie NVIDIA albo AMD (patrz `pick_adapter`).
     pub fn gpu_device() -> Result<Device, String> {
-        let (adapter, _vendor, name) = super::super::pick_adapter()?;
+        let (adapter, vendor, name) = super::super::pick_adapter()?;
         // SAFETY: karta z DXGI, poprawne argumenty.
         unsafe {
             {
@@ -354,6 +972,7 @@ mod d3d11 {
                 Ok(Device {
                     device: device.ok_or("D3D11CreateDevice: brak urządzenia")?,
                     adapter: name,
+                    vendor,
                 })
             }
         }
@@ -385,6 +1004,46 @@ mod d3d11 {
             };
             r.map_err(|e| format!("{e}"))?
                 .ok_or_else(|| "brak obiektu shadera".to_string())
+        }
+
+        /// Układ wejścia zbudowany z sygnatury wejść shadera wierzchołków
+        /// (ISGN): jeden bufor, elementy kolejno, formaty 32-bitowe o liczbie
+        /// składowych z maski. Sterownik AMD kompiluje shader wierzchołków
+        /// dopiero z układem wejścia - gry zwykle opisują wejścia tak samo
+        /// jak sygnatura, więc trafienie w pamięć podręczną jest prawdopodobne.
+        /// `None`: shader bez wejść z bufora albo sygnatura nieczytelna.
+        pub fn input_layout(&self, vs: &[u8]) -> Option<ID3D11DeviceChild> {
+            use windows::Win32::Graphics::Dxgi::Common::*;
+            let elements = super::super::unity::input_signature(vs);
+            if elements.is_empty() {
+                return None;
+            }
+            let format = |component: u32, count: u32| -> DXGI_FORMAT {
+                let table = match component {
+                    1 => [DXGI_FORMAT_R32_UINT, DXGI_FORMAT_R32G32_UINT, DXGI_FORMAT_R32G32B32_UINT, DXGI_FORMAT_R32G32B32A32_UINT],
+                    2 => [DXGI_FORMAT_R32_SINT, DXGI_FORMAT_R32G32_SINT, DXGI_FORMAT_R32G32B32_SINT, DXGI_FORMAT_R32G32B32A32_SINT],
+                    _ => [DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT],
+                };
+                table[(count.clamp(1, 4) - 1) as usize]
+            };
+            let descs: Vec<D3D11_INPUT_ELEMENT_DESC> = elements
+                .iter()
+                .map(|e| D3D11_INPUT_ELEMENT_DESC {
+                    // Nazwa zakończona zerem leży w kodzie shadera (żyje do
+                    // końca wywołania).
+                    SemanticName: windows::core::PCSTR(vs[e.name_at..].as_ptr()),
+                    SemanticIndex: e.index,
+                    Format: format(e.component, e.count),
+                    InputSlot: 0,
+                    AlignedByteOffset: D3D11_APPEND_ALIGNED_ELEMENT,
+                    InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
+                    InstanceDataStepRate: 0,
+                })
+                .collect();
+            let mut layout = None;
+            // SAFETY: opisy i kod żyją do końca wywołania.
+            unsafe { self.device.CreateInputLayout(&descs, vs, Some(&mut layout)) }.ok()?;
+            layout.map(ID3D11DeviceChild::from)
         }
     }
 
@@ -456,13 +1115,64 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
     // Źródło: "unity <folder _Data>", "dagor <zrzut .shdump.bin DX11>" albo
     // "unreal <paczka .pak>" (archiwa shaderów SM5 z paczki).
     let (kind, source) = match (args.first().map(String::as_str), args.get(1)) {
-        (Some(k @ ("unity" | "dagor" | "unreal")), Some(p)) => (k, p.clone()),
+        (Some(k @ ("unity" | "dagor" | "unreal" | "iostore" | "source2" | "loose")), Some(p)) => {
+            (k, p.clone())
+        }
         (Some(p), None) => ("unity", p.to_owned()),
         _ => {
-            say("fatal użycie: --shader-warm-d3d11 <unity|dagor|unreal> <ścieżka>".into());
+            say("fatal użycie: --shader-warm-d3d11 <unity|dagor|unreal|source2|loose> <ścieżka>".into());
             return 2;
         }
     };
+    // Source 2: pliki .vcs DirectX z paczek VPK gry (folder gry).
+    let source2_vpks: Vec<super::source2::Vpk> = if kind == "source2" {
+        super::source2::shader_vpks(Path::new(&source))
+            .iter()
+            .filter_map(|p| match super::source2::Vpk::open(p) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    say(format!("warning {}: {e}", p.display()));
+                    None
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let source2_items: Vec<(usize, usize)> = source2_vpks
+        .iter()
+        .enumerate()
+        .flat_map(|(v, vpk)| {
+            vpk.entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| super::source2::is_dx_shader(&e.path))
+                .map(move |(i, _)| (v, i))
+        })
+        .collect();
+    if kind == "source2" && source2_items.is_empty() {
+        say("fatal nie znaleziono plików .vcs DirectX w paczkach VPK gry".into());
+        return 3;
+    }
+    // Unreal 5 (IoStore): grupy shaderów z bibliotek z kodem SM5 (DXBC);
+    // biblioteki z samym DXIL (DirectX 12) pomijamy.
+    let io = (kind == "iostore").then(|| super::unreal::IoShaders::open(Path::new(&source)));
+    let io_items: Vec<(usize, usize)> = match &io {
+        Some(io) => {
+            for n in io.notes.iter().take(5) {
+                say(format!("warning {n}"));
+            }
+            (0..io.libs.len())
+                .filter(|&l| io.has_sm5(l))
+                .flat_map(|l| (0..io.libs[l].1.groups.len()).map(move |g| (l, g)))
+                .collect()
+        }
+        None => Vec::new(),
+    };
+    if kind == "iostore" && io_items.is_empty() {
+        say("fatal kontenery IoStore gry nie mają shaderów DirectX 11 (SM5) - gra ma tylko DirectX 12 albo są szyfrowane".into());
+        return 3;
+    }
     let data_dir = &source;
     // Unreal: archiwa SM5 (DXBC) wczytane w całości (Palworld: 191 + 9 MB).
     let unreal_archives: Vec<(super::unreal_pak::Archive, Vec<u8>)> = if kind == "unreal" {
@@ -503,15 +1213,21 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
     say(format!("adapter {}", device.adapter));
     let mut device = Some(device);
 
-    let files = if dagor_dump.is_some() || kind == "unreal" {
-        Vec::new()
-    } else {
-        unity::candidate_files(Path::new(data_dir))
+    let files = match kind {
+        "unity" => unity::candidate_files(Path::new(data_dir)),
+        "loose" => super::loose::shader_files(Path::new(data_dir))
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect(),
+        _ => Vec::new(),
     };
+    let loose = kind == "loose";
     let scan_total = dagor_dump
         .as_ref()
         .map_or(files.len(), |d| d.shader_count())
-        .max(unreal_items.len());
+        .max(unreal_items.len())
+        .max(source2_items.len())
+        .max(io_items.len());
     say(format!("scan 0 {scan_total}"));
     let next_file = AtomicUsize::new(0);
     let next_item = AtomicUsize::new(0);
@@ -526,6 +1242,11 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
     let cpus = std::thread::available_parallelism().map_or(4, |n| n.get());
     let scanners = (cpus / 4).clamp(1, 4);
     let (mut done, mut ok) = (0usize, 0usize);
+    let zstd_failed = AtomicUsize::new(0);
+    // Shadery wierzchołków i ile z nich dostało układ wejścia (AMD, Intel).
+    let (mut vertex, mut layouts) = (0usize, 0usize);
+    // Diagnostyka: TC_INPUT_LAYOUT=1 buduje układy wejścia także na NVIDII.
+    let want_layouts = std::env::var_os("TC_INPUT_LAYOUT").is_some_and(|v| v == "1");
 
     std::thread::scope(|scope| {
         // Dagor DX11: jeden zrzut, shadery rozpakowywane po kolei.
@@ -588,6 +1309,87 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
                 }
             });
         }
+        // Unreal IoStore: grupy shaderów (porcje, Oodle), kilka wątków.
+        for _ in 0..if io_items.is_empty() { 0 } else { scanners } {
+            let tx = tx.clone();
+            let (items, io, next_item, items_done, seen, found, errors, say) = (
+                &io_items,
+                io.as_ref().unwrap(),
+                &next_item,
+                &items_done,
+                &seen,
+                &found,
+                &errors,
+                &say,
+            );
+            scope.spawn(move || loop {
+                let i = next_item.fetch_add(1, Relaxed);
+                let Some(&(l, g)) = items.get(i) else { break };
+                match io.group(l, g) {
+                    Ok(data) => {
+                        for (_, code) in io.libs[l].1.split(g, &data) {
+                            unity::carve_dxbc(code, |d| {
+                                if seen.lock().unwrap().insert(d.digest()) {
+                                    found.fetch_add(1, Relaxed);
+                                    let _ = tx.send((d.stage, d.code.to_vec()));
+                                }
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        let mut list = errors.lock().unwrap();
+                        if list.len() < 10 {
+                            list.push(e);
+                        }
+                    }
+                }
+                let n = items_done.fetch_add(1, Relaxed) + 1;
+                if n % 100 == 0 || n == items.len() {
+                    say(format!("scan {n} {}", items.len()));
+                }
+            });
+        }
+        // Source 2: pliki .vcs z paczek VPK, kilka wątków.
+        let zstd_failed = &zstd_failed;
+        for _ in 0..if source2_items.is_empty() { 0 } else { scanners } {
+            let tx = tx.clone();
+            let (items, vpks, next_item, items_done, seen, found, errors, say) = (
+                &source2_items,
+                &source2_vpks,
+                &next_item,
+                &items_done,
+                &seen,
+                &found,
+                &errors,
+                &say,
+            );
+            scope.spawn(move || loop {
+                let i = next_item.fetch_add(1, Relaxed);
+                let Some(&(v, e)) = items.get(i) else { break };
+                let entry = &vpks[v].entries[e];
+                match vpks[v].read(entry) {
+                    Ok(bytes) => {
+                        let failed = super::source2::carve_vcs(&bytes, &mut |d| {
+                            if seen.lock().unwrap().insert(d.digest()) {
+                                found.fetch_add(1, Relaxed);
+                                let _ = tx.send((d.stage, d.code.to_vec()));
+                            }
+                        });
+                        zstd_failed.fetch_add(failed, Relaxed);
+                    }
+                    Err(err) => {
+                        let mut list = errors.lock().unwrap();
+                        if list.len() < 10 {
+                            list.push(format!("{}: {err}", entry.path));
+                        }
+                    }
+                }
+                let n = items_done.fetch_add(1, Relaxed) + 1;
+                if n % 100 == 0 || n == items.len() {
+                    say(format!("scan {n} {}", items.len()));
+                }
+            });
+        }
         for _ in 0..scanners.min(files.len()) {
             let tx = tx.clone();
             let (files, next_file, files_done, seen, found, errors, say) = (
@@ -602,12 +1404,17 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
             scope.spawn(move || loop {
                 let i = next_file.fetch_add(1, Relaxed);
                 let Some(path) = files.get(i) else { break };
-                let result = unity::scan_file(path, &mut |d| {
+                let mut send = |d: unity::Dxbc| {
                     if seen.lock().unwrap().insert(d.digest()) {
                         found.fetch_add(1, Relaxed);
                         let _ = tx.send((d.stage, d.code.to_vec()));
                     }
-                });
+                };
+                let result = if loose {
+                    super::loose::scan_file(path, &mut send)
+                } else {
+                    unity::scan_file(path, &mut send).map(|_| ())
+                };
                 if let Err(e) = result {
                     let mut list = errors.lock().unwrap();
                     if list.len() < 10 {
@@ -635,10 +1442,25 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
             // Shadery partii żyją, aż sterownik skończy je kompilować.
             let mut keep = Vec::with_capacity(BATCH);
             let mut count = 0;
+            let mut created = 0;
             for (stage, code) in jobs.by_ref().take(BATCH) {
                 count += 1;
                 match device.create(stage, &code) {
-                    Ok(shader) => keep.push(shader),
+                    Ok(shader) => {
+                        keep.push(shader);
+                        created += 1;
+                        // NVIDIA kompiluje shader wierzchołków bez układu
+                        // wejścia; AMD i Intel - dopiero z nim.
+                        if stage == unity::Stage::Vertex
+                            && (device.vendor != super::Vendor::Nvidia || want_layouts)
+                        {
+                            vertex += 1;
+                            if let Some(layout) = device.input_layout(&code) {
+                                keep.push(layout);
+                                layouts += 1;
+                            }
+                        }
+                    }
                     Err(e) => {
                         let mut list = errors.lock().unwrap();
                         if list.len() < 10 {
@@ -648,7 +1470,7 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
                 }
             }
             d3d11::wait_driver_idle(std::time::Duration::from_secs(600));
-            ok += keep.len();
+            ok += created;
             done += count;
             drop(keep);
             drop(device);
@@ -657,6 +1479,20 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
     });
     for e in errors.into_inner().unwrap() {
         say(format!("error {e}"));
+    }
+    if vertex > 0 {
+        say(format!(
+            "warning układ wejścia z sygnatury / input layout from signature: {layouts} / {vertex}"
+        ));
+    }
+    let zstd_failed = zstd_failed.into_inner();
+    if zstd_failed > 0 {
+        say(format!(
+            "warning ramki zstd nierozpakowane / zstd frames not unpacked: {zstd_failed}"
+        ));
+    }
+    if found.load(Relaxed) == 0 && loose {
+        say("warning w plikach gry nie ma jawnych shaderów DXBC / no plain DXBC shaders in the game files".into());
     }
     say(format!("result {ok} {}", done - ok));
     0
@@ -1311,13 +2147,26 @@ pub struct Progress {
 #[derive(Clone, Debug)]
 pub enum Job {
     /// Zrzut shaderów Dagor DirectX 12 (compute) i tryb buforów stałych.
-    Dagor { dump: PathBuf, cbv_ranges: bool },
+    Dagor {
+        dump: PathBuf,
+        cbv_ranges: bool,
+        /// `cache\dx12.cache` gry - potoki graficzne do odtworzenia.
+        pipelines: Option<PathBuf>,
+    },
     /// Folder `*_Data` gry Unity (DirectX 11).
     Unity { data_dir: PathBuf },
     /// Zrzut shaderów Dagor DirectX 11 (kontenery DXBC).
     DagorDx11 { dump: PathBuf },
     /// Paczka `.pak` gry Unreal (archiwa shaderów SM5, DirectX 11).
     Unreal { pak: PathBuf },
+    /// Folder gry Unreal 5 - potoki DirectX 12 z pamięci potoków gry.
+    UnrealDx12 { game: PathBuf },
+    /// Folder gry Unreal 5 z kontenerami IoStore (shadery SM5).
+    UnrealIo { game: PathBuf },
+    /// Folder gry Source 2 (pliki .vcs DirectX z paczek VPK).
+    Source2 { game: PathBuf },
+    /// Folder gry bez rozpoznanego silnika (jawne kontenery DXBC).
+    Loose { game: PathBuf },
 }
 
 /// Uruchomiona kompilacja jednej gry.
@@ -1402,10 +2251,13 @@ impl Warm {
         std::thread::spawn(move || {
             let mut cmd = std::process::Command::new(&host);
             match &job {
-                Job::Dagor { dump, cbv_ranges } => {
+                Job::Dagor { dump, cbv_ranges, pipelines } => {
                     cmd.arg(HOST_ARG)
                         .arg(dump)
                         .arg(if *cbv_ranges { "1" } else { "0" });
+                    if let Some(p) = pipelines {
+                        cmd.arg(p);
+                    }
                 }
                 Job::Unity { data_dir } => {
                     cmd.arg(HOST_ARG_D3D11).arg("unity").arg(data_dir);
@@ -1415,6 +2267,18 @@ impl Warm {
                 }
                 Job::DagorDx11 { dump } => {
                     cmd.arg(HOST_ARG_D3D11).arg("dagor").arg(dump);
+                }
+                Job::UnrealDx12 { game } => {
+                    cmd.arg(HOST_ARG_UE12).arg(game);
+                }
+                Job::UnrealIo { game } => {
+                    cmd.arg(HOST_ARG_D3D11).arg("iostore").arg(game);
+                }
+                Job::Source2 { game } => {
+                    cmd.arg(HOST_ARG_D3D11).arg("source2").arg(game);
+                }
+                Job::Loose { game } => {
+                    cmd.arg(HOST_ARG_D3D11).arg("loose").arg(game);
                 }
             }
             cmd.stdout(std::process::Stdio::piped())

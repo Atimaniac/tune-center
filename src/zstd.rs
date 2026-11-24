@@ -490,6 +490,17 @@ impl Decoder {
         Ok(out)
     }
 
+    /// Rozpakowuje jedną ramkę zaczynającą się na początku `src` (dane za nią
+    /// są pomijane); zwraca wynik i długość ramki w bajtach.
+    pub fn decompress_frame(&self, src: &[u8], max: usize) -> Result<(Vec<u8>, usize), String> {
+        if u32_le(src, 0)? != MAGIC {
+            return Err(err("to nie są dane zstd"));
+        }
+        let mut out = Vec::new();
+        let end = self.frame(src, 4, &mut out, max)?;
+        Ok((out, end))
+    }
+
     fn frame(&self, src: &[u8], mut at: usize, out: &mut Vec<u8>, max: usize) -> Result<usize, String> {
         let desc = *src.get(at).ok_or_else(|| err("ucięty nagłówek"))?;
         at += 1;

@@ -8,6 +8,7 @@ pub enum Engine {
     Unreal,
     Unity,
     Dagor,
+    Source2,
     Unknown,
 }
 
@@ -17,6 +18,7 @@ impl Engine {
             Engine::Unreal => "Unreal Engine",
             Engine::Unity => "Unity",
             Engine::Dagor => "Dagor Engine",
+            Engine::Source2 => "Source 2",
             Engine::Unknown => crate::i18n::tr("nieznany", "unknown"),
         }
     }
@@ -34,6 +36,10 @@ pub enum ShaderKind {
     UnityAssets,
     /// Archiwum shaderów Unreal (*.ushaderbytecode) albo kontenery IoStore/pak.
     UnrealArchive,
+    /// Paczka VPK z shaderami Source 2 (`shaders_pc_dir.vpk`).
+    Source2Vpk,
+    /// Plik gry z jawnymi kontenerami DXBC (silnik nierozpoznany).
+    LooseDxbc,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -55,6 +61,8 @@ pub struct Info {
     pub scskiller_recorder: bool,
     /// Unreal: paczki szyfrowane (shaderów nie da się odczytać).
     pub encrypted: bool,
+    /// Unreal 5: gra ma pamięć potoków DirectX 12 (`*.upipelinecache`).
+    pub ue_pso_cache: bool,
 }
 
 impl Info {
@@ -96,6 +104,7 @@ pub fn inspect(dir: &Path) -> Info {
         shaders: Vec::new(),
         scskiller_recorder: dir.join("scskiller.cfg").is_file(),
         encrypted: false,
+        ue_pso_cache: false,
     };
 
     // Anty-cheat: tylko po nazwach plików i katalogów.
@@ -141,6 +150,35 @@ pub fn inspect(dir: &Path) -> Info {
         info.engine = Engine::Dagor;
         info.api = dagor_api(dir);
         return info;
+    }
+
+    // Source 2: game\bin\win64 i paczki shaders*_dir.vpk w game\<mod>.
+    if dir.join("game").join("bin").join("win64").is_dir() {
+        let vpks = super::source2::shader_vpks(dir);
+        if !vpks.is_empty() {
+            info.engine = Engine::Source2;
+            for path in vpks {
+                // Paczka _dir i jej archiwa _NNN.
+                let stem = name_of(&path).trim_end_matches("_dir.vpk").to_owned();
+                let bytes = std::fs::read_dir(path.parent().unwrap_or(dir))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter(|e| {
+                        let n = e.file_name().to_string_lossy().to_lowercase();
+                        n.starts_with(&stem) && n.ends_with(".vpk")
+                    })
+                    .filter_map(|e| e.metadata().ok())
+                    .map(|m| m.len())
+                    .sum();
+                info.shaders.push(ShaderFile {
+                    path,
+                    kind: ShaderKind::Source2Vpk,
+                    bytes,
+                });
+            }
+            return info;
+        }
     }
 
     // Unity: UnityPlayer.dll i folder *_Data.
@@ -209,6 +247,7 @@ pub fn inspect(dir: &Path) -> Info {
             });
         // API: DefaultEngine.ini z największej paczki .pak (IoStore jeszcze nie).
         if !info.encrypted {
+            info.ue_pso_cache = super::ue12::has_pso_cache(dir);
             info.api = super::unreal_pak::find_pak(dir)
                 .and_then(|p| super::unreal_pak::default_api(&p))
                 .map(str::to_owned);
@@ -218,6 +257,19 @@ pub fn inspect(dir: &Path) -> Info {
                 path: path.clone(),
                 kind: ShaderKind::UnrealArchive,
                 bytes: *len,
+            });
+        }
+        return info;
+    }
+
+    // Silnik nierozpoznany: pliki shaderów z jawnym kodem DXBC (czy w nich
+    // jest, okaże się przy kompilacji - spakowanych nie rozpakowujemy).
+    if !dir.join("Engine").is_dir() {
+        for (path, bytes) in super::loose::shader_files(dir) {
+            info.shaders.push(ShaderFile {
+                path,
+                kind: ShaderKind::LooseDxbc,
+                bytes,
             });
         }
     }

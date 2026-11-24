@@ -68,7 +68,13 @@ Tune Center korzysta z poniższych składników. Są dołączane bez zmian.
   `ControlLib.dll`, wyłącznie na platformach Intela.
 - CUE4Parse (https://github.com/FabianFG/CUE4Parse, Apache-2.0): układ paczek
   Unreal Engine `.pak` / IoStore i archiwów shaderów (`.ushaderbytecode`)
-  używany przy kompilacji shaderów z góry.
+  oraz pamięci potoków DirectX 12 (`.upipelinecache`) i spakowanych shaderów
+  SM6 - używany przy kompilacji shaderów z góry.
+- DagorEngine (https://github.com/GaijinEntertainment/DagorEngine, BSD-3-Clause):
+  układ pamięci potoków DirectX 12 (`cache\dx12.cache`), zrzutu shaderów i
+  root signature - do odtwarzania potoków graficznych gier na Dagorze.
+- Valve Developer Community (https://developer.valvesoftware.com/wiki/VPK):
+  format archiwów VPK, do czytania paczek shaderów Source 2.
 
 ## oozextract (crate Rust)
 

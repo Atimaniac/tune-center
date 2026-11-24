@@ -231,9 +231,12 @@ udostępnia pobierania gotowych shaderów; Tune Center czyta je z plików gry.
   grafiki (z logu Unity / konfiguracji Dagora), anty-cheatu i plików
   shaderów; rozmiar pamięci podręcznej shaderów sterownika (oficjalne
   ustawienie DRS) i zajętość folderu `%LOCALAPPDATA%\NVIDIA\DXCache`.
-- **Etap 2 (częściowo gotowy)**: Dagor Engine DirectX 12 - przycisk
+- **Etap 2 (gotowy)**: Dagor Engine DirectX 12 - przycisk
   "Kompiluj shadery" w szczegółach gry kompiluje shadery obliczeniowe
-  (compute); graficzne w kolejnej wersji. Kompiluje sterownik Nvidii przez
+  (compute) oraz potoki graficzne odtworzone z pamięci potoków gry
+  (`cache\dx12.cache`, powstaje po pierwszej sesji w DX12): pary VS/PS,
+  topologia, układ wejścia, formaty celów renderowania i stan (blending,
+  głębia, rasteryzacja). Active Matter: 5525 potoków graficznych. Kompiluje sterownik Nvidii przez
   Direct3D 12, w procesie nazwanym tak jak gra (pamięć podręczna sterownika
   jest przypisana do nazwy pliku .exe), z gniazdem rozszerzeń shaderów
   ustawionym jak w grze (`NvAPI_D3D12_SetNvShaderExtnSlotSpace`). Gra musi
@@ -258,11 +261,27 @@ udostępnia pobierania gotowych shaderów; Tune Center czyta je z plików gry.
   (crate `oozextract`, albo `oo2core_*.dll` z gry) i kompiluje DXBC przez
   Direct3D 11 pod nazwą `*-Shipping.exe` gry. API gry z `DefaultEngine.ini`
   w paczce. Palworld: 56 690 shaderów, 5 min, ponownie 25 s. Gry z
-  szyfrowanymi paczkami (np. The Finals) są oznaczone jako nieobsługiwane;
-  IoStore (`.utoc`) i DirectX 12 - w przygotowaniu.
+  szyfrowanymi paczkami (np. The Finals) są oznaczone jako nieobsługiwane
+  (Tune Center nie łamie zabezpieczeń gier). Gry z kontenerami IoStore
+  (`.utoc`/`.ucas`) - biblioteki shaderów SM5 z kontenerów.
+- **Unreal Engine DirectX 12**: gdy gra ma pamięć potoków
+  (`*.upipelinecache` w paczce albo w `Saved`), Tune Center odtwarza z niej
+  potoki graficzne i obliczeniowe: shadery SM6 z archiwów gry, root signature
+  budowana tak jak w silniku (zależnie od wersji UE 5.x odczytanej z .exe),
+  formaty i stan potoku. Potoki z mesh shaderami są pomijane.
 - **Dagor Engine DirectX 11**: wszystkie shadery ze zrzutu
   `compiledShaders\game.ps50.shdump.bin` (kontenery DXBC) tą samą drogą co
   Unity. Active Matter: 8632 shadery, ok. 90 s.
+- **Source 2 DirectX 11** (np. Counter-Strike 2): shadery DirectX z plików
+  `.vcs` w paczkach VPK (`shaders*_dir.vpk`), także z ramek zstd.
+- **Inne gry DirectX 11** (nierozpoznany silnik): próba - luźne pliki
+  shaderów gry (`.cso`, `.fxo` itp.) przeszukiwane pod kątem kontenerów DXBC.
+- **AMD i Intel**: sterowniki tych firm biorą pod uwagę także układ wejścia
+  shadera wierzchołków, więc w DirectX 11 Tune Center tworzy go z sygnatury
+  wejścia shadera (`ISGN`).
+- **Raport** `tunecenter.exe --shader-report [fragment nazwy gry]` - tylko
+  odczyt: zapisuje `tunecenter-shaders.txt` z tym, co program znajduje w
+  plikach każdej gry (silnik, paczki, pamięci potoków, liczby shaderów).
 - **"Wyczyść shadery"** (obok "Kompiluj shadery", z potwierdzeniem "Czy jesteś
   pewny, że chcesz wyczyścić?") usuwa skompilowane shadery gry z pamięci
   podręcznej sterownika Nvidia (`DXCache`) i Windows (`D3DSCache`, m.in.

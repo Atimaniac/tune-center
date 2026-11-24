@@ -334,6 +334,8 @@ pub struct Code {
 /// FSerializedShaderArchive (plik `.ushaderbytecode`, wersja 2).
 pub struct Archive {
     pub shaders: Vec<Code>,
+    /// Skrót (FSHAHash) każdego shadera, w kolejności `shaders`.
+    pub hashes: Vec<[u8; 20]>,
     /// Początek bajtów shaderów w pliku.
     pub code_start: usize,
 }
@@ -357,7 +359,9 @@ impl Archive {
         let n = count(&mut c, 20)?;
         c.take(n * 20)?; // skróty map
         let n = count(&mut c, 20)?;
-        c.take(n * 20)?; // skróty shaderów
+        let hashes = (0..n)
+            .map(|_| c.take(20).map(|h| <[u8; 20]>::try_from(h).unwrap()))
+            .collect::<Result<Vec<_>, String>>()?;
         let n = count(&mut c, 16)?;
         c.take(n * 16)?; // wpisy map
         let n = count(&mut c, 17)?;
@@ -376,6 +380,7 @@ impl Archive {
         c.take(n * 4)?; // indeksy
         Ok(Self {
             shaders,
+            hashes,
             code_start: c.o,
         })
     }
@@ -471,6 +476,73 @@ pub fn sm5_archives(pak: &Path) -> Result<Vec<(Archive, Vec<u8>)>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Budowa spakowanego shadera SM6 (nagłówek UE, DXBC/DXIL, dane dodatkowe):
+    /// `TC_UNREAL_PAK=<plik .pak> cargo test unreal_sm6_layout -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn unreal_sm6_layout() {
+        let p = PathBuf::from(std::env::var("TC_UNREAL_PAK").unwrap());
+        let pak = Pak::open(&p).unwrap();
+        let e = pak
+            .files
+            .iter()
+            .find(|e| {
+                let l = e.path.to_lowercase();
+                l.ends_with(".ushaderbytecode") && l.contains("sm6") && !l.contains("global")
+            })
+            .unwrap();
+        let bytes = pak.read(e, None).unwrap();
+        let arch = Archive::parse(&bytes).unwrap();
+        println!("{}: shaderów {}, skrótów {}", e.path, arch.shaders.len(), arch.hashes.len());
+        for i in [0, 1, arch.shaders.len() / 2] {
+            let code = arch.code(&bytes, i, None).unwrap();
+            let dxbc = code.windows(4).position(|w| w == b"DXBC");
+            let size = dxbc.map(|d| u32::from_le_bytes(code[d + 24..d + 28].try_into().unwrap()) as usize);
+            println!(
+                "#{i} freq {} len {} DXBC@{dxbc:?} size {size:?}\n  head {:02x?}\n  tail {:02x?}",
+                arch.shaders[i].frequency,
+                code.len(),
+                &code[..48.min(code.len())],
+                &code[code.len().saturating_sub(64)..]
+            );
+            if let (Some(d), Some(s)) = (dxbc, size) {
+                let chunks = u32::from_le_bytes(code[d + 28..d + 32].try_into().unwrap()) as usize;
+                let names: Vec<String> = (0..chunks)
+                    .map(|k| {
+                        let off = u32::from_le_bytes(code[d + 32 + 4 * k..d + 36 + 4 * k].try_into().unwrap()) as usize;
+                        String::from_utf8_lossy(&code[d + off..d + off + 4]).into_owned()
+                    })
+                    .collect();
+                println!("  chunks {names:?}, za kontenerem {} B", code.len() - d - s);
+                // Dane dodatkowe: [klucz u8][rozmiar u32][dane]..., na końcu u32 długość całości.
+                let total = u32::from_le_bytes(code[code.len() - 4..].try_into().unwrap()) as usize;
+                let mut at = code.len() - total;
+                while at + 5 <= code.len() - 4 {
+                    let key = code[at];
+                    let n = u32::from_le_bytes(code[at + 1..at + 5].try_into().unwrap()) as usize;
+                    println!("  opt '{}' ({n} B): {:02x?}", key as char, &code[at + 5..(at + 5 + n).min(code.len())][..n.min(24)]);
+                    at += 5 + n;
+                }
+            }
+        }
+    }
+
+    /// Pliki shaderów i pamięci potoków w paczce (tylko lista):
+    /// `TC_UNREAL_PAK=<plik .pak> cargo test unreal_pak_list -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn unreal_pak_list() {
+        let p = PathBuf::from(std::env::var("TC_UNREAL_PAK").unwrap());
+        let pak = Pak::open(&p).unwrap();
+        for e in pak.files.iter().filter(|e| {
+            let l = e.path.to_lowercase();
+            l.contains("pipelinecache") || l.contains("shaderbytecode") || l.ends_with(".spc")
+                || l.contains("shadercache")
+        }) {
+            println!("{}", e.path);
+        }
+    }
 
     /// `TC_UNREAL_PAK=<plik .pak> cargo test unreal_pak_scan -- --ignored --nocapture`
     #[test]

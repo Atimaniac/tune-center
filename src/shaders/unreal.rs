@@ -19,7 +19,7 @@
 //!   tej biblioteki nie jest obsługiwana.
 //! - Paczki szyfrowane (AES) - nieobsługiwane (klucz jest w exe gry).
 
-// IoStore: na razie tylko wykrywanie szyfrowania; reszta czeka na jawną grę UE5 z .utoc.
+// Części czytnika używane tylko w testach i diagnostyce.
 #![allow(dead_code)]
 
 use std::fs::File;
@@ -217,7 +217,13 @@ impl Toc {
         if self.encrypted() {
             return Err("kontener szyfrowany (AES) - nieobsługiwany".into());
         }
-        let (offset, length) = self.spans[index];
+        self.read_checked(index, oodle)
+    }
+
+    /// Jak `read`, dla kontenera już sprawdzonego pod kątem szyfrowania
+    /// (sprawdzenie czyta pliki - za drogie dla każdej z tysięcy porcji).
+    fn read_checked(&self, index: usize, oodle: Option<&Oodle>) -> Result<Vec<u8>, String> {
+        let (offset, length) = *self.spans.get(index).ok_or("porcja poza tablicą")?;
         let mut out = Vec::with_capacity(length as usize);
         if length == 0 {
             return Ok(out);
@@ -560,6 +566,94 @@ pub fn container(code: &[u8]) -> Option<&[u8]> {
     let start = code.windows(4).position(|w| w == b"DXBC")?;
     let size = u32::from_le_bytes(code.get(start + 24..start + 28)?.try_into().ok()?) as usize;
     code.get(start..start + size)
+}
+
+/// Biblioteki shaderów ze wszystkich jawnych kontenerów IoStore gry i gdzie
+/// leżą porcje ich grup.
+pub struct IoShaders {
+    pub tocs: Vec<Toc>,
+    /// (kontener, biblioteka).
+    pub libs: Vec<(usize, Library)>,
+    /// Porcja grupy → (kontener, indeks porcji).
+    chunks: std::collections::HashMap<[u8; 12], (usize, usize)>,
+    /// Kontenery pominięte (szyfrowane, nieczytelne) i błędy bibliotek.
+    pub notes: Vec<String>,
+}
+
+impl IoShaders {
+    pub fn open(game: &Path) -> IoShaders {
+        let mut out = IoShaders {
+            tocs: Vec::new(),
+            libs: Vec::new(),
+            chunks: Default::default(),
+            notes: Vec::new(),
+        };
+        for path in tocs(game) {
+            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let toc = match Toc::open(&path) {
+                Ok(t) if !t.encrypted() => t,
+                Ok(_) => {
+                    out.notes.push(format!("{name}: szyfrowany / encrypted"));
+                    continue;
+                }
+                Err(e) => {
+                    out.notes.push(e);
+                    continue;
+                }
+            };
+            let t = out.tocs.len();
+            for (i, id) in toc.ids.iter().enumerate() {
+                if toc.chunk_type(i) == CHUNK_SHADER_CODE {
+                    out.chunks.entry(*id).or_insert((t, i));
+                }
+            }
+            for i in (0..toc.ids.len()).filter(|&i| toc.chunk_type(i) == CHUNK_SHADER_LIBRARY) {
+                match toc.read_checked(i, None).and_then(|d| Library::parse(&d)) {
+                    Ok(lib) => out.libs.push((t, lib)),
+                    Err(e) => out.notes.push(format!("{name}: {e}")),
+                }
+            }
+            out.tocs.push(toc);
+        }
+        out
+    }
+
+    /// Rozpakowane bajty grupy `g` biblioteki `l`.
+    pub fn group(&self, l: usize, g: usize) -> Result<Vec<u8>, String> {
+        let (_, lib) = &self.libs[l];
+        let grp = &lib.groups[g];
+        let &(t, i) = self
+            .chunks
+            .get(&grp.chunk)
+            .ok_or("brak porcji grupy shaderów / shader group chunk missing")?;
+        let raw = self.tocs[t].read_checked(i, None)?;
+        if grp.compressed == grp.uncompressed {
+            return Ok(raw);
+        }
+        let packed = raw
+            .get(..grp.compressed as usize)
+            .ok_or("grupa shaderów krótsza niż zapowiedziana")?;
+        decompress("oodle", packed, grp.uncompressed as usize, None)
+    }
+
+    /// Czy biblioteka ma kod DirectX 11 (DXBC SM5): pierwsza grupa z
+    /// kontenerami decyduje (biblioteki SM6 mają sam DXIL).
+    pub fn has_sm5(&self, l: usize) -> bool {
+        for g in 0..self.libs[l].1.groups.len().min(8) {
+            let Ok(data) = self.group(l, g) else { continue };
+            let (mut sm5, mut any) = (false, false);
+            for (_, code) in self.libs[l].1.split(g, &data) {
+                if container(code).is_some() {
+                    any = true;
+                }
+                super::unity::carve_dxbc(code, |_| sm5 = true);
+            }
+            if any {
+                return sm5;
+            }
+        }
+        false
+    }
 }
 
 /// Pliki `.utoc` gry (Content\Paks i Engine\...\Paks).

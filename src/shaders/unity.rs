@@ -607,6 +607,69 @@ fn container(b: &[u8]) -> Option<(Option<Dxbc<'_>>, usize)> {
     Some((stage.map(|stage| Dxbc { stage, code }), total))
 }
 
+/// Wejście shadera wierzchołków z sygnatury (fragment ISGN albo ISG1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputElement {
+    /// Przesunięcie nazwy semantyki (tekst zakończony zerem) w kontenerze.
+    pub name_at: usize,
+    pub index: u32,
+    /// 1 = uint, 2 = sint, 3 = float.
+    pub component: u32,
+    /// Liczba składowych (1-4) z maski.
+    pub count: u32,
+    pub register: u32,
+}
+
+/// Wejścia z danych bufora wierzchołków (bez wartości systemowych w rodzaju
+/// SV_VertexID), po kolei rejestrów.
+pub fn input_signature(code: &[u8]) -> Vec<InputElement> {
+    let mut out = Vec::new();
+    let Some(chunks) = le32(code, 28) else {
+        return out;
+    };
+    for k in 0..chunks.min(64) as usize {
+        let Some(off) = le32(code, 32 + 4 * k).map(|o| o as usize) else {
+            return out;
+        };
+        let (stride, extra) = match code.get(off..off + 4) {
+            Some(b"ISGN") => (24, 0),
+            Some(b"ISG1") => (32, 4),
+            _ => continue,
+        };
+        let data = off + 8;
+        let Some(count) = le32(code, data) else { return out };
+        for e in 0..count.min(64) as usize {
+            let at = data + 8 + e * stride + extra;
+            let (Some(name), Some(index), Some(sysval), Some(component), Some(register)) = (
+                le32(code, at),
+                le32(code, at + 4),
+                le32(code, at + 8),
+                le32(code, at + 12),
+                le32(code, at + 16),
+            ) else {
+                return out;
+            };
+            let Some(&mask) = code.get(at + 20) else { return out };
+            let name_at = data + name as usize;
+            let named = code.get(name_at..).is_some_and(|rest| rest.contains(&0));
+            if sysval != 0 || mask == 0 || !(1..=3).contains(&component) || !named {
+                continue;
+            }
+            out.push(InputElement {
+                name_at,
+                index,
+                component,
+                // Najwyższa użyta składowa: 0b0111 → 3.
+                count: 8 - (mask & 0xF).leading_zeros(),
+                register,
+            });
+        }
+        out.sort_by_key(|e| e.register);
+        return out;
+    }
+    out
+}
+
 // ------------------------------ przegląd gry --------------------------------
 
 /// Pliki w folderze `*_Data` gry, które mogą zawierać shadery.
@@ -775,6 +838,41 @@ mod tests {
         let mut stages = Vec::new();
         carve_dxbc(&bytes, |d| stages.push(d.stage));
         assert_eq!(stages, vec![Stage::Vertex, Stage::Pixel]);
+    }
+
+    #[test]
+    fn reads_vertex_input_signature() {
+        let w = |o: &mut Vec<u8>, v: u32| o.extend_from_slice(&v.to_le_bytes());
+        let mut b = b"DXBC".to_vec();
+        b.extend_from_slice(&[0; 16]);
+        w(&mut b, 1);
+        w(&mut b, 0);
+        w(&mut b, 1);
+        w(&mut b, 36);
+        b.extend_from_slice(b"ISGN");
+        w(&mut b, 0);
+        let data = b.len();
+        w(&mut b, 2);
+        w(&mut b, 8);
+        // POSITION0: float, xyz, rejestr 0; SV_VertexID: wartość systemowa.
+        for (name, sysval, comp, reg, mask) in [(56u32, 0u32, 3u32, 0u32, 7u32), (65, 6, 1, 1, 1)] {
+            for v in [name, 0, sysval, comp, reg, mask | mask << 8] {
+                w(&mut b, v);
+            }
+        }
+        b.extend_from_slice(b"POSITION\0SV_VertexID\0");
+        let elements = input_signature(&b);
+        assert_eq!(
+            elements,
+            vec![InputElement {
+                name_at: data + 56,
+                index: 0,
+                component: 3,
+                count: 3,
+                register: 0
+            }]
+        );
+        assert_eq!(&b[data + 56..data + 64], b"POSITION");
     }
 
     #[test]

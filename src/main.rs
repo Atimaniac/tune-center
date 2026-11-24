@@ -1597,6 +1597,10 @@ fn main() -> eframe::Result<()> {
         std::process::exit(shaders::warm::run_host_d3d11(&args[2..]));
     }
     #[cfg(windows)]
+    if args.get(1).map(String::as_str) == Some(shaders::warm::HOST_ARG_UE12) {
+        std::process::exit(shaders::warm::run_host_ue12(&args[2..]));
+    }
+    #[cfg(windows)]
     if args.get(1).map(String::as_str) == Some(shaders::warm::HOST_ARG_PROBE) {
         std::process::exit(shaders::warm::run_cache_probe());
     }
@@ -1625,6 +1629,19 @@ fn main() -> eframe::Result<()> {
         // SAFETY: celowe naruszenie dostępu - sprawdzenie filtra wyjątków.
         Some("native") => unsafe { std::ptr::write_volatile(std::ptr::null_mut::<u32>(), 1) },
         _ => {}
+    }
+    // Raport źródeł shaderów gier (tylko odczyt), bez okna.
+    if let Some(i) = args.iter().position(|a| a == shaders::probe::ARG) {
+        match shaders::probe::run(args.get(i + 1).map(String::as_str)) {
+            Ok(path) => {
+                println!("{}", path.display());
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
     }
     // Diagnostyka zgodności bez okna: raport obok programu (albo w %TEMP%).
     if args.iter().any(|a| a == "--diagnose") {

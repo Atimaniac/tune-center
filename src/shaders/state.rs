@@ -157,6 +157,7 @@ mod tests {
             shaders: Vec::new(),
             scskiller_recorder: false,
             encrypted: false,
+            ue_pso_cache: false,
         };
         let s = stamp(&info);
         assert_eq!(status(None, &info, Some("621.35")), Status::Never);
