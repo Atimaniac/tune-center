@@ -44,6 +44,7 @@ mod gpu_bench;
 mod gpu_fans;
 mod hags;
 mod history;
+mod hw_names;
 mod i18n;
 mod icons;
 #[cfg(test)]
@@ -1207,8 +1208,15 @@ impl eframe::App for App {
                     ui.add_space(10.0);
                     let tabs_x = ui.cursor().left();
                     for (tab, label, icon) in TABS {
-                        // Karta AMD: zakładka nazywa się RADEON.
-                        let label = if tab == Tab::Nvidia && shaders::vendor() == Some(shaders::Vendor::Amd) { "RADEON" } else { label };
+                        // Zakładki karty i procesora: model sprzętu (np. "RTX 5070",
+                        // "9070 XT", "i7-12700KF"); bez modelu - NVIDIA / RADEON / CPU.
+                        let label = match tab {
+                            Tab::Nvidia => hw_names::gpu_label().unwrap_or(
+                                if shaders::vendor() == Some(shaders::Vendor::Amd) { "RADEON" } else { label },
+                            ),
+                            Tab::Cpu => hw_names::cpu_label().unwrap_or(label),
+                            _ => label,
+                        };
                         if tab_button(ui, label, icon, self.tab == tab, 38.0).clicked() {
                             self.tab = tab;
                         }
