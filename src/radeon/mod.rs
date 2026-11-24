@@ -488,12 +488,14 @@ pub enum Page {
 
 /// Panele RADEON (FSR, FREESYNC, ustawienia 3D) i dane ADLX.
 pub struct Radeon {
-    // Kolejność pól ma znaczenie: obiekty ADLX zwalniamy przed sesją (`adlx`).
     loaded: HashMap<(&'static str, usize), Loaded>,
     displays: Option<Vec<(String, Obj)>>,
     confirm: Option<&'static str>,
     status: Option<(String, bool)>,
-    adlx: Option<Result<Adlx, String>>,
+    /// Wspólna sesja ADLX programu (`Adlx::shared`).
+    adlx: Option<std::sync::Arc<Adlx>>,
+    /// Ostatni błąd połączenia z ADLX.
+    adlx_error: Option<String>,
 }
 
 impl Default for Radeon {
@@ -510,16 +512,21 @@ impl Radeon {
             confirm: None,
             status: None,
             adlx: None,
+            adlx_error: None,
         }
     }
 
     fn adlx(&mut self) -> Result<&Adlx, String> {
-        if self.adlx.is_none() {
-            self.adlx = Some(Adlx::load());
+        if self.adlx.is_none() && self.adlx_error.is_none() {
+            match Adlx::shared() {
+                Ok(a) => self.adlx = Some(a),
+                Err(e) => self.adlx_error = Some(e),
+            }
         }
-        match self.adlx.as_ref().unwrap() {
-            Ok(a) => Ok(a),
-            Err(e) => Err(e.clone()),
+        match (&self.adlx, &self.adlx_error) {
+            (Some(a), _) => Ok(a),
+            (None, Some(e)) => Err(e.clone()),
+            (None, None) => Err(String::new()),
         }
     }
 
@@ -602,7 +609,7 @@ impl Radeon {
                     let list = self.adlx()?.displays();
                     self.displays = Some(list);
                 }
-                let a = self.adlx.as_ref().and_then(|r| r.as_ref().ok()).ok_or_else(not_here)?;
+                let a = self.adlx.as_ref().ok_or_else(not_here)?;
                 let s = a.displays.as_ref().ok_or_else(not_here)?;
                 if a.level_display < level {
                     return Err(not_here());
@@ -805,6 +812,9 @@ impl Radeon {
                     .strong(),
                 );
                 ui.label(RichText::new(e).color(warn()));
+                if ui.button(tr("Spróbuj ponownie", "Try again")).clicked() {
+                    self.adlx_error = None;
+                }
                 false
             }
         }

@@ -15,6 +15,9 @@ use std::ptr::null_mut;
 /// ADLX_RESULT
 pub const ADLX_OK: i32 = 0;
 const ADLX_ALREADY_ENABLED: i32 = 1;
+/// ADLX zainicjowany wcześniej w tym procesie - według `ADLX_SUCCEEDED`
+/// z ADLXDefines.h to sukces.
+const ADLX_ALREADY_INITIALIZED: i32 = 2;
 pub const ADLX_NOT_SUPPORTED: i32 = 12;
 
 /// Wersja nagłówków, z którymi zgodne są poniższe tablice metod
@@ -328,44 +331,47 @@ pub mod disp {
 // --------------------------------- sesja ------------------------------------
 
 /// Połączenie z ADLX: biblioteka, system i wybrana karta AMD.
+///
+/// ADLX ma jedno połączenie na proces (drugie `ADLXInitialize` zwraca
+/// `ADLX_ALREADY_INITIALIZED`, a `ADLXTerminate` kończy je dla wszystkich),
+/// dlatego program używa jednej wspólnej sesji (`shared`), otwartej do końca
+/// działania programu.
 pub struct Adlx {
-    // Kolejność pól = kolejność zwalniania: obiekty przed `ADLXTerminate`.
     pub gpu: Obj,
     pub services_3d: Option<Obj>,
     /// Najwyższa dostępna wersja usługi 3D (0-3).
     pub level_3d: u8,
     pub displays: Option<Obj>,
     pub level_display: u8,
-    /// Obiekt systemu ADLX - trzymany do `ADLXTerminate` (nie ma `Release`).
+    /// Obiekt systemu ADLX (nie ma `Release`; żyje razem z biblioteką).
     _system: Obj,
-    terminate: unsafe extern "C" fn() -> i32,
     _lib: libloading::Library,
     pub name: String,
     /// Wersja AMD Software (np. "25.11.1"), gdy sterownik ją podaje.
     pub software_version: Option<String>,
 }
 
-impl Drop for Adlx {
-    fn drop(&mut self) {
-        // Najpierw obiekty (Drop pól idzie po tej funkcji), więc zwalniamy je
-        // tu jawnie, potem kończymy sesję.
-        self.services_3d = None;
-        self.displays = None;
-        self.gpu = Obj {
-            ptr: null_mut(),
-            release: false,
-        };
-        // SAFETY: funkcja z tej samej biblioteki, wołana raz.
-        unsafe {
-            (self.terminate)();
-        }
-    }
-}
+// Sesja jest wspólna dla wątków programu; ADLX obsługuje wywołania z wielu
+// wątków (obiekty z licznikiem odwołań), a stan programu chroni Mutex.
+unsafe impl Sync for Adlx {}
 
 impl Adlx {
-    pub fn load() -> Result<Adlx, String> {
+    /// Wspólna sesja ADLX programu. Nieudane połączenie (np. sterownik
+    /// jeszcze się ładuje) jest ponawiane przy następnym wywołaniu.
+    pub fn shared() -> Result<std::sync::Arc<Adlx>, String> {
+        static SESSION: std::sync::Mutex<Option<std::sync::Arc<Adlx>>> =
+            std::sync::Mutex::new(None);
+        let mut session = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(s) = session.as_ref() {
+            return Ok(s.clone());
+        }
+        let s = std::sync::Arc::new(Adlx::load()?);
+        *session = Some(s.clone());
+        Ok(s)
+    }
+
+    fn load() -> Result<Adlx, String> {
         type Init = unsafe extern "C" fn(u64, *mut *mut c_void) -> i32;
-        type Terminate = unsafe extern "C" fn() -> i32;
         // SAFETY: biblioteka sterownika AMD; funkcje o sygnaturach z ADLX.h.
         unsafe {
             let lib = libloading::Library::new("amdadlx64.dll").map_err(|_| {
@@ -378,27 +384,21 @@ impl Adlx {
             let init: Init = *lib
                 .get::<Init>(b"ADLXInitialize\0")
                 .map_err(|e| format!("ADLXInitialize: {e}"))?;
-            let terminate: Terminate = *lib
-                .get::<Terminate>(b"ADLXTerminate\0")
-                .map_err(|e| format!("ADLXTerminate: {e}"))?;
             let mut sys: *mut c_void = null_mut();
             let r = init(ADLX_FULL_VERSION, &mut sys);
-            if r != ADLX_OK || sys.is_null() {
+            if !(r == ADLX_OK || r == ADLX_ALREADY_INITIALIZED) || sys.is_null() {
                 return Err(format!("ADLXInitialize: {}", describe(r)));
             }
             let system = Obj {
                 ptr: sys as *mut Vtbl,
                 release: false,
             };
-            let gpus = system.get(system::GET_GPUS).map_err(|e| {
-                terminate();
-                format!("GetGPUs: {}", describe(e))
-            })?;
+            let gpus = system
+                .get(system::GET_GPUS)
+                .map_err(|e| format!("GetGPUs: {}", describe(e)))?;
             let gpu = match pick_gpu(&gpus) {
                 Some(g) => g,
                 None => {
-                    drop(gpus);
-                    terminate();
                     return Err(crate::i18n::tr(
                         "ADLX nie widzi karty AMD.",
                         "ADLX sees no AMD card.",
@@ -445,7 +445,6 @@ impl Adlx {
                 displays,
                 level_display,
                 _system: system,
-                terminate,
                 _lib: lib,
                 name,
                 software_version,
@@ -529,7 +528,7 @@ mod tests {
     #[test]
     #[ignore]
     fn adlx_probe() {
-        let a = Adlx::load().expect("ADLX");
+        let a = Adlx::shared().expect("ADLX");
         println!(
             "{} | AMD Software {:?} | 3D lvl {} | display lvl {}",
             a.name, a.software_version, a.level_3d, a.level_display

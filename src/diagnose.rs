@@ -537,7 +537,7 @@ fn radeon(r: &mut Report) {
     if crate::shaders::vendor() != Some(crate::shaders::Vendor::Amd) {
         return;
     }
-    match crate::radeon::adlx::Adlx::load() {
+    match crate::radeon::adlx::Adlx::shared() {
         Ok(a) => r.ok(format!(
             "ADLX loaded: {} | AMD Software {} | 3D settings services v{} | display services v{} | displays {}",
             a.name,
