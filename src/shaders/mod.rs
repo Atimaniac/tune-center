@@ -13,6 +13,7 @@ pub mod games;
 mod registry;
 pub mod rootsig;
 pub mod state;
+pub mod store;
 pub mod unity;
 pub mod unreal;
 pub mod unreal_pak;
@@ -60,10 +61,24 @@ pub struct ShaderTab {
     /// Ostatni komunikat kolejki (np. gra pominięta, bo była uruchomiona).
     queue_note: Option<String>,
     /// Rozmiary pamięci podręcznej gier liczone w tle po kompilacji.
-    sizes: Arc<Mutex<Vec<(String, Option<u64>)>>>,
+    sizes: Arc<Mutex<Vec<(String, Option<(u64, Option<usize>)>)>>>,
     /// Bieżąca wersja sterownika NVIDIA (z `tick`).
     driver: Option<String>,
+    /// Stan folderów shaderów gier (odświeżany co kilka sekund), po grze.
+    stores: std::collections::HashMap<String, (std::time::Instant, store::Info)>,
+    /// Przywracanie shaderów z folderu gry, po grze.
+    restores: Restores,
 }
+
+/// Przywracanie plików z folderu shaderów gry do pamięci podręcznej.
+#[derive(Clone, Debug, PartialEq)]
+enum Restore {
+    Running,
+    Done { restored: usize, failed: usize },
+    Failed(String),
+}
+
+type Restores = Arc<Mutex<std::collections::HashMap<String, Restore>>>;
 
 /// Kompilacja w toku - dane do zapisu wyniku.
 struct Track {
@@ -194,6 +209,8 @@ impl ShaderTab {
             queue_note: None,
             sizes: Arc::default(),
             driver: None,
+            stores: Default::default(),
+            restores: Arc::default(),
         }
     }
 
@@ -310,22 +327,27 @@ impl ShaderTab {
                     secs: t.started.elapsed().as_secs(),
                     cache_bytes: None,
                     stamp: t.stamp,
+                    exe: t.exe.clone(),
+                    linked: None,
                 },
             );
             state::save(&self.saved);
+            // Dowiązanie plików gry do jej folderu shaderów i pomiar rozmiaru.
             let (sizes, exe, ctx2) = (self.sizes.clone(), t.exe, ctx.clone());
             std::thread::spawn(move || {
-                let bytes = warm::game_cache_bytes(&exe).ok();
-                sizes.lock().unwrap().push((id, bytes));
+                let done = warm::finish_game(&exe).ok();
+                sizes.lock().unwrap().push((id, done));
                 ctx2.request_repaint();
             });
         }
         let measured: Vec<_> = std::mem::take(&mut *self.sizes.lock().unwrap());
         if !measured.is_empty() {
-            for (id, bytes) in measured {
+            for (id, done) in measured {
                 if let Some(r) = self.saved.games.get_mut(&id) {
-                    r.cache_bytes = bytes;
+                    r.cache_bytes = done.map(|(bytes, _)| bytes);
+                    r.linked = done.and_then(|(_, linked)| linked);
                 }
+                self.stores.remove(&id);
             }
             state::save(&self.saved);
         }
@@ -694,6 +716,10 @@ impl ShaderTab {
                         .small()
                         .color(muted()),
                     );
+                    if !r.exe.is_empty() {
+                        let fresh = statuses.get(&e.game.id) == Some(&state::Status::Fresh);
+                        store_ui(ui, &e.game.id, &r.exe, fresh, &mut self.stores, &self.restores);
+                    }
                 }
                 compile_ui(
                     ui,
@@ -921,6 +947,115 @@ fn job_for(e: &Entry, api: Api) -> Result<Option<(String, warm::Job, String)>, &
     }))
 }
 
+/// Folder shaderów gry (patrz `store`): ile plików jest dowiązanych do pamięci
+/// podręcznej sterownika i - gdy z niej zniknęły - przywrócenie ich z folderu.
+fn store_ui(
+    ui: &mut egui::Ui,
+    id: &str,
+    exe: &str,
+    fresh: bool,
+    stores: &mut std::collections::HashMap<String, (std::time::Instant, store::Info)>,
+    restores: &Restores,
+) {
+    let (Some(cache), Some(dir)) = (nvidia_cache_dir(), store::game_dir(exe)) else {
+        return;
+    };
+    let restore = restores.lock().unwrap().get(id).cloned();
+    let stale = stores
+        .get(id)
+        .is_none_or(|(at, _)| at.elapsed() > std::time::Duration::from_secs(3));
+    if stale {
+        stores.insert(
+            id.to_owned(),
+            (std::time::Instant::now(), store::info(&cache, &dir)),
+        );
+    }
+    let info = stores[id].1;
+    if info.files == 0 {
+        return;
+    }
+    ui.label(
+        RichText::new(crate::trf!(
+            "Folder shaderów gry: {} plików ({}) dowiązanych do pamięci podręcznej sterownika - {}",
+            "Game shader folder: {} files ({}) linked to the driver cache - {}",
+            info.files,
+            engine::human(info.bytes),
+            dir.display()
+        ))
+        .small()
+        .color(muted()),
+    );
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .button(tr("Otwórz folder shaderów", "Open shader folder"))
+            .on_hover_text(tr(
+                "Pliki w tym folderze to twarde dowiązania do plików w DXCache: te same dane pod drugą nazwą, bez kopii na dysku.",
+                "The files in this folder are hard links to the files in DXCache: the same data under a second name, with no copy on disk.",
+            ))
+            .clicked()
+        {
+            let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+        }
+        if info.missing > 0 && restore != Some(Restore::Running) {
+            ui.label(
+                RichText::new(crate::trf!(
+                    "W pamięci podręcznej sterownika brakuje {} plików tej gry.",
+                    "{} of this game's files are missing from the driver cache.",
+                    info.missing
+                ))
+                .color(warn()),
+            );
+            // Po zmianie sterownika pliki z folderu są nieaktualne - wtedy
+            // potrzebna jest ponowna kompilacja, nie przywracanie.
+            if fresh
+                && ui
+                    .button(tr("Przywróć z folderu", "Restore from folder"))
+                    .on_hover_text(tr(
+                        "Przywraca brakujące pliki bez ponownej kompilacji.",
+                        "Puts the missing files back without compiling again.",
+                    ))
+                    .clicked()
+            {
+                restores
+                    .lock()
+                    .unwrap()
+                    .insert(id.to_owned(), Restore::Running);
+                stores.remove(id);
+                let (shared, id, exe, ctx) =
+                    (restores.clone(), id.to_owned(), exe.to_owned(), ui.ctx().clone());
+                std::thread::spawn(move || {
+                    let result = match warm::restore_game(&exe) {
+                        Ok((restored, failed)) => Restore::Done { restored, failed },
+                        Err(e) => Restore::Failed(e),
+                    };
+                    shared.lock().unwrap().insert(id, result);
+                    ctx.request_repaint();
+                });
+            }
+        }
+        if restore == Some(Restore::Running) {
+            ui.spinner();
+        }
+    });
+    match restore {
+        Some(Restore::Done { restored, failed }) => {
+            ui.label(
+                RichText::new(crate::trf!(
+                    "Przywrócono {restored} plików, nieudane: {failed}.",
+                    "Restored {restored} files, failed: {failed}."
+                ))
+                .color(if failed == 0 { accent() } else { warn() }),
+            );
+        }
+        Some(Restore::Failed(err)) => {
+            ui.label(
+                RichText::new(crate::trf!("Przywracanie: {err}", "Restoring: {err}")).color(warn()),
+            );
+        }
+        _ => {}
+    }
+}
+
 /// Kompilacja z góry dla wybranej gry: DirectX 11 (Unity, Dagor) albo
 /// DirectX 12 (Dagor, compute), według wyboru API.
 fn compile_ui(
@@ -1035,8 +1170,8 @@ fn compile_ui(
                 egui::Button::new(tr("Wyczyść shadery", "Clean shaders")),
             )
             .on_hover_text(crate::trf!(
-                "Usuwa skompilowane shadery gry {exe} z pamięci podręcznej sterownika Nvidia i Windows (DXCache i D3DSCache, DirectX 11 i 12).",
-                "Removes the compiled shaders of {exe} from the Nvidia driver and Windows caches (DXCache and D3DSCache, DirectX 11 and 12)."
+                "Usuwa skompilowane shadery gry {exe} z pamięci podręcznej sterownika Nvidia i Windows (DXCache i D3DSCache, DirectX 11 i 12) oraz z folderu shaderów gry.",
+                "Removes the compiled shaders of {exe} from the Nvidia driver and Windows caches (DXCache and D3DSCache, DirectX 11 and 12) and from the game shader folder."
             ))
             .clicked()
         {
@@ -1062,8 +1197,8 @@ fn compile_ui(
             );
             ui.add_space(6.0);
             ui.label(crate::trf!(
-                "Skompilowane shadery gry {exe} zostaną usunięte z pamięci podręcznej sterownika Nvidia i Windows (DXCache i D3DSCache, DirectX 11 i 12). Gra skompiluje je ponownie w trakcie rozgrywki - albo użyj \"Kompiluj shadery\". Gra musi być zamknięta.",
-                "The compiled shaders of {exe} will be removed from the Nvidia driver and Windows caches (DXCache and D3DSCache, DirectX 11 and 12). The game will compile them again while playing - or use \"Compile shaders\". The game must be closed."
+                "Skompilowane shadery gry {exe} zostaną usunięte z pamięci podręcznej sterownika Nvidia i Windows (DXCache i D3DSCache, DirectX 11 i 12) oraz z folderu shaderów gry. Gra skompiluje je ponownie w trakcie rozgrywki - albo użyj \"Kompiluj shadery\". Gra musi być zamknięta.",
+                "The compiled shaders of {exe} will be removed from the Nvidia driver and Windows caches (DXCache and D3DSCache, DirectX 11 and 12) and from the game shader folder. The game will compile them again while playing - or use \"Compile shaders\". The game must be closed."
             ));
             ui.add_space(10.0);
             ui.horizontal(|ui| {

@@ -690,7 +690,17 @@ pub fn run_cache_probe() -> i32 {
         say("fatal brak folderu DXCache".into());
         return 2;
     };
-    let before = locked_files(&dir);
+    for name in opened_cache_files(&dir, &say) {
+        say(format!("file {name}"));
+    }
+    0
+}
+
+/// Pliki pamięci podręcznej, które sterownik otwiera dla nazwy tego procesu:
+/// różnica zajętych plików przed i po utworzeniu urządzeń D3D11 i D3D12.
+#[cfg(windows)]
+fn opened_cache_files(dir: &Path, say: &dyn Fn(String)) -> Vec<String> {
+    let before = locked_files(dir);
     let dx11 = d3d11::nvidia_device();
     let dx12 = d3d::nvidia_device();
     if let Err(e) = &dx11 {
@@ -701,11 +711,112 @@ pub fn run_cache_probe() -> i32 {
     }
     // Sterownik otwiera pliki przy tworzeniu urządzenia; chwila zapasu.
     std::thread::sleep(std::time::Duration::from_millis(1500));
-    let after = locked_files(&dir);
-    for name in after.difference(&before) {
-        say(format!("file {name}"));
-    }
+    let after = locked_files(dir);
+    let names = after.difference(&before).cloned().collect();
     drop((dx11, dx12));
+    names
+}
+
+// ------------------ folder shaderów gry (dowiązania) ------------------------
+//
+// Te trzy procesy działają jako kopia programu poza pakietem Microsoft Store,
+// więc piszą do prawdziwego `DXCache` i do folderu danych aplikacji bez
+// uprawnień zastrzeżonych pakietu (patrz `store`).
+
+/// Proces dowiązujący pliki pamięci podręcznej gry do jej folderu shaderów:
+/// `--shader-cache-link <folder gry>`.
+pub const HOST_ARG_LINK: &str = "--shader-cache-link";
+/// Proces przywracający pliki z folderu gry: `--shader-cache-restore <folder gry>`.
+pub const HOST_ARG_RESTORE: &str = "--shader-cache-restore";
+/// Proces usuwający shadery gry:
+/// `--shader-cache-delete <folder gry albo -> <exe gry> <klucz hex>...`.
+pub const HOST_ARG_DELETE: &str = "--shader-cache-delete";
+
+fn say_line(line: String) {
+    let out = std::io::stdout();
+    let mut o = out.lock();
+    let _ = writeln!(o, "{line}");
+    let _ = o.flush();
+}
+
+/// Wypisuje `linked <pliki> <bajty> <nieudane>`.
+#[cfg(windows)]
+pub fn run_cache_link(args: &[String]) -> i32 {
+    let (Some(store), Some(dir)) = (args.first(), super::nvidia_cache_dir()) else {
+        say_line("fatal brak folderu DXCache albo folderu gry".into());
+        return 2;
+    };
+    let keys: Vec<u32> = opened_cache_files(&dir, &say_line)
+        .iter()
+        .filter_map(|n| cache_key(n))
+        .collect();
+    if keys.is_empty() {
+        say_line("fatal sterownik nie otworzył plików pamięci podręcznej gry".into());
+        return 2;
+    }
+    match super::store::link_game(&dir, Path::new(store), &keys) {
+        Ok(l) => {
+            say_line(format!("linked {} {} {}", l.files, l.bytes, l.failed));
+            0
+        }
+        Err(e) => {
+            say_line(format!("fatal {e}"));
+            1
+        }
+    }
+}
+
+/// Wypisuje `restored <przywrócone> <nieudane>`.
+pub fn run_cache_restore(args: &[String]) -> i32 {
+    let (Some(store), Some(dir)) = (args.first(), super::nvidia_cache_dir()) else {
+        say_line("fatal brak folderu DXCache albo folderu gry".into());
+        return 2;
+    };
+    match super::store::restore(&dir, Path::new(store)) {
+        Ok((restored, failed)) => {
+            say_line(format!("restored {restored} {failed}"));
+            0
+        }
+        Err(e) => {
+            say_line(format!("fatal {e}"));
+            1
+        }
+    }
+}
+
+/// Wypisuje `cleaned <pliki> <bajty> <zajęte>`.
+pub fn run_cache_delete(args: &[String]) -> i32 {
+    let (Some(store), Some(exe), Some(dir)) = (args.first(), args.get(1), super::nvidia_cache_dir())
+    else {
+        say_line("fatal brak folderu DXCache albo nazwy gry".into());
+        return 2;
+    };
+    let keys: Vec<u32> = args[2..]
+        .iter()
+        .filter_map(|k| u32::from_str_radix(k, 16).ok())
+        .collect();
+    let (mut files, mut bytes, mut locked) = (0, 0, 0);
+    for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !in_family(&name, &keys) {
+            continue;
+        }
+        let len = e.metadata().map(|m| m.len()).unwrap_or(0);
+        match std::fs::remove_file(e.path()) {
+            Ok(()) => {
+                files += 1;
+                bytes += len;
+            }
+            Err(_) => locked += 1,
+        }
+    }
+    clean_d3dscache(exe, &mut files, &mut bytes, &mut locked);
+    // Folder gry: druga nazwa tych samych plików - bez niej miejsce na dysku
+    // nie zostałoby zwolnione.
+    if store != "-" {
+        let _ = std::fs::remove_dir_all(store);
+    }
+    say_line(format!("cleaned {files} {bytes} {locked}"));
     0
 }
 
@@ -871,36 +982,36 @@ fn clean_game(exe: &str) -> Result<(usize, u64, usize), String> {
             "The game {exe} is running - close it before cleaning."
         ));
     }
-    let dir = super::nvidia_cache_dir().ok_or("brak folderu DXCache")?;
     let keys = game_cache_keys(exe)?;
-    let (mut files, mut bytes, mut locked) = (0, 0, 0);
-    for e in std::fs::read_dir(&dir)
-        .map_err(|e| e.to_string())?
-        .flatten()
-    {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if !in_family(&name, &keys) {
-            continue;
-        }
-        let len = e.metadata().map(|m| m.len()).unwrap_or(0);
-        match std::fs::remove_file(e.path()) {
-            Ok(()) => {
-                files += 1;
-                bytes += len;
-            }
-            Err(_) => locked += 1,
-        }
+    // Usuwa proces poza pakietem (`run_cache_delete`): pliki w DXCache,
+    // foldery D3DSCache i folder shaderów gry.
+    let mut args = vec![
+        HOST_ARG_DELETE.to_owned(),
+        super::store::game_dir(exe).map_or("-".into(), |d| d.display().to_string()),
+        exe.to_owned(),
+    ];
+    args.extend(keys.iter().map(|k| format!("{k:x}")));
+    let nums = staged_result(exe, &args, "cleaned")?;
+    match nums.as_slice() {
+        [files, bytes, locked] => Ok((*files as usize, *bytes, *locked as usize)),
+        _ => Err(unexpected_output()),
     }
-    clean_d3dscache(exe, &mut files, &mut bytes, &mut locked);
-    Ok((files, bytes, locked))
 }
 
-/// Klucze plików pamięci podręcznej sterownika NVIDIA dla gry: proces
-/// pomiaru uruchomiony pod nazwą jej .exe (patrz `run_cache_probe`).
-fn game_cache_keys(exe: &str) -> Result<Vec<u32>, String> {
+fn unexpected_output() -> String {
+    crate::i18n::tr(
+        "nieoczekiwana odpowiedź procesu pomocniczego",
+        "unexpected reply from the helper process",
+    )
+    .to_string()
+}
+
+/// Uruchamia kopię programu pod nazwą `exe` z argumentami `args` i zwraca jej
+/// standardowe wyjście. Kopia jest potem usuwana.
+fn run_staged(exe: &str, args: &[String]) -> Result<String, String> {
     let host = staged_host(exe)?;
     let mut cmd = std::process::Command::new(&host);
-    cmd.arg(HOST_ARG_PROBE)
+    cmd.args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
     #[cfg(windows)]
@@ -910,8 +1021,72 @@ fn game_cache_keys(exe: &str) -> Result<Vec<u32>, String> {
     }
     let output = cmd.output().map_err(|e| e.to_string());
     let _ = std::fs::remove_file(&host);
-    let output = output?;
-    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(String::from_utf8_lossy(&output?.stdout).into_owned())
+}
+
+/// Liczby z wiersza `<słowo> <liczba>...` na wyjściu procesu pomocniczego;
+/// wiersz `fatal ...` jest błędem.
+fn staged_result(exe: &str, args: &[String], word: &str) -> Result<Vec<u64>, String> {
+    let text = run_staged(exe, args)?;
+    if let Some(nums) = text
+        .lines()
+        .find_map(|l| l.strip_prefix(word)?.strip_prefix(' '))
+    {
+        return Ok(nums.split(' ').filter_map(|w| w.parse().ok()).collect());
+    }
+    Err(text
+        .lines()
+        .find_map(|l| l.strip_prefix("fatal "))
+        .map_or_else(unexpected_output, str::to_owned))
+}
+
+/// Dowiązuje pliki pamięci podręcznej gry do jej folderu shaderów (patrz
+/// `store`). Gra musi być zamknięta.
+pub fn link_game(exe: &str) -> Result<super::store::Linked, String> {
+    #[cfg(windows)]
+    if process_running(exe) {
+        return Err(crate::i18n::tr("gra jest uruchomiona", "the game is running").into());
+    }
+    let store = super::store::game_dir(exe).ok_or("brak folderu danych aplikacji")?;
+    let args = [HOST_ARG_LINK.to_owned(), store.display().to_string()];
+    match staged_result(exe, &args, "linked")?.as_slice() {
+        [files, bytes, failed] => Ok(super::store::Linked {
+            files: *files as usize,
+            bytes: *bytes,
+            failed: *failed as usize,
+        }),
+        _ => Err(unexpected_output()),
+    }
+}
+
+/// Przywraca w pamięci podręcznej sterownika pliki z folderu shaderów gry.
+/// Zwraca (przywrócone, nieudane).
+pub fn restore_game(exe: &str) -> Result<(usize, usize), String> {
+    let store = super::store::game_dir(exe).ok_or("brak folderu danych aplikacji")?;
+    let args = [HOST_ARG_RESTORE.to_owned(), store.display().to_string()];
+    match staged_result(exe, &args, "restored")?.as_slice() {
+        [restored, failed] => Ok((*restored as usize, *failed as usize)),
+        _ => Err(unexpected_output()),
+    }
+}
+
+/// Po kompilacji: dowiązuje pliki gry do jej folderu shaderów i zwraca
+/// (rozmiar pamięci podręcznej gry razem z D3DSCache, liczba dowiązanych
+/// plików). Gdy dowiązać się nie da, zostaje sam pomiar rozmiaru.
+pub fn finish_game(exe: &str) -> Result<(u64, Option<usize>), String> {
+    match link_game(exe) {
+        Ok(linked) if linked.files > 0 => {
+            let d3ds: u64 = d3dscache_folders(exe).iter().map(|d| dir_size(d)).sum();
+            Ok((linked.bytes + d3ds, Some(linked.files)))
+        }
+        _ => game_cache_bytes(exe).map(|b| (b, None)),
+    }
+}
+
+/// Klucze plików pamięci podręcznej sterownika NVIDIA dla gry: proces
+/// pomiaru uruchomiony pod nazwą jej .exe (patrz `run_cache_probe`).
+fn game_cache_keys(exe: &str) -> Result<Vec<u32>, String> {
+    let text = run_staged(exe, &[HOST_ARG_PROBE.to_owned()])?;
     let keys: Vec<u32> = text
         .lines()
         .filter_map(|l| l.strip_prefix("file "))

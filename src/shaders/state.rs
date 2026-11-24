@@ -33,6 +33,12 @@ pub struct Record {
     pub cache_bytes: Option<u64>,
     /// Odcisk plików shaderów gry (patrz `stamp`).
     pub stamp: String,
+    /// Plik .exe gry - nazwa jej folderu shaderów (patrz `store`).
+    #[serde(default)]
+    pub exe: String,
+    /// Ile plików pamięci podręcznej dowiązano do folderu shaderów gry.
+    #[serde(default)]
+    pub linked: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -47,7 +53,14 @@ pub struct Saved {
     pub auto_driver: String,
 }
 
+/// Program z instalatora: plik obok programu. Program z Microsoft Store: w
+/// folderze danych aplikacji, bo folder pakietu jest tylko do odczytu.
 fn path() -> Option<PathBuf> {
+    if super::store::package_family().is_some() {
+        let dir = super::store::app_data_dir()?;
+        let _ = std::fs::create_dir_all(&dir);
+        return Some(dir.join(FILE));
+    }
     Some(std::env::current_exe().ok()?.parent()?.join(FILE))
 }
 
@@ -129,6 +142,8 @@ mod tests {
             secs: 1,
             cache_bytes: None,
             stamp: stamp.into(),
+            exe: String::new(),
+            linked: None,
         }
     }
 

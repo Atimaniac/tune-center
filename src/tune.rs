@@ -2282,8 +2282,8 @@ pub(crate) fn read_all(cpu_x3d: bool) -> Vec<Item> {
 /// i optymalizacje gier w oknie.
 ///
 /// Od 0.32.2 nie ma ich w zakładce TUNE: pakiet do Microsoft Store nie może
-/// zapisywać do rejestru użytkownika (sklep odmówił uprawnienia
-/// `unvirtualizedResources`), a zakładka ma wyglądać tak samo w obu wersjach.
+/// zapisywać do rejestru użytkownika (zapis jest wirtualizowany w pakiecie),
+/// a zakładka ma wyglądać tak samo w obu wersjach.
 /// `set` nadal je obsługuje, żeby "Przywróć ustawienia Windows" cofnęło
 /// zmiany zrobione wcześniejszą wersją programu.
 #[cfg(windows)]

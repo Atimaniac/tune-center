@@ -1582,6 +1582,16 @@ fn main() -> eframe::Result<()> {
     if args.get(1).map(String::as_str) == Some(shaders::warm::HOST_ARG_PROBE) {
         std::process::exit(shaders::warm::run_cache_probe());
     }
+    #[cfg(windows)]
+    if args.get(1).map(String::as_str) == Some(shaders::warm::HOST_ARG_LINK) {
+        std::process::exit(shaders::warm::run_cache_link(&args[2..]));
+    }
+    if args.get(1).map(String::as_str) == Some(shaders::warm::HOST_ARG_RESTORE) {
+        std::process::exit(shaders::warm::run_cache_restore(&args[2..]));
+    }
+    if args.get(1).map(String::as_str) == Some(shaders::warm::HOST_ARG_DELETE) {
+        std::process::exit(shaders::warm::run_cache_delete(&args[2..]));
+    }
     // Raport awarii (panika i awarie natywne, np. w nvml.dll): plik obok
     // programu i okno z opisem błędu. Tylko dla programu z oknem - procesy
     // pomocnicze (kompilacja shaderów) kończą się kodem błędu.
