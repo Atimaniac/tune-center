@@ -23,19 +23,6 @@ Tune Center uses the components below. They are included unchanged.
 - License: MPL-2.0
 - Used by `sensor-bridge.exe` to read sensors and control fans.
 
-## serialport (Rust crate)
-
-- Source: https://github.com/serialport/serialport-rs
-- License: MPL-2.0
-- Serial port access for the Skydimo LED strip.
-
-## hidapi (Rust crate)
-
-- Source: https://github.com/ruabmbua/hidapi-rs (wraps the C library
-  https://github.com/libusb/hidapi)
-- License: MIT (crate); the bundled C library is used under its BSD-style license
-- USB HID access for RGB devices (Logitech, ASUS Aura, Gigabyte, Corsair, MSI).
-
 ## Audiowide (interface font)
 
 - File: `assets/Audiowide-Regular.ttf`, embedded in `tunecenter.exe`

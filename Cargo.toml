@@ -24,12 +24,11 @@ rfd = "0.15"
 # Rozpakowywanie zrzutów shaderów Dagor Engine (zstd ze słownikiem).
 zstd = "0.13"
 lz4_flex = "0.11"
-# Port szeregowy taśmy LED Skydimo (CH340, protokół Adalight).
-serialport = { version = "4", default-features = false }
-# Urządzenia RGB na USB HID (Logitech, ASUS Aura, Gigabyte, Corsair, MSI).
-hidapi = "2"
 # Direct3D 12: root signature i potoki przy kompilacji shaderów z góry.
 windows = { version = "0.62", features = [
+    "Win32_Devices_Communication",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_HumanInterfaceDevice",
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D_Fxc",
@@ -38,6 +37,9 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Shell",

@@ -47,8 +47,7 @@ Tune Center korzysta z poniższych składników. Są dołączane bez zmian.
   tabela modeli, ramka Adalight), rejestry ENE pamięci RAM, funkcje RGB
   Logitech HID++, układ pakietów i numery poleceń ASUS Aura USB, Gigabyte RGB
   Fusion 2, Corsair Lighting Node i MSI Mystic Light. Użyte jako odniesienie;
-  kod nie został skopiowany. Port szeregowy: crate serialport (MPL-2.0);
-  urządzenia USB HID: crate hidapi (MIT, biblioteka C hidapi na licencji BSD).
+  kod nie został skopiowany.
 - LibreHardwareMonitor (MPL-2.0): układ struktur NVAPI do odczytu i
   sterowania wentylatorami karty (ClientFanCoolers) oraz czujnika hotspot.
 - AMD Display Library SDK (https://github.com/GPUOpen-LibrariesAndSDKs/display-library):
@@ -59,6 +58,14 @@ Tune Center korzysta z poniższych składników. Są dołączane bez zmian.
   DisplayConfiguration, DisplayColorControl i CustomTiming - podstawa
   zakładki NVIDIA. Kod SDK nie jest dołączany; program woła sterownik przez
   `nvapi64.dll`.
+- AMD ADLX SDK (https://github.com/GPUOpen-LibrariesAndSDKs/ADLX): układ
+  interfejsów C (`SDK/Include`) dla zakładki RADEON. Program woła sterownik
+  przez `amdadlx64.dll`.
+- Intel Graphics Control Library (https://github.com/intel/drivers.gpu.control-library,
+  licencja Intel Software License Agreement, Copyright (C) Intel Corporation):
+  struktury i funkcje z `include/igcl_api.h` dla zakładki INTEL. Nagłówek ani
+  biblioteka nie są dołączane; program woła bibliotekę sterownika Intela
+  `ControlLib.dll`, wyłącznie na platformach Intela.
 - CUE4Parse (https://github.com/FabianFG/CUE4Parse, Apache-2.0): układ paczek
   Unreal Engine `.pak` / IoStore i archiwów shaderów (`.ushaderbytecode`)
   używany przy kompilacji shaderów z góry.

@@ -970,8 +970,8 @@ impl App {
                 &[
                     crate::i18n::tr("PawnIO i PawnIO.Modules (namazso) - dostęp do sprzętu.", "PawnIO and PawnIO.Modules (namazso) - hardware access."),
                     crate::i18n::tr("LibreHardwareMonitor - odczyt czujników i sterowanie wentylatorami.", "LibreHardwareMonitor - sensor readings and fan control."),
-                    crate::i18n::tr("NVIDIA NVAPI i NVML, AMD Display Library - karty graficzne.", "NVIDIA NVAPI and NVML, AMD Display Library - graphics cards."),
-                    crate::i18n::tr("hidapi - urządzenia USB podświetlenia; egui / eframe - interfejs.", "hidapi - USB lighting devices; egui / eframe - user interface."),
+                    crate::i18n::tr("NVIDIA NVAPI i NVML, AMD Display Library i ADLX, Intel Graphics Control Library - karty graficzne.", "NVIDIA NVAPI and NVML, AMD Display Library and ADLX, Intel Graphics Control Library - graphics cards."),
+                    crate::i18n::tr("egui / eframe - interfejs.", "egui / eframe - user interface."),
                     crate::i18n::tr("Pełna lista i licencje: plik THIRD-PARTY.md obok programu.", "Full list and licenses: the THIRD-PARTY.md file next to the program."),
                 ],
             );

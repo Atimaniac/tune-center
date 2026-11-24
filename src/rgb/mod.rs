@@ -24,6 +24,7 @@ mod hid;
 pub mod logitech;
 pub mod mystic;
 pub mod nv_illum;
+mod serial;
 pub mod skydimo;
 
 use std::collections::BTreeMap;
@@ -529,7 +530,7 @@ mod tests {
 /// seryjnych) - z tego da się dopisać obsługę nieznanego kontrolera RGB.
 pub fn hid_inventory() -> Vec<String> {
     let Ok(hid) = hid::Hid::new() else {
-        return vec!["hidapi: init failed".into()];
+        return vec!["HID: init failed".into()];
     };
     let mut out: Vec<String> = hid
         .list_all()

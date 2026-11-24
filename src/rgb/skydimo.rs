@@ -9,8 +9,7 @@
 //! chwilę nie dostaje ramek, więc ramka jest powtarzana co sekundę.
 //! Jasność to przeskalowanie kolorów - urządzenie nie ma osobnego ustawienia.
 
-use std::io::{Read, Write};
-use std::time::Duration;
+use super::serial::{self, OpenError, Port};
 
 pub const VID: u16 = 0x1A86;
 pub const PID: u16 = 0x7523;
@@ -91,14 +90,7 @@ pub fn frame(leds: usize, color: [u8; 3], brightness: u8) -> Vec<u8> {
 
 /// Port szeregowy taśmy (pierwszy z pasującym VID/PID).
 fn find_port() -> Result<String, String> {
-    let ports = serialport::available_ports().map_err(|e| e.to_string())?;
-    ports
-        .into_iter()
-        .find(|p| {
-            matches!(&p.port_type, serialport::SerialPortType::UsbPort(u) if u.vid == VID && u.pid == PID)
-        })
-        .map(|p| p.port_name)
-        .ok_or_else(|| {
+    serial::find_port(VID, PID).ok_or_else(|| {
             crate::i18n::tr(
                 "Nie znaleziono taśmy Skydimo (USB CH340, VID 1A86 PID 7523).",
                 "Skydimo strip not found (USB CH340, VID 1A86 PID 7523).",
@@ -108,7 +100,7 @@ fn find_port() -> Result<String, String> {
 }
 
 struct Device {
-    port: Box<dyn serialport::SerialPort>,
+    port: Port,
     name: String,
     model: String,
     leds: usize,
@@ -116,24 +108,14 @@ struct Device {
 
 fn open() -> Result<Device, String> {
     let name = find_port()?;
-    let mut port = serialport::new(&name, BAUD)
-        .timeout(Duration::from_millis(300))
-        .open()
-        .map_err(|e| {
-            if e.kind() == serialport::ErrorKind::NoDevice
-                || e.kind() == serialport::ErrorKind::Io(std::io::ErrorKind::PermissionDenied)
-                || e.to_string().to_lowercase().contains("access")
-                || e.to_string().contains("dostęp")
-            {
-                crate::trf!(
-                    "Port {name} jest zajęty - zamknij aplikację SkyDimo (albo OpenRGB), żeby Tune Center mógł sterować taśmą.",
-                    "Port {name} is busy - close the SkyDimo app (or OpenRGB) so Tune Center can control the strip."
-                )
-            } else {
-                format!("{name}: {e}")
-            }
-        })?;
-    let _ = port.clear(serialport::ClearBuffer::Input);
+    let port = Port::open(&name, BAUD, 300).map_err(|e| match e {
+        OpenError::Busy => crate::trf!(
+            "Port {name} jest zajęty - zamknij aplikację SkyDimo (albo OpenRGB), żeby Tune Center mógł sterować taśmą.",
+            "Port {name} is busy - close the SkyDimo app (or OpenRGB) so Tune Center can control the strip."
+        ),
+        OpenError::Other(e) => e,
+    })?;
+    port.clear_input();
     port.write_all(b"Moni-A")
         .map_err(|e| format!("{name}: {e}"))?;
     let mut reply = Vec::new();
@@ -208,7 +190,7 @@ impl super::Device for Strip {
 
     fn release(&mut self) -> Result<(), String> {
         // Gasimy taśmę i zwalniamy port.
-        if let Some(mut d) = self.device.take() {
+        if let Some(d) = self.device.take() {
             let _ = d.port.write_all(&frame(d.leds, [0, 0, 0], 0));
             let _ = d.port.flush();
         }
