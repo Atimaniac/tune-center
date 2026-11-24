@@ -327,7 +327,7 @@ pub fn decompress(
             }
         },
         "lz4" => crate::lz4::decompress(src, size).map_err(|e| format!("LZ4: {e}")),
-        "zstd" => zstd::bulk::decompress(src, size).map_err(|e| format!("zstd: {e}")),
+        "zstd" => crate::zstd::decompress(src, size),
         other => Err(format!("nieobsługiwana kompresja: {other}")),
     }
 }

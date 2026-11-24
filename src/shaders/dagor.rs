@@ -102,7 +102,7 @@ impl Dump {
 
     pub fn parse(file: &[u8]) -> Result<Self, String> {
         let (size, data) = parse_header(file)?;
-        let layout = zstd::bulk::decompress(&file[data], size)
+        let layout = crate::zstd::decompress(&file[data], size)
             .map_err(|e| err(&crate::trf!("rozpakowanie: {e}", "decompression: {e}")))?;
         if layout.len() != size || layout.len() < field::MIN_LAYOUT {
             return Err(err(crate::i18n::tr(
@@ -166,11 +166,11 @@ impl Dump {
     ) -> Result<usize, String> {
         let dict = self.dictionary();
         let mut decompressor = if dict.is_empty() {
-            zstd::bulk::Decompressor::new()
+            Ok(crate::zstd::Decoder::new())
         } else {
-            zstd::bulk::Decompressor::with_dictionary(dict)
+            crate::zstd::Decoder::with_dictionary(dict)
         }
-        .map_err(|e| err(&e.to_string()))?;
+        .map_err(|e| err(&e))?;
         let mut done = 0;
         for index in 0..self.shader_count() {
             let (bytes, size) = self.compressed(index).ok_or_else(|| {
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn reads_header_and_round_trips_layout() {
         let layout: Vec<u8> = (0..300u32).flat_map(|i| (i % 7).to_le_bytes()).collect();
-        let compressed = zstd::bulk::compress(&layout, 3).unwrap();
+        let compressed = crate::zstd::raw_frame(&layout);
         let mut f = vec![0u8; HEADER_SIZE];
         f[0..4].copy_from_slice(b"VSPS");
         f[4..8].copy_from_slice(b"dump");
@@ -427,7 +427,7 @@ mod tests {
         f.extend_from_slice(&compressed);
         let (size, range) = parse_header(&f).unwrap();
         assert_eq!(size, layout.len());
-        assert_eq!(zstd::bulk::decompress(&f[range], size).unwrap(), layout);
+        assert_eq!(crate::zstd::decompress(&f[range], size).unwrap(), layout);
     }
 }
 

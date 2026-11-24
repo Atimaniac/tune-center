@@ -68,6 +68,7 @@ mod theme;
 mod tray;
 mod tune;
 mod update;
+mod zstd;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

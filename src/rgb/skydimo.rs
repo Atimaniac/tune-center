@@ -243,15 +243,13 @@ mod tests {
 
 #[cfg(test)]
 mod hardware {
-    use std::io::Write;
-
     /// Odczyt modelu i krótki test koloru (czerwony, potem wyłączenie):
     /// `cargo test skydimo_probe -- --ignored --nocapture` (aplikacja SkyDimo
     /// musi być zamknięta).
     #[test]
     #[ignore]
     fn skydimo_probe() {
-        let mut d = super::open().expect("taśma");
+        let d = super::open().expect("taśma");
         println!("port {} model {} diod {}", d.name, d.model, d.leds);
         d.port
             .write_all(&super::frame(d.leds, [255, 0, 0], 40))
