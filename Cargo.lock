@@ -3897,7 +3897,7 @@ dependencies = [
 
 [[package]]
 name = "tunecenter"
-version = "0.32.1"
+version = "0.32.2"
 dependencies = [
  "eframe",
  "hidapi",

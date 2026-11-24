@@ -293,14 +293,25 @@ pub fn run(live: Live, step: impl Fn(&str)) -> Report {
     r
 }
 
+/// Windows 11 zostawia w rejestrze nazwę "Windows 10 ..."; o wersji decyduje
+/// numer kompilacji (22000 i wyżej to Windows 11).
+fn windows_name(product: &str, build: &str) -> String {
+    if build.parse::<u32>().is_ok_and(|b| b >= 22000) {
+        product.replace("Windows 10", "Windows 11")
+    } else {
+        product.to_owned()
+    }
+}
+
 fn system(r: &mut Report, live: &Live, hw: &mut Vec<String>) {
     r.section("System");
     const NT: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+    let number = hklm(NT, "CurrentBuild").unwrap_or_default();
     let build = format!(
         "{} {} build {}.{}",
-        hklm(NT, "ProductName").unwrap_or_default(),
+        windows_name(&hklm(NT, "ProductName").unwrap_or_default(), &number),
         hklm(NT, "DisplayVersion").unwrap_or_default(),
-        hklm(NT, "CurrentBuild").unwrap_or_default(),
+        number,
         reg::get_dword(reg::HKLM, NT, "UBR").unwrap_or(0)
     );
     r.info(format!("Windows: {build}"));
@@ -560,16 +571,24 @@ fn gpu(r: &mut Report, hw: &mut Vec<String>) {
             m.temp_c, m.hotspot_c, d.hotspot_hidden, d.mem_temp_c, m.core_mhz, m.mem_mhz, m.voltage_mv, m.usage_pct,
             m.power_w, d.tdp_w, m.fan_rpm, m.fan_pct, d.pstate, d.pcie_gen, d.pcie_width, d.limit
         );
-        if m.temp_c.is_none() || m.power_w.is_none() {
+        // Układ AMD zintegrowany w procesorze: bez wentylatora, bez własnego
+        // odczytu mocy, bez strojenia zegarów - to nie są usterki.
+        let amd = backend.vendor(i) == crate::gpu::backend::Vendor::Amd;
+        let fan = backend.fan(i);
+        let integrated = amd && fan.is_none();
+        if m.temp_c.is_none() || (m.power_w.is_none() && !integrated) {
             r.warn(line);
         } else {
             r.ok(line);
         }
-        match backend.fan(i) {
+        match fan {
             Some(f) => r.ok(format!(
                 "fan status {f:?}, controllable {}",
                 backend.fan_controllable(i)
             )),
+            None if integrated => {
+                r.info("no fan sensor: treated as integrated graphics (no fan, no card power reading, no clock tuning)")
+            }
             None => r.warn("fan status not available from the driver"),
         }
         match backend.offsets(i) {
@@ -585,10 +604,13 @@ fn gpu(r: &mut Report, hw: &mut Vec<String>) {
                     f(&o.mem)
                 ));
             }
+            Err(e) if integrated => r.info(format!("clock offsets: not available ({e})")),
             Err(e) => r.fail(format!("clock offsets: {e}")),
         }
         match backend.curve(i) {
-            Ok(c) if c.is_empty() => r.info("V/F curve: not available (AMD or unsupported)"),
+            // Karty AMD nie mają krzywej V/F - program jej dla nich nie pokazuje.
+            _ if amd => r.info("V/F curve: not applicable (AMD cards have no V/F curve)"),
+            Ok(c) if c.is_empty() => r.info("V/F curve: not available (unsupported)"),
             Ok(c) => {
                 let p = |p: &crate::gpu::backend::CurvePoint| {
                     format!(

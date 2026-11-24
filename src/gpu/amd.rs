@@ -539,7 +539,16 @@ impl Backend for Amd {
             .map(|v| v as f32);
         m.fan_rpm = read(PMLOG_FAN_RPM).map(|v| v.max(0) as u32);
         m.fan_pct = read(PMLOG_FAN_PERCENTAGE).map(|v| v.clamp(0, 100) as u32);
-        m.power_w = read(PMLOG_ASIC_POWER).filter(|v| *v > 0).map(|v| v as f32);
+        // Układ zintegrowany w procesorze (żadnego odczytu wentylatora) podaje
+        // tu moc całego procesora, np. 157 W na Ryzen 9 9950X3D - to nie jest
+        // pobór karty, więc go pomijamy (moc procesora pokazuje zakładka POWER).
+        let integrated = m.fan_rpm.is_none()
+            && m.fan_pct.is_none()
+            && self.od5_fan(adapter, FANCTRL_SPEED_TYPE_RPM).is_none()
+            && self.od5_fan(adapter, FANCTRL_SPEED_TYPE_PERCENT).is_none();
+        m.power_w = read(PMLOG_ASIC_POWER)
+            .filter(|v| *v > 0 && !integrated)
+            .map(|v| v as f32);
         m
     }
 
