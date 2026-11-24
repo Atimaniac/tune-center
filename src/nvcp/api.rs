@@ -207,7 +207,7 @@ pub type FnProfileSettingId = unsafe extern "C" fn(Handle, Handle, u32) -> Statu
 /// Funkcje publicznego NVAPI używane przez zakładkę NVIDIA. Brak funkcji
 /// (starszy sterownik) oznacza `None` i wyszarzoną część interfejsu.
 pub struct Api {
-    _lib: libloading::Library,
+    _lib: crate::dll::Library,
     pub driver_version: Option<FnDriverVersion>,
     pub enum_gpus: Option<FnEnumGpus>,
     pub connected_display_ids: Option<FnConnectedDisplayIds>,
@@ -271,7 +271,7 @@ impl Api {
     pub fn load() -> Result<Self, String> {
         // SAFETY: biblioteka sterownika Nvidii; nie wykonuje kodu przy wczytaniu
         // poza standardową inicjalizacją DLL.
-        let lib = unsafe { libloading::Library::new("nvapi64.dll") }.map_err(|_| {
+        let lib = unsafe { crate::dll::Library::new("nvapi64.dll") }.map_err(|_| {
             crate::i18n::tr(
                 "brak nvapi64.dll - nie ma sterownika Nvidia",
                 "nvapi64.dll not found - no Nvidia driver",

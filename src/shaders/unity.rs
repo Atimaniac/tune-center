@@ -195,7 +195,7 @@ struct Bundle {
 fn decompress(kind: u16, packed: &[u8], size: usize) -> Result<Vec<u8>, String> {
     match kind & 0x3F {
         0 => Ok(packed.to_vec()),
-        2 | 3 => lz4_flex::block::decompress(packed, size).map_err(|e| format!("LZ4: {e}")),
+        2 | 3 => crate::lz4::decompress(packed, size).map_err(|e| format!("LZ4: {e}")),
         1 => Err("LZMA - nieobsługiwane / not supported".into()),
         k => Err(format!("kompresja {k} - nieobsługiwana / not supported")),
     }
@@ -546,7 +546,7 @@ fn shader_d3d11(obj: &[u8], nested_first: bool) -> Vec<u8> {
                     }
                     for &(o, n, size) in &t.segments[i] {
                         let packed = &t.blob[o as usize..(o + n) as usize];
-                        match lz4_flex::block::decompress(packed, size as usize) {
+                        match crate::lz4::decompress(packed, size as usize) {
                             Ok(d) => out.extend_from_slice(&d),
                             Err(_) => ok = false,
                         }
@@ -780,7 +780,7 @@ mod tests {
     #[test]
     fn finds_d3d11_blob_in_shader_object() {
         let code = dxbc(0);
-        let packed = lz4_flex::block::compress(&code);
+        let packed = crate::lz4::compress_literals(&code);
         let mut obj = vec![0u8; 40]; // "SerializedShader"
         let w = |o: &mut Vec<u8>, v: u32| o.extend_from_slice(&v.to_le_bytes());
         // 2 platformy: Vulkan (18) bez danych i D3D11 (4).

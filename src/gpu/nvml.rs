@@ -74,7 +74,7 @@ pub struct Reading {
 }
 
 pub struct Nvml {
-    _lib: libloading::Library,
+    _lib: crate::dll::Library,
     /// Karty w kolejności NVML: uchwyt i nazwa.
     devices: Vec<(Device, String)>,
     shutdown: Option<FnVoid>,
@@ -118,7 +118,7 @@ pub fn limit_text(reasons: u64) -> String {
     }
 }
 
-unsafe fn sym<T: Copy>(lib: &libloading::Library, name: &[u8]) -> Option<T> {
+unsafe fn sym<T: Copy>(lib: &crate::dll::Library, name: &[u8]) -> Option<T> {
     lib.get::<T>(name).ok().map(|s| *s)
 }
 
@@ -127,7 +127,7 @@ impl Nvml {
         // SAFETY: nvml.dll to biblioteka sterownika Nvidii; sygnatury funkcji
         // są zgodne z dokumentacją NVML (nvml.h).
         unsafe {
-            let lib = libloading::Library::new("nvml.dll").ok()?;
+            let lib = crate::dll::Library::new("nvml.dll").ok()?;
             let init: FnVoid = sym(&lib, b"nvmlInit_v2\0")?;
             let count: FnCount = sym(&lib, b"nvmlDeviceGetCount_v2\0")?;
             let handle: FnHandle = sym(&lib, b"nvmlDeviceGetHandleByIndex_v2\0")?;

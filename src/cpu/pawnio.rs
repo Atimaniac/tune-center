@@ -29,7 +29,7 @@ type FnExecute = unsafe extern "system" fn(
 type FnClose = unsafe extern "system" fn(Handle) -> i32;
 
 pub struct PawnIo {
-    _lib: libloading::Library,
+    _lib: crate::dll::Library,
     handle: Handle,
     execute: FnExecute,
     close: FnClose,
@@ -76,7 +76,7 @@ impl PawnIo {
         unsafe {
             let lib = library_candidates()
                 .into_iter()
-                .find_map(|path| libloading::Library::new(path).ok())
+                .find_map(|path| crate::dll::Library::new(path).ok())
                 .ok_or_else(|| {
                     crate::i18n::tr(
                         "Nie znaleziono PawnIOLib.dll. Zainstaluj sterownik PawnIO (pawnio.eu).",

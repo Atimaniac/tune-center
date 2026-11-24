@@ -200,7 +200,7 @@ struct Od8 {
 }
 
 pub struct Amd {
-    _lib: libloading::Library,
+    _lib: crate::dll::Library,
     ctx: Ctx,
     /// Indeksy adapterów ADL, po jednym na fizyczną kartę.
     adapters: Vec<i32>,
@@ -219,7 +219,7 @@ pub struct Amd {
     fan_default: Option<FnFanDefault>,
 }
 
-unsafe fn sym<T: Copy>(lib: &libloading::Library, name: &[u8]) -> Option<T> {
+unsafe fn sym<T: Copy>(lib: &crate::dll::Library, name: &[u8]) -> Option<T> {
     lib.get::<T>(name).ok().map(|s| *s)
 }
 
@@ -245,7 +245,7 @@ fn check(name: &str, status: i32) -> Result<()> {
 impl Amd {
     pub fn load() -> Result<Self> {
         unsafe {
-            let lib = libloading::Library::new("atiadlxx.dll").map_err(|e| {
+            let lib = crate::dll::Library::new("atiadlxx.dll").map_err(|e| {
                 crate::trf!(
                     "Nie można załadować atiadlxx.dll (brak sterownika AMD?): {e}",
                     "Cannot load atiadlxx.dll (AMD driver missing?): {e}"

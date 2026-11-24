@@ -36,8 +36,10 @@ mod crash;
 mod curve;
 mod diagnose;
 mod disks;
+mod dll;
 mod elevation;
 mod fans;
+mod file_dialog;
 mod game_watch;
 mod gpu;
 mod gpu_bench;
@@ -50,6 +52,7 @@ mod icons;
 mod intel;
 #[cfg(test)]
 mod logo_tool;
+mod lz4;
 mod nvcp;
 mod nvdriver;
 mod oled_fix;

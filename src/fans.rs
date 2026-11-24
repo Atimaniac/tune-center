@@ -322,7 +322,7 @@ impl FansTab {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if theme::primary_button(ui, None, crate::i18n::tr("+ Dodaj grę (.exe)", "+ Add game (.exe)"), true).clicked() {
-                    if let Some(file) = rfd::FileDialog::new().add_filter("exe", &["exe"]).pick_file() {
+                    if let Some(file) = crate::file_dialog::FileDialog::new().add_filter("exe", &["exe"]).pick_file() {
                         let name = file
                             .file_stem()
                             .map(|s| s.to_string_lossy().into_owned())

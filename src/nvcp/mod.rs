@@ -682,7 +682,7 @@ impl NvcpTab {
                 ))
                 .clicked()
             {
-                if let Some(path) = rfd::FileDialog::new()
+                if let Some(path) = crate::file_dialog::FileDialog::new()
                     .add_filter("exe", &["exe"])
                     .pick_file()
                 {

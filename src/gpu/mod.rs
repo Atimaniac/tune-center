@@ -612,7 +612,7 @@ impl GpuTab {
     /// Eksport bieżących ustawień do wybranego pliku - kopia, która przetrwa
     /// ponowną instalację programu lub systemu.
     fn export_profile(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
+        let Some(path) = crate::file_dialog::FileDialog::new()
             .set_title(crate::i18n::tr(
                 "Eksportuj profil karty graficznej",
                 "Export graphics card profile",
@@ -648,7 +648,7 @@ impl GpuTab {
     /// Import profilu z pliku do edycji. Przyjmuje też pojedynczy profil
     /// zapisany przez starsze wersje programu (`gpu-profile.json`).
     fn import_profile(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
+        let Some(path) = crate::file_dialog::FileDialog::new()
             .set_title(crate::i18n::tr(
                 "Importuj profil karty graficznej",
                 "Import graphics card profile",

@@ -149,7 +149,7 @@ fn set_nvidia_extension_slot(device: *mut std::ffi::c_void) -> Result<(), String
     type SetSlot = unsafe extern "C" fn(*mut std::ffi::c_void, u32, u32) -> i32;
     // SAFETY: nvapi64.dll ze sterownika; identyfikatory z nvapi_interface.h.
     unsafe {
-        let lib = libloading::Library::new("nvapi64.dll").map_err(|e| e.to_string())?;
+        let lib = crate::dll::Library::new("nvapi64.dll").map_err(|e| e.to_string())?;
         let query: Query = *lib
             .get::<Query>(b"nvapi_QueryInterface\0")
             .map_err(|e| e.to_string())?;

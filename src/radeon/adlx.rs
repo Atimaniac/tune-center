@@ -345,7 +345,7 @@ pub struct Adlx {
     pub level_display: u8,
     /// Obiekt systemu ADLX (nie ma `Release`; żyje razem z biblioteką).
     _system: Obj,
-    _lib: libloading::Library,
+    _lib: crate::dll::Library,
     pub name: String,
     /// Wersja AMD Software (np. "25.11.1"), gdy sterownik ją podaje.
     pub software_version: Option<String>,
@@ -374,7 +374,7 @@ impl Adlx {
         type Init = unsafe extern "C" fn(u64, *mut *mut c_void) -> i32;
         // SAFETY: biblioteka sterownika AMD; funkcje o sygnaturach z ADLX.h.
         unsafe {
-            let lib = libloading::Library::new("amdadlx64.dll").map_err(|_| {
+            let lib = crate::dll::Library::new("amdadlx64.dll").map_err(|_| {
                 crate::i18n::tr(
                     "Nie można załadować amdadlx64.dll (brak sterownika AMD Radeon?)",
                     "Cannot load amdadlx64.dll (no AMD Radeon driver?)",

@@ -293,7 +293,7 @@ const PSTATES_VERSIONS: [u32; 3] = [0x3_1CF8, 0x2_1CF8, 0x1_1C94];
 // ------------------------------- API ---------------------------------------
 
 pub struct NvApi {
-    _lib: libloading::Library,
+    _lib: crate::dll::Library,
     handles: Vec<Handle>,
     names: Vec<String>,
     pstates_version: u32,
@@ -382,7 +382,7 @@ fn mask_bit(mask: &[u32; 4], i: usize) -> bool {
 impl NvApi {
     pub fn load() -> Result<Self> {
         unsafe {
-            let lib = libloading::Library::new("nvapi64.dll").map_err(|e| {
+            let lib = crate::dll::Library::new("nvapi64.dll").map_err(|e| {
                 crate::trf!(
                     "Nie można załadować nvapi64.dll (brak sterownika Nvidia?): {e}",
                     "Cannot load nvapi64.dll (Nvidia driver missing?): {e}"

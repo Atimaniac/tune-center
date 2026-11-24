@@ -361,7 +361,7 @@ pub struct Device {
 
 /// Sesja IGCL: biblioteka, uchwyt API i karty Intel.
 pub struct Igcl {
-    lib: libloading::Library,
+    lib: crate::dll::Library,
     api: Handle,
     pub devices: Vec<Device>,
 }
@@ -442,17 +442,17 @@ fn driver_store_dirs() -> Vec<std::path::PathBuf> {
     out
 }
 
-fn load_library() -> Result<libloading::Library, String> {
+fn load_library() -> Result<crate::dll::Library, String> {
     // SAFETY: biblioteka sterownika Intel.
     unsafe {
-        if let Ok(lib) = libloading::Library::new("ControlLib.dll") {
+        if let Ok(lib) = crate::dll::Library::new("ControlLib.dll") {
             return Ok(lib);
         }
         #[cfg(windows)]
         for dir in driver_store_dirs() {
             let path = dir.join("ControlLib.dll");
             if path.is_file() {
-                if let Ok(lib) = libloading::Library::new(&path) {
+                if let Ok(lib) = crate::dll::Library::new(&path) {
                     return Ok(lib);
                 }
             }

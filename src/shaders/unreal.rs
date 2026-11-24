@@ -326,7 +326,7 @@ pub fn decompress(
                 Ok(out)
             }
         },
-        "lz4" => lz4_flex::block::decompress(src, size).map_err(|e| format!("LZ4: {e}")),
+        "lz4" => crate::lz4::decompress(src, size).map_err(|e| format!("LZ4: {e}")),
         "zstd" => zstd::bulk::decompress(src, size).map_err(|e| format!("zstd: {e}")),
         other => Err(format!("nieobsługiwana kompresja: {other}")),
     }
@@ -334,7 +334,7 @@ pub fn decompress(
 
 /// Biblioteka Oodle z folderu gry.
 pub struct Oodle {
-    _lib: libloading::Library,
+    _lib: crate::dll::Library,
     decompress: unsafe extern "C" fn(
         *const u8,
         isize,
@@ -379,7 +379,7 @@ impl Oodle {
     pub fn load(path: &Path) -> Result<Self, String> {
         unsafe {
             let lib =
-                libloading::Library::new(path).map_err(|e| format!("{}: {e}", path.display()))?;
+                crate::dll::Library::new(path).map_err(|e| format!("{}: {e}", path.display()))?;
             let f = *lib
                 .get(b"OodleLZ_Decompress\0")
                 .map_err(|e| format!("OodleLZ_Decompress: {e}"))?;
