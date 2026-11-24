@@ -93,24 +93,27 @@ struct Track {
 pub enum Vendor {
     Nvidia,
     Amd,
+    Intel,
 }
 
 pub const VENDOR_NVIDIA: u32 = 0x10DE;
 pub const VENDOR_AMD: u32 = 0x1002;
+pub const VENDOR_INTEL: u32 = 0x8086;
 
 impl Vendor {
     pub fn from_id(id: u32) -> Option<Vendor> {
         match id {
             VENDOR_NVIDIA => Some(Vendor::Nvidia),
             VENDOR_AMD => Some(Vendor::Amd),
+            VENDOR_INTEL => Some(Vendor::Intel),
             _ => None,
         }
     }
 
 }
 
-/// Karta do kompilacji: spośród kart NVIDIA i AMD ta z największą pamięcią
-/// własną (karta osobna, nie układ zintegrowany w procesorze).
+/// Karta do kompilacji: spośród kart NVIDIA, AMD i Intel ta z największą
+/// pamięcią własną (karta osobna przed układem zintegrowanym w procesorze).
 #[cfg(windows)]
 pub fn pick_adapter() -> Result<(windows::Win32::Graphics::Dxgi::IDXGIAdapter1, Vendor, String), String> {
     use windows::Win32::Graphics::Dxgi::*;
@@ -136,8 +139,8 @@ pub fn pick_adapter() -> Result<(windows::Win32::Graphics::Dxgi::IDXGIAdapter1, 
         }
         best.map(|(_, a, v, n)| (a, v, n)).ok_or_else(|| {
             tr(
-                "nie znaleziono karty NVIDIA ani AMD",
-                "no NVIDIA or AMD graphics card found",
+                "nie znaleziono karty NVIDIA, AMD ani Intel",
+                "no NVIDIA, AMD or Intel graphics card found",
             )
             .to_string()
         })
@@ -159,7 +162,8 @@ pub fn vendor() -> Option<Vendor> {
 
 /// Foldery pamięci podręcznej shaderów DirectX sterownika karty:
 /// - NVIDIA: `%LOCALAPPDATA%\NVIDIA\DXCache` (DirectX 11 i 12),
-/// - AMD: `%LOCALAPPDATA%\AMD\DxcCache` (DirectX 12) i `AMD\DxCache` (DirectX 11).
+/// - AMD: `%LOCALAPPDATA%\AMD\DxcCache` (DirectX 12) i `AMD\DxCache` (DirectX 11),
+/// - Intel: `%USERPROFILE%\AppData\LocalLow\Intel\ShaderCache` (DirectX 11 i 12).
 ///
 /// Pierwszy folder jest główny (jego pliki leżą wprost w folderze shaderów
 /// gry, patrz `store`).
@@ -173,6 +177,11 @@ pub fn cache_dirs() -> Vec<PathBuf> {
             local.join("AMD").join("DxcCache"),
             local.join("AMD").join("DxCache"),
         ],
+        // LocalLow leży obok Local.
+        Some(Vendor::Intel) => local
+            .parent()
+            .map(|appdata| vec![appdata.join("LocalLow").join("Intel").join("ShaderCache")])
+            .unwrap_or_default(),
         None => Vec::new(),
     }
 }

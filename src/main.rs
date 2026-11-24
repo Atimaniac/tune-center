@@ -47,6 +47,7 @@ mod history;
 mod hw_names;
 mod i18n;
 mod icons;
+mod intel;
 #[cfg(test)]
 mod logo_tool;
 mod nvcp;
@@ -1211,9 +1212,11 @@ impl eframe::App for App {
                         // Zakładki karty i procesora: model sprzętu (np. "RTX 5070",
                         // "9070 XT", "i7-12700KF"); bez modelu - NVIDIA / RADEON / CPU.
                         let label = match tab {
-                            Tab::Nvidia => hw_names::gpu_label().unwrap_or(
-                                if shaders::vendor() == Some(shaders::Vendor::Amd) { "RADEON" } else { label },
-                            ),
+                            Tab::Nvidia => hw_names::gpu_label().unwrap_or(match shaders::vendor() {
+                                Some(shaders::Vendor::Amd) => "RADEON",
+                                Some(shaders::Vendor::Intel) => "INTEL",
+                                _ => label,
+                            }),
                             Tab::Cpu => hw_names::cpu_label().unwrap_or(label),
                             _ => label,
                         };

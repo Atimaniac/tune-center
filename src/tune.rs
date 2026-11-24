@@ -268,7 +268,8 @@ pub(crate) mod reg {
                 &mut len,
             )
         };
-        if r != 0 || !(kind == 1 || kind == 2) {
+        // 1 REG_SZ, 2 REG_EXPAND_SZ, 7 REG_MULTI_SZ (części rozdzielone zerami).
+        if r != 0 || !(kind == 1 || kind == 2 || kind == 7) {
             return None;
         }
         let s = String::from_utf16_lossy(&buf[..(len as usize / 2)]);

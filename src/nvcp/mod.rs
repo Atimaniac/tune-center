@@ -58,11 +58,20 @@ enum Page {
     Fsr,
     /// Karta AMD: FreeSync (zamiast G-SYNC).
     FreeSync,
+    /// Karta Intel: Intel Arc Sync (zamiast G-SYNC).
+    ArcSync,
+    /// Karta Intel: skalowanie, wyostrzanie, oszczędzanie energii ekranu.
+    IntelDisplay,
 }
 
 /// Czy kompilujemy i ustawiamy dla karty AMD (zakładka RADEON).
 fn amd() -> bool {
     crate::shaders::vendor() == Some(crate::shaders::Vendor::Amd)
+}
+
+/// Czy kompilujemy i ustawiamy dla karty Intel (zakładka INTEL).
+fn intel() -> bool {
+    crate::shaders::vendor() == Some(crate::shaders::Vendor::Intel)
 }
 
 /// Zmiana ekranu czekająca na potwierdzenie.
@@ -125,6 +134,8 @@ pub struct NvcpTab {
     oled: crate::oled_fix::Panel,
     /// Karta AMD: FSR, FREESYNC i ustawienia 3D przez ADLX.
     radeon: crate::radeon::Radeon,
+    /// Karta Intel: ustawienia 3D, ARC SYNC i ekran przez IGCL.
+    intel: crate::intel::Intel,
 }
 
 impl NvcpTab {
@@ -141,6 +152,8 @@ impl NvcpTab {
             "oled" => Page::OledFix,
             "fsr" => Page::Fsr,
             "freesync" => Page::FreeSync,
+            "arcsync" => Page::ArcSync,
+            "intel-display" => Page::IntelDisplay,
             _ => Page::Overclock,
         };
     }
@@ -185,6 +198,7 @@ impl NvcpTab {
             shaders: crate::shaders::ShaderTab::new(),
             oled: Default::default(),
             radeon: Default::default(),
+            intel: Default::default(),
         }
     }
 
@@ -216,8 +230,13 @@ impl NvcpTab {
             let _ = self.api();
         }
         // Karta AMD: wersja AMD Software z ADLX (wczytywanego raz).
-        if self.driver.is_none() && amd() {
-            self.driver = self.radeon.driver_version();
+        // Karta Intel: wersja sterownika z IGCL.
+        if self.driver.is_none() && (amd() || intel()) {
+            self.driver = if amd() {
+                self.radeon.driver_version()
+            } else {
+                self.intel.driver_version()
+            };
             if self.driver.is_none() {
                 self.driver = Some(String::new());
             }
@@ -247,11 +266,20 @@ impl NvcpTab {
         // Brak panelu NVAPI (np. karta AMD) nie blokuje podzakładki Overclock.
         let api = self.api().ok();
         let amd = amd();
-        // Karta AMD: bez podzakładek zależnych od NVAPI.
+        let intel = intel();
+        // Karta AMD i Intel: bez podzakładek zależnych od NVAPI.
         if amd
             && !matches!(
                 self.page,
                 Page::Overclock | Page::Settings3d | Page::Fsr | Page::FreeSync | Page::Shaders
+            )
+        {
+            self.page = Page::Overclock;
+        }
+        if intel
+            && !matches!(
+                self.page,
+                Page::Overclock | Page::Settings3d | Page::ArcSync | Page::IntelDisplay | Page::Shaders
             )
         {
             self.page = Page::Overclock;
@@ -261,7 +289,15 @@ impl NvcpTab {
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    let pages: Vec<(Page, &str)> = if amd {
+                    let pages: Vec<(Page, &str)> = if intel {
+                        vec![
+                            (Page::Overclock, "Overclock"),
+                            (Page::Settings3d, tr("Ustawienia 3D", "3D settings")),
+                            (Page::ArcSync, "ARC SYNC"),
+                            (Page::IntelDisplay, tr("Ekran", "Display")),
+                            (Page::Shaders, "Shader compilation"),
+                        ]
+                    } else if amd {
                         vec![
                             (Page::Overclock, "Overclock"),
                             (Page::Settings3d, tr("Ustawienia 3D", "3D settings")),
@@ -297,6 +333,8 @@ impl NvcpTab {
                         let short = driver.split(" (").next().unwrap_or(driver);
                         let text = if amd {
                             format!("AMD Software {short}")
+                        } else if intel {
+                            crate::trf!("Sterownik Intel {short}", "Intel driver {short}")
                         } else {
                             crate::trf!("Sterownik {short}", "Driver {short}")
                         };
@@ -316,6 +354,21 @@ impl NvcpTab {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| gpu.ui(ui, snap));
+        } else if intel {
+            // Karta Intel: panele INTEL (IGCL) i kompilacja shaderów bez NVAPI.
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match self.page {
+                            Page::Settings3d => self.intel.ui(ui, crate::intel::Page::Settings3d),
+                            Page::ArcSync => self.intel.ui(ui, crate::intel::Page::ArcSync),
+                            Page::IntelDisplay => self.intel.ui(ui, crate::intel::Page::Display),
+                            Page::Shaders => self.shaders_ui(ui, None),
+                            _ => {}
+                        });
+                });
         } else if amd {
             // Karta AMD: panele RADEON (ADLX) i kompilacja shaderów bez NVAPI.
             egui::CentralPanel::default()
@@ -376,7 +429,7 @@ impl NvcpTab {
                             Page::Custom => self.custom_ui(ui, &api),
                             Page::Shaders => self.shaders_ui(ui, Some(&api)),
                             Page::OledFix => self.oled.ui(ui, self.driver.as_deref()),
-                            Page::Fsr | Page::FreeSync => {}
+                            Page::Fsr | Page::FreeSync | Page::ArcSync | Page::IntelDisplay => {}
                         });
                 });
         }

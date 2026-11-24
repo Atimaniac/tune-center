@@ -67,6 +67,17 @@ No code was copied from these projects; they were used as documentation.
   `NvApiDriverSettings.h`) and the DisplayConfiguration, DisplayColorControl
   and CustomTiming samples – the basis of the NVIDIA tab. The SDK code is not
   bundled; the program calls the driver through `nvapi64.dll`.
+- AMD ADLX SDK (https://github.com/GPUOpen-LibrariesAndSDKs/ADLX): C interface
+  layouts (`SDK/Include`) for the RADEON tab. The program calls the driver
+  through `amdadlx64.dll`.
+- Intel Graphics Control Library (https://github.com/intel/drivers.gpu.control-library,
+  Intel Software License Agreement, Copyright (C) Intel Corporation):
+  structures and functions of `include/igcl_api.h` for the INTEL tab. The
+  header and the library are not bundled; the program calls the Intel driver's
+  `ControlLib.dll`, on Intel platforms only.
+- SCSKiller (https://github.com/BlueHeisenberg/SCSKiller, GPL-3.0-or-later):
+  facts about the AMD driver shader cache (folders, file names, keying by the
+  executable name) used by shader pre-compilation on AMD cards.
 - CUE4Parse (https://github.com/FabianFG/CUE4Parse, Apache-2.0): layout of
   Unreal Engine `.pak` / IoStore containers and shader code archives
   (`.ushaderbytecode`) used by shader pre-compilation.

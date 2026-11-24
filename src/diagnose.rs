@@ -532,6 +532,32 @@ fn cpu(r: &mut Report, hw: &mut Vec<String>) {
     }
 }
 
+/// Karta Intel: IGCL (zakładka INTEL) i folder pamięci shaderów.
+fn intel(r: &mut Report) {
+    if crate::shaders::vendor() != Some(crate::shaders::Vendor::Intel) {
+        return;
+    }
+    match crate::intel::igcl::Igcl::load() {
+        Ok(i) => {
+            for d in &i.devices {
+                let features = i.features(d.handle).map(|f| f.len());
+                r.ok(format!(
+                    "IGCL: {} | PCI 0x{:04X} | integrated {} | driver {} | 3D settings {:?}",
+                    d.name, d.pci_device_id, d.integrated, d.driver, features
+                ));
+            }
+        }
+        // Starsze grafiki Intel (przed Xe) API Intela nie obsługuje - to nie usterka.
+        Err(e) if e.contains("PLATFORM_NOT_SUPPORTED") => {
+            r.info(format!("IGCL (INTEL tab): {e} - Intel's API supports Xe graphics and Arc cards"))
+        }
+        Err(e) => r.warn(format!("IGCL (INTEL tab): {e}")),
+    }
+    for dir in crate::shaders::cache_dirs() {
+        r.info(format!("shader cache folder {} exists: {}", dir.display(), dir.is_dir()));
+    }
+}
+
 /// Karta AMD: ADLX (zakładka RADEON) i foldery pamięci shaderów.
 fn radeon(r: &mut Report) {
     if crate::shaders::vendor() != Some(crate::shaders::Vendor::Amd) {
@@ -572,10 +598,15 @@ fn gpu(r: &mut Report, hw: &mut Vec<String>) {
         }
     }
     radeon(r);
+    intel(r);
     let Some(mut backend) = crate::gpu::load_drivers() else {
         // Sama grafika zintegrowana (np. Intel) to nie błąd - zakładka NVIDIA
         // nie ma wtedy czym sterować.
-        r.info("no NVIDIA or AMD graphics driver - NVIDIA tab and GPU features are not available on this PC");
+        if crate::shaders::vendor() == Some(crate::shaders::Vendor::Intel) {
+            r.info("Intel graphics: clock tuning and fan control are not available (Intel card settings are in the INTEL tab)");
+        } else {
+            r.info("no NVIDIA or AMD graphics driver - NVIDIA tab and GPU features are not available on this PC");
+        }
         return;
     };
     let names = backend.gpus();

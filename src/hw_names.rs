@@ -103,6 +103,10 @@ mod tests {
         assert_eq!(gpu_model("AMD Radeon RX 9070 XT"), "9070 XT");
         assert_eq!(gpu_model("AMD Radeon RX 7900 XTX"), "7900 XTX");
         assert_eq!(gpu_model("AMD Radeon(TM) Graphics"), "");
+        assert_eq!(gpu_model("Intel(R) Arc(TM) B580 Graphics"), "Arc B580");
+        assert_eq!(gpu_model("Intel(R) UHD Graphics 770"), "UHD 770");
+        assert_eq!(gpu_model("Intel(R) HD Graphics 530"), "HD 530");
+        assert_eq!(gpu_model("Intel(R) Iris(R) Xe Graphics"), "Iris Xe");
     }
 
     #[test]

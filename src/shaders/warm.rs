@@ -714,14 +714,64 @@ pub fn run_cache_probe() -> i32 {
     0
 }
 
+/// Pliki w folderach: nazwa -> (rozmiar, czas zapisu).
+fn cache_snapshot(
+    dirs: &[PathBuf],
+) -> std::collections::BTreeMap<String, (u64, Option<std::time::SystemTime>)> {
+    dirs.iter()
+        .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten())
+        .filter_map(|e| {
+            let m = e.metadata().ok().filter(|m| m.is_file())?;
+            Some((
+                e.file_name().to_string_lossy().into_owned(),
+                (m.len(), m.modified().ok()),
+            ))
+        })
+        .collect()
+}
+
+/// Kod najprostszego shadera obliczeniowego (DXBC, cs_5_0) - na karcie Intel
+/// sterownik otwiera pliki pamięci gry dopiero przy pierwszym shaderze.
+#[cfg(windows)]
+fn tiny_compute_shader() -> Result<Vec<u8>, String> {
+    use windows::core::PCSTR;
+    use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+    const HLSL: &str = "[numthreads(1, 1, 1)] void main() {}";
+    let mut code = None;
+    // SAFETY: tekst i nazwy żyją do końca wywołania.
+    unsafe {
+        D3DCompile(
+            HLSL.as_ptr() as *const _,
+            HLSL.len(),
+            PCSTR(c"tc_probe".as_ptr() as *const u8),
+            None,
+            None,
+            PCSTR(c"main".as_ptr() as *const u8),
+            PCSTR(c"cs_5_0".as_ptr() as *const u8),
+            0,
+            0,
+            &mut code,
+            None,
+        )
+        .map_err(|e| format!("D3DCompile: {e}"))?;
+        let code = code.ok_or("D3DCompile: brak kodu")?;
+        Ok(std::slice::from_raw_parts(code.GetBufferPointer() as *const u8, code.GetBufferSize()).to_vec())
+    }
+}
+
 /// Pliki pamięci podręcznej, które sterownik otwiera dla nazwy tego procesu:
 /// różnica zajętych plików przed i po utworzeniu urządzeń D3D11 i D3D12.
+/// Na karcie Intel dodatkowo: jeden malutki shader na każdym urządzeniu i
+/// pliki nowe albo zmienione w tym czasie (sterownik Intela zakłada plik gry
+/// przy pierwszym shaderze i nie zawsze trzyma go otwartym).
 #[cfg(windows)]
 fn opened_cache_files(dirs: &[PathBuf], say: &dyn Fn(String)) -> Vec<String> {
     let all = |dirs: &[PathBuf]| -> std::collections::BTreeSet<String> {
         dirs.iter().flat_map(|d| locked_files(d)).collect()
     };
+    let intel = super::vendor() == Some(super::Vendor::Intel);
     let before = all(dirs);
+    let files_before = cache_snapshot(dirs);
     let dx11 = d3d11::gpu_device();
     let dx12 = d3d::gpu_device();
     if let Err(e) = &dx11 {
@@ -730,10 +780,37 @@ fn opened_cache_files(dirs: &[PathBuf], say: &dyn Fn(String)) -> Vec<String> {
     if let Err(e) = &dx12 {
         say(format!("warning D3D12: {e}"));
     }
+    let mut keep = Vec::new();
+    if intel {
+        match tiny_compute_shader() {
+            Ok(cs) => {
+                if let Ok(d) = &dx11 {
+                    if let Ok(s) = d.create(super::unity::Stage::Compute, &cs) {
+                        keep.push(s);
+                    }
+                }
+                if let Ok(d) = &dx12 {
+                    let empty = rootsig::serialize(&rootsig::RootSignature::default());
+                    if let Ok(rs) = empty.and_then(|b| d.root_signature(&b)) {
+                        let _ = d.compute(&rs, &cs);
+                    }
+                }
+            }
+            Err(e) => say(format!("warning {e}")),
+        }
+    }
     // Sterownik otwiera pliki przy tworzeniu urządzenia; chwila zapasu.
     std::thread::sleep(std::time::Duration::from_millis(1500));
     let after = all(dirs);
-    let names = after.difference(&before).cloned().collect();
+    let mut names: Vec<String> = after.difference(&before).cloned().collect();
+    if intel {
+        for (name, stat) in cache_snapshot(dirs) {
+            if files_before.get(&name) != Some(&stat) && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    drop(keep);
     drop((dx11, dx12));
     names
 }
@@ -857,7 +934,8 @@ fn hex(s: &str) -> bool {
 /// - NVIDIA (`1c68a91ac748b201.nvph`): `nv:` + ostatnie 8 cyfr nazwy,
 /// - AMD DirectX 12 (`207c35a9.dfac411e.71efbc0e.2b1a674a.0.parc`): `amd:` +
 ///   pierwszy człon - skrót nazwy .exe, wspólny dla wszystkich plików gry,
-/// - AMD DirectX 11 (`<48 cyfr>.bin` / `.bin2`): `amd:` + pierwsze 16 cyfr.
+/// - AMD DirectX 11 (`<48 cyfr>.bin` / `.bin2`): `amd:` + pierwsze 16 cyfr,
+/// - Intel (`<64 cyfry>` bez rozszerzenia): `intel:` + cała nazwa.
 pub fn cache_key(name: &str) -> Option<String> {
     let lower = name.to_ascii_lowercase();
     let mut parts = lower.split('.');
@@ -867,6 +945,10 @@ pub fn cache_key(name: &str) -> Option<String> {
     }
     if (lower.ends_with(".bin") || lower.ends_with(".bin2")) && stem.len() >= 32 && hex(stem) {
         return Some(format!("amd:{}", &stem[..16]));
+    }
+    // Intel: 64 cyfry bez rozszerzenia - każdy plik osobno.
+    if stem.len() == 64 && hex(stem) && !lower.contains('.') {
+        return Some(format!("intel:{stem}"));
     }
     if stem.len() >= 16 && hex(stem) {
         return Some(format!("nv:{}", &stem[stem.len() - 8..]));
