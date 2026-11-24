@@ -79,6 +79,9 @@ const PMLOG_GFX_VOLTAGE: usize = 21;
 const PMLOG_ASIC_POWER: usize = 23;
 const PMLOG_TEMPERATURE_HOTSPOT: usize = 27;
 const PMLOG_TEMPERATURE_GFX: usize = 28;
+/// Moc całej karty. Karty RDNA 3 i 4 (np. RX 9070 XT) podają moc tylko tu -
+/// `PMLOG_ASIC_POWER` mają nieobsługiwane (tak samo czyta LibreHardwareMonitor).
+const PMLOG_BOARD_POWER: usize = 73;
 
 // ----------------------------- struktury -----------------------------------
 
@@ -546,8 +549,11 @@ impl Backend for Amd {
             && m.fan_pct.is_none()
             && self.od5_fan(adapter, FANCTRL_SPEED_TYPE_RPM).is_none()
             && self.od5_fan(adapter, FANCTRL_SPEED_TYPE_PERCENT).is_none();
-        m.power_w = read(PMLOG_ASIC_POWER)
-            .filter(|v| *v > 0 && !integrated)
+        m.power_w = [PMLOG_BOARD_POWER, PMLOG_ASIC_POWER]
+            .into_iter()
+            .filter_map(read)
+            .find(|v| *v > 0)
+            .filter(|_| !integrated)
             .map(|v| v as f32);
         m
     }
