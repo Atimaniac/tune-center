@@ -67,7 +67,7 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 
 ### CPU
 - **Intel** (12th–14th gen): PL1, PL2 and Tau, voltage offset per domain, Core IccMax, active-core turbo ratios (like XTU), live monitor (package/core temperatures, RAPL power, VID, clocks, throttling reasons).
-- **AMD Ryzen** 5000/7000/9000: Curve Optimizer per core, PPT/TDC/EDC and PBO scalar; Ryzen 3000: PBO limits.
+- **AMD Ryzen** 5000/7000/9000: Curve Optimizer per core (optionally applied at Windows startup, turned off by itself after a freeze), PPT/TDC/EDC and PBO scalar; Ryzen 3000: PBO limits.
 - Every write is verified by reading it back; settings last until reboot and are never applied automatically.
 
 ### FAN, SENSORS, POWER

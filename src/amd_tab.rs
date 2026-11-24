@@ -3,9 +3,15 @@
 //!
 //! Zmiany trafiają do procesora po kliknięciu przycisku w danej sekcji
 //! i znikają po restarcie albo uśpieniu komputera - program niczego nie
-//! zapisuje na stałe ani nie stosuje automatycznie przy starcie.
+//! zapisuje w procesorze ani w BIOS-ie na stałe. Opcjonalnie (`cpu-amd.json`)
+//! ostatnio zastosowany Curve Optimizer jest stosowany przy starcie programu,
+//! z zabezpieczeniem przed zawieszaniem się przy każdym starcie.
+
+use std::path::PathBuf;
+use std::time::Duration;
 
 use eframe::egui::{self, RichText};
+use serde::{Deserialize, Serialize};
 
 use crate::cpu::amd::{self, Commands, Generation, Layout, Limit, Readback, Smu, State};
 use crate::cpu::pawnio::AmdDriver;
@@ -47,6 +53,7 @@ pub struct AmdTab {
     limits_loaded: bool,
     armed: bool,
     status: String,
+    settings: Settings,
 }
 
 fn limit_slot(limit: Limit) -> usize {
@@ -60,6 +67,56 @@ fn limit_slot(limit: Limit) -> usize {
 fn module(name: &str) -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     Some(exe.parent()?.join("modules").join(name))
+}
+
+fn data_file(name: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join(name))
+}
+
+/// Ustawienia pamiętane między uruchomieniami (`cpu-amd.json`).
+#[derive(Serialize, Deserialize, Default, Clone)]
+struct Settings {
+    /// Stosuj zapamiętany Curve Optimizer przy każdym uruchomieniu programu.
+    #[serde(default)]
+    auto_apply: bool,
+    /// Ostatnio zastosowane marginesy: (numer rdzenia w systemie, margines).
+    #[serde(default)]
+    curve: Vec<(usize, i32)>,
+}
+
+fn load_settings() -> Settings {
+    data_file("cpu-amd.json")
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_settings(settings: &Settings) -> Result<(), String> {
+    let path = data_file("cpu-amd.json").ok_or("brak katalogu programu / no program folder")?;
+    let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
+}
+
+/// Znacznik "Curve Optimizer zastosowany przy starcie, czekamy, czy komputer
+/// to wytrzyma". Usuwany po minucie pracy albo przy zwykłym zamknięciu
+/// programu. Jeśli przy starcie nadal istnieje, poprzednie uruchomienie
+/// skończyło się zawieszeniem albo restartem zaraz po zastosowaniu.
+fn pending_marker() -> Option<PathBuf> {
+    data_file("cpu-amd-autoapply.pending")
+}
+
+/// Ile sekund program musi przepracować po automatycznym zastosowaniu,
+/// żeby uznać ustawienia za stabilne.
+const AUTO_APPLY_GRACE_SECS: u64 = 60;
+
+impl Drop for AmdTab {
+    /// Zwykłe zamknięcie programu to nie zawieszenie: usuwamy znacznik.
+    fn drop(&mut self) {
+        if let Some(marker) = pending_marker() {
+            let _ = std::fs::remove_file(marker);
+        }
+    }
 }
 
 impl AmdTab {
@@ -90,9 +147,118 @@ impl AmdTab {
             // Zapis dostępny od razu (bez "odblokuj zapis"), jak w zakładce karty.
             armed: true,
             status: String::new(),
+            settings: load_settings(),
         };
         tab.reload();
+        tab.auto_apply_on_start();
         tab
+    }
+
+    /// Marginesy z ekranu jako pary (numer rdzenia, margines); `None`, gdy
+    /// odczyt któregoś rdzenia się nie udał.
+    fn current_curve(&self) -> Option<Vec<(usize, i32)>> {
+        let Some(Some(Ok(cores))) = self.state.as_ref().map(|s| s.cores.as_ref()) else {
+            return None;
+        };
+        cores
+            .iter()
+            .map(|(core, m)| m.as_ref().ok().map(|m| (core.index, *m)))
+            .collect()
+    }
+
+    /// Włącza lub wyłącza stosowanie Curve Optimizera przy starcie programu.
+    /// Przy włączeniu zapamiętuje wartości, które procesor ma teraz.
+    fn set_auto_apply(&mut self, enabled: bool) {
+        if enabled {
+            let Some(curve) = self.current_curve() else {
+                self.status = crate::i18n::tr(
+                    "Nie udało się odczytać Curve Optimizera wszystkich rdzeni - nie ma czego zapamiętać.",
+                    "Could not read Curve Optimizer of all cores - there is nothing to remember.",
+                )
+                .to_string();
+                return;
+            };
+            if curve.iter().all(|(_, m)| *m == 0) {
+                self.status = crate::i18n::tr(
+                    "Najpierw ustaw i zastosuj Curve Optimizer - to te wartości będą stosowane przy starcie.",
+                    "First set and apply Curve Optimizer - those values will be applied at startup.",
+                )
+                .to_string();
+                return;
+            }
+            self.settings.curve = curve;
+        }
+        self.settings.auto_apply = enabled;
+        self.status = match (save_settings(&self.settings), enabled) {
+            (Err(e), _) => crate::trf!("Nie udało się zapisać ustawienia: {e}.", "Could not save the setting: {e}."),
+            (Ok(()), true) => crate::i18n::tr(
+                "Bieżący Curve Optimizer będzie stosowany przy każdym uruchomieniu programu. Aby działo się to przy starcie Windows, włącz „Uruchamiaj z Windows” w zakładce OPTIONS.",
+                "The current Curve Optimizer will be applied every time the program starts. To make that happen at Windows startup, turn on “Start with Windows” in the OPTIONS tab.",
+            )
+            .to_string(),
+            (Ok(()), false) => crate::i18n::tr(
+                "Wyłączono stosowanie Curve Optimizera przy starcie.",
+                "Curve Optimizer apply at startup turned off.",
+            )
+            .to_string(),
+        };
+    }
+
+    /// Przy starcie programu stosuje zapamiętany Curve Optimizer, jeśli
+    /// użytkownik to włączył. Jeśli poprzednie takie zastosowanie skończyło
+    /// się zawieszeniem albo restartem, opcja wyłącza się sama.
+    fn auto_apply_on_start(&mut self) {
+        if !self.settings.auto_apply || self.driver.is_err() {
+            return;
+        }
+        let Some(marker) = pending_marker() else {
+            return;
+        };
+        if marker.exists() {
+            let _ = std::fs::remove_file(&marker);
+            self.settings.auto_apply = false;
+            let _ = save_settings(&self.settings);
+            self.status = crate::i18n::tr(
+                "Stosowanie Curve Optimizera przy starcie zostało wyłączone: po poprzednim zastosowaniu program nie przepracował minuty (zawieszenie albo restart). Procesor działa na ustawieniach z BIOS-u.",
+                "Curve Optimizer apply at startup has been turned off: after the previous apply the program did not stay up for a minute (freeze or restart). The CPU runs the BIOS settings.",
+            )
+            .to_string();
+            return;
+        }
+        let Some(Some(Ok(cores))) = self.state.as_ref().map(|s| s.cores.as_ref()) else {
+            return;
+        };
+        // Ten sam procesor: zapamiętane rdzenie muszą odpowiadać obecnym.
+        let saved: std::collections::HashMap<usize, i32> = self.settings.curve.iter().copied().collect();
+        if saved.len() != cores.len() || cores.iter().any(|(c, _)| !saved.contains_key(&c.index)) {
+            self.status = crate::i18n::tr(
+                "Zapamiętany Curve Optimizer nie pasuje do rdzeni tego procesora - nie zastosowano go przy starcie.",
+                "The remembered Curve Optimizer does not match this processor's cores - it was not applied at startup.",
+            )
+            .to_string();
+            return;
+        }
+        self.margins = cores.iter().map(|(c, _)| saved[&c.index]).collect();
+
+        let _ = std::fs::write(&marker, b"");
+        let ok = self.apply_curve();
+        self.status = if ok {
+            crate::trf!(
+                "Curve Optimizer zastosowany automatycznie przy starcie. {}",
+                "Curve Optimizer applied automatically at startup. {}",
+                self.status
+            )
+        } else {
+            let _ = std::fs::remove_file(&marker);
+            crate::trf!("Curve Optimizer przy starcie: {}", "Curve Optimizer at startup: {}", self.status)
+        };
+        if ok {
+            // Po minucie stabilnej pracy uznajemy ustawienia za bezpieczne.
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(AUTO_APPLY_GRACE_SECS));
+                let _ = std::fs::remove_file(marker);
+            });
+        }
     }
 
     /// Bieżący limit PPT z tabeli procesora.
@@ -158,13 +324,14 @@ impl AmdTab {
         }
     }
 
-    fn apply_curve(&mut self) {
+    /// Wysyła zmienione marginesy. Zwraca true, gdy wszystkie się udały.
+    fn apply_curve(&mut self) -> bool {
         let Some(curve) = self.commands().and_then(|c| c.curve) else {
-            return;
+            return false;
         };
-        let Ok(driver) = &mut self.driver else { return };
+        let Ok(driver) = &mut self.driver else { return false };
         let Some(Some(Ok(cores))) = self.state.as_ref().map(|s| s.cores.as_ref()) else {
-            return;
+            return false;
         };
 
         let mut done = 0;
@@ -183,6 +350,7 @@ impl AmdTab {
                 }
             }
         }
+        let ok = error.is_none();
         self.status = match error {
             Some(e) if done == 0 => format!("Curve Optimizer: {e}."),
             Some(e) => crate::trf!(
@@ -195,6 +363,14 @@ impl AmdTab {
             ),
         };
         self.reload();
+        // Przy włączonym stosowaniu przy starcie zapamiętujemy nowe wartości.
+        if ok && self.settings.auto_apply {
+            if let Some(curve) = self.current_curve() {
+                self.settings.curve = curve;
+                let _ = save_settings(&self.settings);
+            }
+        }
+        ok
     }
 
     /// Wysyła limit i sprawdza w tabeli PM, czy procesor go pokazuje.
@@ -302,7 +478,7 @@ impl AmdTab {
             ui.add_space(12.0);
             theme::info(
                 ui,
-                crate::i18n::tr("Ustawienia działają do restartu lub uśpienia komputera i nie są stosowane automatycznie. Zamknij Ryzen Master i inne programy do strojenia. Zmieniaj Curve Optimizer po kilka punktów i testuj stabilność po każdej zmianie - niestabilny rdzeń często ujawnia się dopiero przy małym obciążeniu.", "Settings last until the computer restarts or sleeps and are not applied automatically. Close Ryzen Master and other tuning programs. Change Curve Optimizer a few points at a time and test stability after each change - an unstable core often shows up only under light load."),
+                crate::i18n::tr("Ustawienia działają do restartu lub uśpienia komputera. Curve Optimizer może być stosowany przy starcie programu (opcja obok „Zastosuj Curve Optimizer”); limity PBO nie są stosowane automatycznie. Zamknij Ryzen Master i inne programy do strojenia. Zmieniaj Curve Optimizer po kilka punktów i testuj stabilność po każdej zmianie - niestabilny rdzeń często ujawnia się dopiero przy małym obciążeniu.", "Settings last until the computer restarts or sleeps. Curve Optimizer can be applied when the program starts (option next to “Apply Curve Optimizer”); PBO limits are not applied automatically. Close Ryzen Master and other tuning programs. Change Curve Optimizer a few points at a time and test stability after each change - an unstable core often shows up only under light load."),
             );
             ui.add_space(12.0);
         });
@@ -316,7 +492,9 @@ impl AmdTab {
                 )
                 .to_string();
             }
-            Some(Action::Curve) => self.apply_curve(),
+            Some(Action::Curve) => {
+                self.apply_curve();
+            }
             Some(limit) => self.apply_limit(&limit),
             None => {}
         }
@@ -385,6 +563,18 @@ impl AmdTab {
             .clicked()
             {
                 apply = true;
+            }
+            theme::vsep(ui, 26.0);
+            let mut auto = self.settings.auto_apply;
+            if ui
+                .checkbox(&mut auto, crate::i18n::tr("Stosuj przy starcie z Windows", "Apply at Windows startup"))
+                .on_hover_text(crate::i18n::tr(
+                    "Przy każdym uruchomieniu programu stosuje ostatnio zastosowany Curve Optimizer (przy włączeniu: wartości, które procesor ma teraz). Żeby działo się to przy starcie Windows, włącz też „Uruchamiaj z Windows” w OPTIONS. Jeśli po takim zastosowaniu komputer się zawiesi albo zrestartuje w ciągu minuty, opcja wyłączy się sama.",
+                    "Every time the program starts it applies the last applied Curve Optimizer (when turned on: the values the CPU has now). To make that happen at Windows startup, also turn on “Start with Windows” in OPTIONS. If the computer freezes or restarts within a minute after such an apply, the option turns itself off.",
+                ))
+                .changed()
+            {
+                self.set_auto_apply(auto);
             }
         });
         ui.add_space(12.0);

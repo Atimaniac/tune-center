@@ -349,6 +349,11 @@ Obsługiwane procesory do komputerów stacjonarnych:
   procesora trafiają dopiero po "Zastosuj Curve Optimizer". Przed zapisem
   program sprawdza, czy odczyt marginesu działa, a po zapisie porównuje
   odczyt z zadaną wartością.
+- **Stosuj przy starcie z Windows** (obok "Zastosuj Curve Optimizer"):
+  zapamiętuje bieżący Curve Optimizer (`cpu-amd.json`) i stosuje go przy
+  każdym uruchomieniu programu - przy starcie Windows razem z
+  "Uruchamiaj z Windows" w OPTIONS. Jeśli komputer zawiesi się albo
+  zrestartuje w ciągu minuty po takim zastosowaniu, opcja wyłącza się sama.
 - **Ryzen 5000**: zapis marginesu idzie przez skrzynkę MP1 (polecenie 0x35),
   a odczyt kontrolny przez RSMU (0x7C). Jeśli odczyt nie działa na danym
   procesorze, program niczego nie zapisuje.

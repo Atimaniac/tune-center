@@ -1,6 +1,6 @@
 [package]
 name = "tunecenter"
-version = "0.38.0"
+version = "0.38.1"
 edition = "2021"
 authors = ["Atimaniac"]
 license = "GPL-3.0-or-later"

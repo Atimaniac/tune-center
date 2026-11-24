@@ -6,7 +6,8 @@
 //!
 //! Zmiany trafiają do procesora dopiero po kliknięciu "Zastosuj" w danej
 //! sekcji i znikają po restarcie komputera - program niczego nie zapisuje
-//! na stałe ani nie stosuje automatycznie przy starcie.
+//! na stałe w procesorze. Wyjątek: Curve Optimizer Ryzena można stosować
+//! przy starcie programu (`amd_tab`).
 
 use eframe::egui::{self, Color32, CornerRadius, RichText, Vec2};
 
