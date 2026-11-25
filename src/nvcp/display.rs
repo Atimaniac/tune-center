@@ -1,5 +1,5 @@
-//! Ekrany podłączone do karty Nvidia: tryb, kolor, HDR, Adaptive Sync
-//! i rozdzielczości niestandardowe - wyłącznie przez publiczne NVAPI.
+//! Ekrany podłączone do karty Nvidia: tryb, kolor, HDR i Adaptive Sync -
+//! wyłącznie przez publiczne NVAPI.
 //!
 //! Każda zmiana ma drogę powrotu: przed zapisem zapamiętujemy poprzedni stan,
 //! a interfejs przez 15 s pyta, czy zachować zmianę (jak Windows). Brak
@@ -216,53 +216,6 @@ struct VrrInfo {
     reserved: [u32; 4],
 }
 
-/// `NV_VIEWPORTF`.
-#[repr(C)]
-#[derive(Clone, Copy, Default, Debug, PartialEq)]
-struct Viewport {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-}
-
-/// `NV_CUSTOM_DISPLAY`.
-#[repr(C)]
-#[derive(Clone, Copy, Default, Debug, PartialEq)]
-pub struct CustomDisplay {
-    version: u32,
-    pub width: u32,
-    pub height: u32,
-    depth: u32,
-    color_format: u32,
-    src_partition: Viewport,
-    x_ratio: f32,
-    y_ratio: f32,
-    pub timing: Timing,
-    hw_mode_set_only: u32,
-}
-
-/// `NV_TIMING_FLAG`.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct TimingFlag {
-    interlaced: u32,
-    tv_format: u32,
-    scaling: u32,
-}
-
-/// `NV_TIMING_INPUT`.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct TimingInput {
-    version: u32,
-    width: u32,
-    height: u32,
-    rr: f32,
-    flag: TimingFlag,
-    kind: u32,
-}
-
 /// `NV_EDID_DATA_V2`.
 #[repr(C)]
 struct EdidData {
@@ -286,8 +239,6 @@ const _: () = assert!(size_of::<HdrCaps>() == 64);
 const _: () = assert!(size_of::<GetSync>() == 40);
 const _: () = assert!(size_of::<SetSync>() == 40);
 const _: () = assert!(size_of::<VrrInfo>() == 24);
-const _: () = assert!(size_of::<CustomDisplay>() == 144);
-const _: () = assert!(size_of::<TimingInput>() == 32);
 const _: () = assert!(size_of::<EdidData>() == 56);
 
 const PATH_INFO_VER: u32 = api::ver::<PathInfo>(2);
@@ -299,17 +250,14 @@ const HDR_CAPS_VER: u32 = api::ver::<HdrCaps>(3);
 const GET_SYNC_VER: u32 = api::ver::<GetSync>(1);
 const SET_SYNC_VER: u32 = api::ver::<SetSync>(2);
 const VRR_VER: u32 = api::ver::<VrrInfo>(1);
-const CUSTOM_VER: u32 = api::ver::<CustomDisplay>(1);
-const TIMING_INPUT_VER: u32 = api::ver::<TimingInput>(1);
 const EDID_VER: u32 = api::ver::<EdidData>(2);
 
 /// Flagi `NvAPI_DISP_SetDisplayConfig`.
 pub const VALIDATE_ONLY: u32 = 0x1;
 pub const SAVE_TO_PERSISTENCE: u32 = 0x2;
 
-/// `NV_TIMING_OVERRIDE_AUTO` / `_CVT_RB`.
+/// `NV_TIMING_OVERRIDE_AUTO`.
 const TIMING_OVERRIDE_AUTO: u32 = 1;
-pub const TIMING_CVT_RB: u32 = 6;
 
 // ------------------------------- ekrany ------------------------------------
 
@@ -871,121 +819,6 @@ pub fn set_adaptive_sync(api: &Api, display_id: u32, enabled: bool) -> Result<()
     };
     // SAFETY: struktura z poprawną wersją.
     check(unsafe { f(display_id, &mut data as *mut SetSync as *mut c_void) })
-}
-
-// ------------------------ rozdzielczości niestandardowe ---------------------
-
-pub fn custom_list(api: &Api, display_id: u32) -> Vec<CustomDisplay> {
-    let Some(f) = api.enum_custom else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for index in 0..32 {
-        let mut c = CustomDisplay {
-            version: CUSTOM_VER,
-            ..Default::default()
-        };
-        // SAFETY: struktura z poprawną wersją.
-        if unsafe {
-            f(
-                display_id,
-                index,
-                &mut c as *mut CustomDisplay as *mut c_void,
-            )
-        } != api::OK
-        {
-            break;
-        }
-        out.push(c);
-    }
-    out
-}
-
-/// Liczy taktowanie (standard CVT z ograniczonym wygaszaniem, jak w
-/// przykładzie Nvidii) i włącza rozdzielczość na próbę.
-pub fn custom_try(
-    api: &Api,
-    display_id: u32,
-    width: u32,
-    height: u32,
-    hz: f32,
-) -> Result<CustomDisplay, String> {
-    let get_timing = need(api.get_timing)?;
-    let try_custom = need(api.try_custom)?;
-    let mut input = TimingInput {
-        version: TIMING_INPUT_VER,
-        width,
-        height,
-        rr: hz,
-        flag: TimingFlag {
-            scaling: 1,
-            ..Default::default()
-        },
-        kind: TIMING_CVT_RB,
-    };
-    let mut c = CustomDisplay {
-        version: CUSTOM_VER,
-        width,
-        height,
-        depth: 32,
-        color_format: 0, // NV_FORMAT_UNKNOWN -> bieżący
-        src_partition: Viewport {
-            x: 0.0,
-            y: 0.0,
-            w: 1.0,
-            h: 1.0,
-        },
-        x_ratio: 1.0,
-        y_ratio: 1.0,
-        ..Default::default()
-    };
-    // SAFETY: struktury z poprawnymi wersjami.
-    check(unsafe {
-        get_timing(
-            display_id,
-            &mut input as *mut TimingInput as *mut c_void,
-            &mut c.timing as *mut Timing as *mut c_void,
-        )
-    })?;
-    let mut ids = [display_id];
-    // SAFETY: jeden ekran, jedna struktura.
-    check(unsafe {
-        try_custom(
-            ids.as_mut_ptr(),
-            1,
-            &mut c as *mut CustomDisplay as *mut c_void,
-        )
-    })?;
-    Ok(c)
-}
-
-pub fn custom_keep(api: &Api, display_id: u32) -> Result<(), String> {
-    let f = need(api.save_custom)?;
-    let mut ids = [display_id];
-    // SAFETY: jeden ekran; zapis tylko dla tego wyjścia i tego monitora.
-    check(unsafe { f(ids.as_mut_ptr(), 1, 1, 1) })
-}
-
-pub fn custom_revert(api: &Api, display_id: u32) -> Result<(), String> {
-    let f = need(api.revert_custom)?;
-    let mut ids = [display_id];
-    // SAFETY: jeden ekran.
-    check(unsafe { f(ids.as_mut_ptr(), 1) })
-}
-
-pub fn custom_delete(api: &Api, display_id: u32, custom: &CustomDisplay) -> Result<(), String> {
-    let f = need(api.delete_custom)?;
-    let mut ids = [display_id];
-    let mut c = *custom;
-    c.version = CUSTOM_VER;
-    // SAFETY: jeden ekran, struktura z poprawną wersją.
-    check(unsafe {
-        f(
-            ids.as_mut_ptr(),
-            1,
-            &mut c as *mut CustomDisplay as *mut c_void,
-        )
-    })
 }
 
 // ------------------------------- listy trybów -------------------------------

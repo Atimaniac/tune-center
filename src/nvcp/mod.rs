@@ -11,8 +11,7 @@
 //! - Ustawienia 3D: profil globalny i profile programów (DRS),
 //! - Ekran: rozdzielczość, odświeżanie, obrót, skalowanie,
 //! - Kolor i HDR: format, głębia, zakres dynamiczny, HDR10,
-//! - G-SYNC: tryb G-SYNC, wskaźnik, Adaptive Sync monitora,
-//! - Rozdzielczości niestandardowe.
+//! - G-SYNC: tryb G-SYNC, wskaźnik, Adaptive Sync monitora.
 //!
 //! Zmiany ekranu działają na próbę: przez 15 s można je zachować albo cofnąć,
 //! a bez odpowiedzi wracają same. Zmiany ustawień 3D są trwałe; przed
@@ -49,7 +48,6 @@ enum Page {
     Display,
     Color,
     Gsync,
-    Custom,
     /// Kompilacja shaderów z góry (crate::shaders).
     Shaders,
     /// Migotanie OLED przy VRR (crate::oled_fix).
@@ -84,7 +82,6 @@ fn page_icon(page: Page) -> crate::icons::Icon {
         Page::Display | Page::IntelDisplay | Page::OledFix => Icon::Monitor,
         Page::Color => Icon::Rgb,
         Page::Gsync | Page::FreeSync | Page::ArcSync => Icon::Sync,
-        Page::Custom => Icon::Options,
         Page::Shaders => Icon::Code,
     }
 }
@@ -94,7 +91,6 @@ enum Undo {
     Mode(display::Config),
     Color { display: u32, old: display::Color },
     Hdr { display: u32, old: bool },
-    Custom { display: u32 },
 }
 
 struct Pending {
@@ -138,10 +134,6 @@ pub struct NvcpTab {
     hdr: Option<Result<display::Hdr, String>>,
     sync: Option<Result<bool, String>>,
     vrr: Option<display::Vrr>,
-    customs: Option<Vec<display::CustomDisplay>>,
-    custom_w: u32,
-    custom_h: u32,
-    custom_hz: f32,
     pending: Option<Pending>,
     /// Podzakładka Shader compilation.
     shaders: crate::shaders::ShaderTab,
@@ -154,7 +146,7 @@ pub struct NvcpTab {
 }
 
 impl NvcpTab {
-    /// Podzakładka z argumentu `--page` (np. 3d, dlss, display, color, gsync, custom, shaders).
+    /// Podzakładka z argumentu `--page` (np. 3d, dlss, display, color, gsync, shaders).
     pub fn open_page(&mut self, name: &str) {
         self.page = match name {
             "3d" => Page::Settings3d,
@@ -162,7 +154,6 @@ impl NvcpTab {
             "display" => Page::Display,
             "color" => Page::Color,
             "gsync" => Page::Gsync,
-            "custom" => Page::Custom,
             "shaders" => Page::Shaders,
             "oled" => Page::OledFix,
             "fsr" => Page::Fsr,
@@ -205,10 +196,6 @@ impl NvcpTab {
             hdr: None,
             sync: None,
             vrr: None,
-            customs: None,
-            custom_w: 1920,
-            custom_h: 1080,
-            custom_hz: 60.0,
             pending: None,
             shaders: crate::shaders::ShaderTab::new(),
             oled: Default::default(),
@@ -328,10 +315,6 @@ impl NvcpTab {
                             (Page::Display, tr("Ekran", "Display")),
                             (Page::Color, tr("Kolor i HDR", "Color and HDR")),
                             (Page::Gsync, "G-SYNC"),
-                            (
-                                Page::Custom,
-                                tr("Rozdzielczości niestandardowe", "Custom resolutions"),
-                            ),
                             (Page::Shaders, "Shader compilation"),
                             (Page::OledFix, "OLED fix"),
                         ]
@@ -343,29 +326,25 @@ impl NvcpTab {
                             self.status = None;
                         }
                     }
-                    if let Some(driver) = self.driver.as_ref().filter(|d| !d.is_empty()) {
-                        // Sam numer wersji (bez gałęzi), żeby mieścił się w wierszu
-                        // podzakładek; pełna nazwa w podpowiedzi.
-                        let short = driver.split(" (").next().unwrap_or(driver);
-                        let text = if amd {
-                            format!("AMD Software {short}")
-                        } else if intel {
-                            crate::trf!("Sterownik Intel {short}", "Intel driver {short}")
-                        } else {
-                            crate::trf!("Sterownik {short}", "Driver {short}")
-                        };
-                        ui.separator();
-                        ui.label(RichText::new(text).color(muted()))
-                            .on_hover_text(driver.as_str());
-                    }
                 });
                 ui.separator();
-                if let Some(api) = &api {
-                    self.pending_banner(ui, api);
-                }
+                self.pending_banner(ui);
             });
 
         if self.page == Page::Overclock {
+            // Wersja sterownika obok limitu mocy (TDP): sam numer (bez gałęzi),
+            // pełna nazwa w podpowiedzi.
+            gpu.set_driver(self.driver.as_ref().filter(|d| !d.is_empty()).map(|driver| {
+                let short = driver.split(" (").next().unwrap_or(driver).to_owned();
+                let name = if amd {
+                    "AMD Software"
+                } else if intel {
+                    tr("Sterownik Intel", "Intel driver")
+                } else {
+                    tr("Sterownik", "Driver")
+                };
+                (name.to_owned(), short, driver.clone())
+            }));
             // Dawna zakładka GPU ma własne panele i przewijanie.
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
@@ -442,7 +421,6 @@ impl NvcpTab {
                             Page::Display => self.display_ui(ui, &api),
                             Page::Color => self.color_ui(ui, &api),
                             Page::Gsync => self.gsync_ui(ui, &api),
-                            Page::Custom => self.custom_ui(ui, &api),
                             Page::Shaders => self.shaders_ui(ui, Some(&api)),
                             Page::OledFix => self.oled.ui(ui, self.driver.as_deref()),
                             Page::Fsr | Page::FreeSync | Page::ArcSync | Page::IntelDisplay => {}
@@ -1119,7 +1097,6 @@ impl NvcpTab {
         self.hdr = None;
         self.sync = None;
         self.vrr = None;
-        self.customs = None;
     }
 
     /// Wybór ekranu; zwraca wybrany albo `None` (z komunikatem).
@@ -1826,104 +1803,9 @@ impl NvcpTab {
         }
     }
 
-    // ------------------------ rozdzielczości niestandardowe -------------------
-
-    fn custom_ui(&mut self, ui: &mut egui::Ui, api: &Arc<Api>) {
-        let Some(d) = self.display_picker(ui, api) else {
-            return;
-        };
-        if self.customs.is_none() {
-            self.customs = Some(display::custom_list(api, d.id));
-        }
-        let list = self.customs.clone().unwrap_or_default();
-        ui.add_space(8.0);
-        if list.is_empty() {
-            ui.label(
-                RichText::new(tr(
-                    "Brak rozdzielczości niestandardowych dla tego ekranu.",
-                    "No custom resolutions for this display.",
-                ))
-                .color(muted()),
-            );
-        } else {
-            egui::Grid::new("nvcp_custom_list")
-                .num_columns(2)
-                .striped(true)
-                .show(ui, |ui| {
-                    for c in &list {
-                        ui.label(format!(
-                            "{} x {} @ {:.2} Hz",
-                            c.width,
-                            c.height,
-                            c.timing.refresh_mhz() as f32 / 1000.0
-                        ));
-                        if ui.small_button(tr("Usuń", "Delete")).clicked() {
-                            match display::custom_delete(api, d.id, c) {
-                                Ok(()) => self.ok(tr("Usunięto.", "Deleted.")),
-                                Err(e) => self.fail(e),
-                            }
-                            self.customs = None;
-                        }
-                        ui.end_row();
-                    }
-                });
-        }
-        ui.add_space(12.0);
-        ui.label(
-            RichText::new(tr("Nowa rozdzielczość", "New resolution"))
-                .strong()
-                .color(accent()),
-        );
-        ui.horizontal_wrapped(|ui| {
-            ui.add(
-                egui::DragValue::new(&mut self.custom_w)
-                    .range(640..=7680)
-                    .suffix(" px"),
-            );
-            ui.label("x");
-            ui.add(
-                egui::DragValue::new(&mut self.custom_h)
-                    .range(480..=4320)
-                    .suffix(" px"),
-            );
-            ui.label("@");
-            ui.add(
-                egui::DragValue::new(&mut self.custom_hz)
-                    .range(23.0..=540.0)
-                    .speed(0.1)
-                    .suffix(" Hz"),
-            );
-            if ui
-                .add_enabled(
-                    self.pending.is_none(),
-                    egui::Button::new(tr("Testuj", "Test")),
-                )
-                .clicked()
-            {
-                match display::custom_try(api, d.id, self.custom_w, self.custom_h, self.custom_hz) {
-                    Ok(_) => {
-                        self.pending = Some(Pending {
-                            undo: Undo::Custom { display: d.id },
-                            deadline: Instant::now() + CONFIRM_TIME,
-                        });
-                        self.status = None;
-                        self.config = None;
-                    }
-                    Err(e) => self.fail(e),
-                }
-            }
-        });
-        ui.label(RichText::new(tr(
-            "Taktowanie liczy sterownik (standard CVT z ograniczonym wygaszaniem). Rozdzielczość działa najpierw na próbę - zapisz ją przyciskiem \"Zachowaj\" w ciągu 15 s. Zbyt wysokie odświeżanie może dać czarny ekran; wtedy po prostu poczekaj na powrót.",
-            "The driver computes the timing (CVT reduced blanking). The resolution is applied as a trial first - save it with \"Keep\" within 15 s. A too-high refresh rate may give a black screen; then just wait for the revert.",
-        ))
-        .small()
-        .color(muted()));
-    }
-
     // ------------------------- potwierdzanie zmian ---------------------------
 
-    fn pending_banner(&mut self, ui: &mut egui::Ui, api: &Arc<Api>) {
+    fn pending_banner(&mut self, ui: &mut egui::Ui) {
         let Some(p) = &self.pending else { return };
         let left = p
             .deadline
@@ -1940,7 +1822,7 @@ impl NvcpTab {
                 .color(warn()),
             );
             if ui.button(tr("Zachowaj", "Keep")).clicked() {
-                self.keep(api);
+                self.keep();
             }
             if ui.button(tr("Cofnij", "Revert")).clicked() {
                 self.revert();
@@ -1953,17 +1835,11 @@ impl NvcpTab {
         ui.separator();
     }
 
-    fn keep(&mut self, api: &Arc<Api>) {
-        let Some(p) = self.pending.take() else { return };
-        if let Undo::Custom { display } = p.undo {
-            match display::custom_keep(api, display) {
-                Ok(()) => self.ok(tr("Rozdzielczość zapisana.", "Resolution saved.")),
-                Err(e) => self.fail(e),
-            }
-            self.customs = None;
-        } else {
-            self.ok(tr("Zachowano.", "Kept."));
+    fn keep(&mut self) {
+        if self.pending.take().is_none() {
+            return;
         }
+        self.ok(tr("Zachowano.", "Kept."));
         self.invalidate_display();
         self.resolutions.clear();
         self.refreshes.clear();
@@ -1978,7 +1854,6 @@ impl NvcpTab {
             Undo::Mode(mut old) => old.apply(&api, display::SAVE_TO_PERSISTENCE),
             Undo::Color { display, old } => display::set_color(&api, display, old),
             Undo::Hdr { display, old } => display::set_hdr(&api, display, old),
-            Undo::Custom { display } => display::custom_revert(&api, display),
         };
         if let Err(e) = result {
             self.fail(crate::trf!(
@@ -2051,10 +1926,6 @@ mod hardware {
                 "  VRR: {:?}, Adaptive Sync: {:?}",
                 display::vrr(&api, d.id),
                 display::adaptive_sync(&api, d.id)
-            );
-            println!(
-                "  własne rozdzielczości: {}",
-                display::custom_list(&api, d.id).len()
             );
             let mut same = cfg.with_mode(d.id, mode).unwrap();
             let t = Instant::now();

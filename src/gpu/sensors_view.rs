@@ -36,6 +36,9 @@ pub struct SensorsView {
     /// Czy rozwinięte są mniej istotne odczyty ("Ukryte"); po starcie zwinięte.
     show_hidden: bool,
     seen: u64,
+    /// Wersja sterownika z zakładki NVIDIA/RADEON/INTEL: (nazwa, krótka
+    /// wersja, pełna wersja do podpowiedzi), pokazywana obok limitu mocy.
+    pub driver: Option<(String, String, String)>,
 }
 
 /// Jeden wiersz: nazwa, opis źródła, jednostka, wartość z odczytu.
@@ -381,6 +384,18 @@ impl SensorsView {
                         .color(theme::text()),
                 )
                 .on_hover_text(crate::trf!("Źródło: {source}", "Source: {source}"));
+            }
+            if let Some((name, short, full)) = &self.driver {
+                if !chips.is_empty() {
+                    theme::vsep(ui, 16.0);
+                }
+                icons::show(ui, Icon::Driver, 15.0, theme::accent());
+                ui.label(
+                    RichText::new(format!("{name}: {short}"))
+                        .size(12.5)
+                        .color(theme::text()),
+                )
+                .on_hover_text(full.as_str());
             }
         });
         ui.add_space(5.0);

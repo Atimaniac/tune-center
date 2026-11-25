@@ -126,12 +126,6 @@ const ID_DISP_GET_HDR_CAPABILITIES: u32 = 0x84f2_a8df;
 const ID_DISP_GET_ADAPTIVE_SYNC_DATA: u32 = 0xb73d_1ee9;
 const ID_DISP_SET_ADAPTIVE_SYNC_DATA: u32 = 0x3eeb_ba1d;
 const ID_DISP_GET_VRR_INFO: u32 = 0xdf8f_da57;
-const ID_DISP_ENUM_CUSTOM_DISPLAY: u32 = 0xa207_2d59;
-const ID_DISP_TRY_CUSTOM_DISPLAY: u32 = 0x1f7d_b630;
-const ID_DISP_SAVE_CUSTOM_DISPLAY: u32 = 0x4988_2876;
-const ID_DISP_REVERT_CUSTOM_DISPLAY_TRIAL: u32 = 0xcbbd_40f0;
-const ID_DISP_DELETE_CUSTOM_DISPLAY: u32 = 0x552e_5b9b;
-const ID_DISP_GET_TIMING: u32 = 0x1751_67e9;
 
 const ID_DRS_CREATE_SESSION: u32 = 0x0694_d52e;
 const ID_DRS_DESTROY_SESSION: u32 = 0xdad9_cff8;
@@ -178,11 +172,6 @@ pub type FnEdid = unsafe extern "C" fn(u32, *mut c_void, *mut u32) -> Status;
 pub type FnGetDisplayConfig = unsafe extern "C" fn(*mut u32, *mut c_void) -> Status;
 pub type FnSetDisplayConfig = unsafe extern "C" fn(u32, *mut c_void, u32) -> Status;
 pub type FnDisplayStruct = unsafe extern "C" fn(u32, *mut c_void) -> Status;
-pub type FnEnumCustom = unsafe extern "C" fn(u32, u32, *mut c_void) -> Status;
-pub type FnTryCustom = unsafe extern "C" fn(*mut u32, u32, *mut c_void) -> Status;
-pub type FnSaveCustom = unsafe extern "C" fn(*mut u32, u32, u32, u32) -> Status;
-pub type FnRevertCustom = unsafe extern "C" fn(*mut u32, u32) -> Status;
-pub type FnGetTiming = unsafe extern "C" fn(u32, *mut c_void, *mut c_void) -> Status;
 
 pub type FnSession = unsafe extern "C" fn(Handle) -> Status;
 pub type FnSessionOut = unsafe extern "C" fn(*mut Handle) -> Status;
@@ -224,12 +213,6 @@ pub struct Api {
     pub get_adaptive_sync: Option<FnDisplayStruct>,
     pub set_adaptive_sync: Option<FnDisplayStruct>,
     pub vrr_info: Option<FnDisplayStruct>,
-    pub enum_custom: Option<FnEnumCustom>,
-    pub try_custom: Option<FnTryCustom>,
-    pub save_custom: Option<FnSaveCustom>,
-    pub revert_custom: Option<FnRevertCustom>,
-    pub delete_custom: Option<FnTryCustom>,
-    pub get_timing: Option<FnGetTiming>,
 
     pub drs_create_session: Option<FnSessionOut>,
     pub drs_destroy_session: Option<FnSession>,
@@ -324,12 +307,6 @@ impl Api {
             get_adaptive_sync: f!(ID_DISP_GET_ADAPTIVE_SYNC_DATA),
             set_adaptive_sync: f!(ID_DISP_SET_ADAPTIVE_SYNC_DATA),
             vrr_info: f!(ID_DISP_GET_VRR_INFO),
-            enum_custom: f!(ID_DISP_ENUM_CUSTOM_DISPLAY),
-            try_custom: f!(ID_DISP_TRY_CUSTOM_DISPLAY),
-            save_custom: f!(ID_DISP_SAVE_CUSTOM_DISPLAY),
-            revert_custom: f!(ID_DISP_REVERT_CUSTOM_DISPLAY_TRIAL),
-            delete_custom: f!(ID_DISP_DELETE_CUSTOM_DISPLAY),
-            get_timing: f!(ID_DISP_GET_TIMING),
             drs_create_session: f!(ID_DRS_CREATE_SESSION),
             drs_destroy_session: f!(ID_DRS_DESTROY_SESSION),
             drs_load: f!(ID_DRS_LOAD_SETTINGS),

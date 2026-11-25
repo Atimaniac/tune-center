@@ -1126,6 +1126,12 @@ impl Drop for GpuTab {
 }
 
 impl GpuTab {
+    /// Wersja sterownika pokazywana obok limitu mocy: (nazwa, krótka
+    /// wersja, pełna wersja); `None`, gdy nieznana.
+    pub fn set_driver(&mut self, driver: Option<(String, String, String)>) {
+        self.sensors.driver = driver;
+    }
+
     /// Rysuje całą zakładkę wewnątrz przekazanego obszaru.
     pub fn ui(&mut self, ui: &mut egui::Ui, snap: Option<&Snapshot>) {
         self.poll();

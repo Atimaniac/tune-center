@@ -268,9 +268,126 @@ pub fn chart(
     }
 }
 
+/// Szerokość słupka i odstęp między słupkami (proporcja 4 : 3).
+const BAR_W: f32 = 4.0;
+const BAR_GAP: f32 = 3.0;
+
+/// Liczba odczytów na słupek, aby słupki o szerokości `BAR_W` z odstępem
+/// `BAR_GAP` objęły całe 120 s na szerokości `width`.
+fn per_bar(width: f32) -> usize {
+    let fit = ((width + BAR_GAP) / (BAR_W + BAR_GAP)).floor().max(1.0) as usize;
+    LEN.div_ceil(fit)
+}
+
+/// Słupek `b` (0 = najnowszy): średnia z odczytów od `b * k` do
+/// `(b + 1) * k - 1` sekund temu; `None`, gdy w tym przedziale nie ma odczytów.
+fn bucket(series: &[Option<f32>], k: usize, b: usize) -> Option<f32> {
+    let end = series.len().checked_sub(b * k)?;
+    let values: Vec<f32> = series[end.saturating_sub(k)..end]
+        .iter()
+        .flatten()
+        .copied()
+        .collect();
+    (!values.is_empty()).then(|| values.iter().sum::<f32>() / values.len() as f32)
+}
+
+/// Wykres słupkowy (histogram) z ostatnich 120 s, o rozmiarze `size`.
+/// Każdy słupek to średnia z kilku sekund (tyle, ile wymaga szerokość),
+/// najnowszy przy prawej krawędzi. Po najechaniu kursorem słupek się
+/// podświetla, a dymek pokazuje wartość (`fmt`) i czas.
+pub fn bar_chart(
+    ui: &mut egui::Ui,
+    size: Vec2,
+    series: &[Option<f32>],
+    color: Color32,
+    scale: Scale,
+    fmt: &dyn Fn(f32) -> String,
+) {
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, CornerRadius::same(6), theme::well());
+    let Some((min, max, _)) = stats_points(series) else {
+        return;
+    };
+    let (lo, hi) = match scale {
+        Scale::FromZero(min_top) => (0.0, (max * 1.15).max(min_top)),
+        Scale::Fixed(lo, hi) => (lo, hi),
+        Scale::Around(min_span) => {
+            let mid = (min + max) / 2.0;
+            let half = ((max - min) / 2.0 + min_span / 4.0).max(min_span / 2.0);
+            (mid - half, mid + half)
+        }
+    };
+    let plot = rect.shrink(6.0);
+    let k = per_bar(plot.width());
+    let bars = LEN.div_ceil(k);
+    // Słupki z odstępami w proporcji 4 : 3 wypełniają całą szerokość.
+    let gap_ratio = BAR_GAP / (BAR_W + BAR_GAP);
+    let pitch = plot.width() / (bars as f32 - gap_ratio);
+    let bar_w = pitch * (1.0 - gap_ratio);
+    // Słupek `b` liczony od prawej krawędzi.
+    let left_of = |b: usize| plot.right() - b as f32 * pitch - bar_w;
+    let hovered = response.hover_pos().and_then(|pos| {
+        let b = ((plot.right() + pitch - bar_w - pos.x) / pitch).floor();
+        (b >= 0.0 && (b as usize) < bars).then_some(b as usize)
+    });
+
+    for b in 0..bars {
+        let Some(v) = bucket(series, k, b) else {
+            continue;
+        };
+        let frac = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
+        let h = (frac * plot.height()).max(1.0);
+        let x = left_of(b);
+        let bar = egui::Rect::from_min_max(pos2(x, plot.bottom() - h), pos2(x + bar_w, plot.bottom()));
+        let c = if hovered == Some(b) {
+            color
+        } else {
+            color.gamma_multiply(0.8)
+        };
+        painter.rect_filled(bar, CornerRadius::same(1), c);
+    }
+
+    if let Some(b) = hovered {
+        let text = bucket(series, k, b).map_or_else(|| "—".to_owned(), fmt);
+        let (from, to) = (b * k, (b + 1) * k - 1);
+        response.on_hover_ui_at_pointer(|ui| {
+            ui.label(RichText::new(text).strong().size(14.0));
+            ui.label(
+                RichText::new(if k == 1 && from == 0 {
+                    crate::i18n::tr("teraz", "now").to_owned()
+                } else if k == 1 {
+                    crate::trf!("{} s temu", "{} s ago", from)
+                } else {
+                    crate::trf!("średnio {}–{} s temu", "average {}–{} s ago", from, to)
+                })
+                .size(11.5)
+                .color(muted()),
+            );
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{stats, History};
+    use super::{bucket, per_bar, stats, History};
+
+    #[test]
+    fn bars_cover_120_seconds() {
+        // 7 px na słupek: 300 px mieści 43 słupki, czyli 3 s na słupek.
+        assert_eq!(per_bar(300.0), 3);
+        assert_eq!(per_bar(10_000.0), 1);
+        let series: Vec<Option<f32>> = (0..10).map(|i| Some(i as f32)).collect();
+        // Najnowszy słupek: odczyty 7, 8, 9.
+        assert_eq!(bucket(&series, 3, 0), Some(8.0));
+        // Najstarszy, niepełny: tylko odczyt 0.
+        assert_eq!(bucket(&series, 3, 3), Some(0.0));
+        assert_eq!(bucket(&series, 3, 4), None);
+        assert_eq!(bucket(&[None, None], 1, 0), None);
+    }
     use std::time::{Duration, Instant};
 
     #[test]

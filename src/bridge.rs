@@ -229,6 +229,16 @@ impl Snapshot {
         for s in &mut self.speeds {
             fix(&mut s.rpm);
         }
+        // Próbka inżynierska Intela: "Genuine Intel 0000" -> właściwa nazwa.
+        let cpu = |hw: &mut String| {
+            if crate::cpu::is_engineering_name(hw) && !crate::cpu::is_engineering_name(crate::cpu::name()) {
+                *hw = crate::cpu::name().to_owned();
+            }
+        };
+        self.temps.iter_mut().for_each(|t| cpu(&mut t.hw));
+        self.fans.iter_mut().for_each(|f| cpu(&mut f.hw));
+        self.speeds.iter_mut().for_each(|s| cpu(&mut s.hw));
+        self.powers.iter_mut().for_each(|p| cpu(&mut p.hw));
     }
 }
 

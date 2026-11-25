@@ -10,8 +10,7 @@ przełącza się przyciskami w nagłówku, obok logo:
     zegar rdzenia / napięcie dla kart Nvidia (dawny NVCurve, wcześniej
     zakładka GPU),
   - odpowiednik panelu sterowania Nvidia: ustawienia 3D (globalne i dla
-    programów), tryb ekranu, kolor i HDR, G-SYNC, rozdzielczości
-    niestandardowe.
+    programów), tryb ekranu, kolor i HDR, G-SYNC.
 - **CPU** - Intel: limity mocy, offsety napięcia i Core IccMax;
   AMD Ryzen: Curve Optimizer dla każdego rdzenia i limity PBO.
 - **FAN** - sterowanie wentylatorami płyty głównej: ręcznie lub krzywą
@@ -208,10 +207,8 @@ nieudokumentowanych. Działa niezależnie od trybu `--demo`.
   0x80000032 = zachowanie NVIDIA, ale rzadsze przełączanie. „Wyłącz” usuwa
   wpis. Działa po restarcie; program przywraca wpis po czystej instalacji
   sterownika. Wymaga administratora.
-- **Rozdzielczości niestandardowe** - lista, usuwanie i dodawanie (taktowanie
-  CVT z ograniczonym wygaszaniem liczy sterownik).
 
-Zmiany ekranu (tryb, kolor, HDR, nowa rozdzielczość) działają najpierw na
+Zmiany ekranu (tryb, kolor, HDR) działają najpierw na
 próbę: przez 15 s można je zachować albo cofnąć, a bez odpowiedzi wracają
 same - także przy oknie schowanym w zasobniku i przy zamknięciu programu.
 

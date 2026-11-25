@@ -71,6 +71,16 @@ pub fn cpu_info() -> CpuInfo {
         let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
         name = String::from_utf8_lossy(&bytes[..end]).trim().to_string();
     }
+    if is_engineering_name(&name) {
+        let stepping = eax & 0xF;
+        let threads = std::thread::available_parallelism().map_or(0, |n| n.get());
+        if let Some(real) = windows_name()
+            .filter(|n| !is_engineering_name(n))
+            .or_else(|| engineering_model(family, model, stepping, threads).map(str::to_owned))
+        {
+            name = real;
+        }
+    }
 
     // AMD: liczba wątków (0x80000008) podzielona przez wątki na rdzeń (0x8000001E).
     let mut physical_cores = 0;
@@ -94,4 +104,64 @@ pub fn cpu_info() -> CpuInfo {
 #[cfg(not(target_arch = "x86_64"))]
 pub fn cpu_info() -> CpuInfo {
     CpuInfo::default()
+}
+
+/// Nazwa próbki inżynierskiej Intela bez modelu, np. "Genuine Intel(R) 0000"
+/// z CPUID albo "Genuine Intel 0000" z czujników (LibreHardwareMonitor).
+pub fn is_engineering_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.contains("genuine") && lower.contains("0000")
+}
+
+/// Nazwa procesora z Windows (`ProcessorNameString`).
+fn windows_name() -> Option<String> {
+    #[cfg(windows)]
+    {
+        crate::shaders::registry::Key::open(
+            crate::shaders::registry::HKLM,
+            r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+        )?
+        .string("ProcessorNameString")
+        .map(|n| n.trim().to_owned())
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Znane próbki inżynierskie: rodzina, model, stepping i liczba wątków ->
+/// właściwa nazwa (gdy Windows też podaje tylko "0000").
+fn engineering_model(family: u32, model: u32, stepping: u32, threads: usize) -> Option<&'static str> {
+    match (family, model, stepping, threads) {
+        // Raptor Lake-HX, 8 rdzeni P + 12 E (28 wątków), CPUID B0671.
+        (6, 0xB7, 1, 28) => Some("Intel(R) Core(TM) i7-13850HX"),
+        _ => None,
+    }
+}
+
+/// Nazwa procesora z CPUID (z poprawką dla próbek inżynierskich), raz na
+/// uruchomienie programu.
+pub fn name() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| cpu_info().name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engineering_sample_names() {
+        assert!(is_engineering_name("Genuine Intel(R) 0000"));
+        assert!(is_engineering_name("Genuine Intel 0000"));
+        assert!(!is_engineering_name("Intel(R) Core(TM) i7-13850HX"));
+        assert_eq!(engineering_model(6, 0xB7, 1, 28), Some("Intel(R) Core(TM) i7-13850HX"));
+        assert_eq!(engineering_model(6, 0xB7, 1, 32), None);
+        assert_eq!(
+            crate::hw_names::cpu_model(engineering_model(6, 0xB7, 1, 28).unwrap()),
+            "i7-13850HX"
+        );
+        assert_eq!(crate::hw_names::cpu_model("Intel® Core™ i7-13850HX"), "i7-13850HX");
+    }
 }

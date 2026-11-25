@@ -37,6 +37,8 @@ pub enum Icon {
     Memory,
     Database,
     Bus,
+    /// Oprogramowanie (sterownik): okno programu ze znacznikami kodu.
+    Driver,
 }
 
 /// Rysuje ikonę wpisaną w kwadrat `rect`.
@@ -371,6 +373,22 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             }
             painter.line_segment([p(0.0, -0.22), p(0.0, 0.0)], stroke);
             painter.line_segment([p(-0.32, 0.0), p(0.32, 0.0)], stroke);
+        }
+        Icon::Driver => {
+            // Okno programu: pasek tytułu z kropkami, w środku znaczniki </>.
+            painter.rect_stroke(
+                Rect::from_min_max(p(-0.44, -0.38), p(0.44, 0.38)),
+                egui::CornerRadius::same((s * 0.07) as u8),
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            painter.line_segment([p(-0.44, -0.18), p(0.44, -0.18)], stroke);
+            for x in [-0.32, -0.2] {
+                painter.circle_filled(p(x, -0.28), w * 0.6, color);
+            }
+            painter.line(vec![p(-0.12, 0.0), p(-0.26, 0.1), p(-0.12, 0.2)], stroke);
+            painter.line(vec![p(0.12, 0.0), p(0.26, 0.1), p(0.12, 0.2)], stroke);
+            painter.line_segment([p(0.05, -0.04), p(-0.05, 0.24)], stroke);
         }
     }
 }

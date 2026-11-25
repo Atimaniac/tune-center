@@ -13,7 +13,7 @@ pub mod games;
 pub mod loose;
 pub mod probe;
 #[cfg(windows)]
-mod registry;
+pub(crate) mod registry;
 pub mod rootsig;
 pub mod source2;
 pub mod ue12;

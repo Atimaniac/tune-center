@@ -243,7 +243,7 @@ fn power_tile(ui: &mut egui::Ui, tile: &Tile, history: &History, inner: Vec2) {
             });
             ui.add_space(6.0);
             let chart_h = (ui.available_height() - 18.0).max(24.0);
-            history::chart(
+            history::bar_chart(
                 ui,
                 Vec2::new(inner.x, chart_h),
                 &history::as_points(series),
