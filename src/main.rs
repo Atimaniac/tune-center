@@ -139,7 +139,7 @@ enum Tab {
 const WINDOW_SIZE: [f32; 2] = [1280.0, 869.0];
 
 /// Rozmiar jednego przycisku okna (minimalizuj, maksymalizuj, zamknij).
-const WINDOW_BUTTON: egui::Vec2 = egui::vec2(48.0, 30.0);
+const WINDOW_BUTTON: egui::Vec2 = egui::vec2(46.0, 26.0);
 
 #[derive(Clone, Copy, PartialEq)]
 enum WindowButton {
@@ -1327,14 +1327,14 @@ impl eframe::App for App {
             .frame(egui::Frame::NONE.inner_margin(egui::Margin {
                 left: 18,
                 right: 14,
-                top: 18,
-                bottom: 10,
+                top: 16,
+                bottom: 6,
             }))
             .show(ui, |ui| {
                 // Zakładki są w jednym wierszu; zawijają się tylko na ekranie
                 // węższym niż okno.
                 ui.horizontal_wrapped(|ui| {
-                    const ROW: f32 = 64.0;
+                    const ROW: f32 = 54.0;
                     ui.spacing_mut().item_spacing = egui::vec2(3.0, 8.0);
                     let (logo_rect, _) =
                         ui.allocate_exact_size(egui::vec2(ROW, ROW), Sense::hover());
@@ -1349,15 +1349,7 @@ impl eframe::App for App {
                         egui::vec2(ROW, ROW),
                     ))
                     .paint_at(ui, logo_rect);
-                    // Pionowa kreska między logo a napisem.
-                    let (sep, _) = ui.allocate_exact_size(egui::vec2(19.0, ROW), Sense::hover());
-                    ui.painter().line_segment(
-                        [
-                            egui::pos2(sep.center().x, sep.center().y - 17.0),
-                            egui::pos2(sep.center().x, sep.center().y + 17.0),
-                        ],
-                        Stroke::new(1.0, theme::card_edge()),
-                    );
+                    ui.add_space(8.0);
                     // Napis "TUNE CENTER" jako grafika. Zakładki muszą zmieścić
                     // się obok niego w tym samym wierszu, więc przy długich
                     // nazwach sprzętu napis jest odpowiednio mniejszy.
@@ -1388,7 +1380,7 @@ impl eframe::App for App {
                     );
                     for (tab, label, icon) in TABS {
                         let label = tab_label(tab, label);
-                        if tab_button(ui, label, icon, self.tab == tab, 39.0).clicked() {
+                        if tab_button(ui, label, icon, self.tab == tab, 34.0).clicked() {
                             self.tab = tab;
                         }
                     }

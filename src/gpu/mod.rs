@@ -710,7 +710,7 @@ impl GpuTab {
         for slot in 0..SLOTS {
             let filled = self.slots[slot].is_some();
             let label = RichText::new(format!("{}", slot + 1)).strong();
-            let mut button = egui::Button::new(label).min_size(egui::vec2(30.0, 28.0));
+            let mut button = egui::Button::new(label).min_size(egui::vec2(30.0, 25.0));
             if self.save_mode {
                 button = button.fill(theme::accent().linear_multiply(0.35 + 0.5 * pulse));
             } else {
@@ -748,6 +748,24 @@ impl GpuTab {
         } else {
             crate::i18n::tr("Zapisz", "Save")
         };
+        // Zapis, eksport i import przy prawej krawędzi wiersza (gdy jest miejsce).
+        {
+            let spacing = ui.spacing().item_spacing.x;
+            let needed: f32 = [
+                save,
+                crate::i18n::tr("Eksportuj", "Export"),
+                crate::i18n::tr("Importuj", "Import"),
+            ]
+            .iter()
+            .map(|label| {
+                theme::icon_button_width(theme::icon_button_text_width(ui, label)) + spacing
+            })
+            .sum();
+            let free = ui.available_size_before_wrap().x - needed - 2.0 * spacing;
+            if free > 0.0 {
+                ui.add_space(free);
+            }
+        }
         if theme::icon_button(ui, Icon::Save, save, true, false)
             .on_hover_text(crate::i18n::tr(
                 "Kliknij, a potem wybierz numer od 1 do 5",
@@ -960,7 +978,6 @@ impl GpuTab {
 
     fn tab_info(&mut self, ui: &mut egui::Ui, snap: Option<&Snapshot>) {
         theme::title(ui, &self.gpus.get(self.gpu).cloned().unwrap_or_default());
-        ui.add_space(4.0);
         {
             let samples = self.sampler.samples.lock().unwrap();
             self.sampler.want_detail();
@@ -1174,13 +1191,13 @@ impl GpuTab {
                         );
                     }
                 });
-                ui.add_space(10.0);
+                ui.add_space(4.0);
             });
 
         egui::Panel::bottom("gpu_footer")
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 // Wszystkie przyciski w jednym wierszu.
                 ui.horizontal_wrapped(|ui| {
                     let dirty = self.dirty();

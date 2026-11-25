@@ -499,8 +499,8 @@ pub fn apply(ctx: &egui::Context, light: bool, style: Style) {
     ctx.set_visuals(visuals);
 
     ctx.global_style_mut(|style| {
-        style.spacing.button_padding = vec2(10.0, 5.0);
-        style.spacing.interact_size.y = 28.0;
+        style.spacing.button_padding = vec2(9.0, 4.0);
+        style.spacing.interact_size.y = 25.0;
         style
             .text_styles
             .insert(egui::TextStyle::Heading, tab_font(18.0));
@@ -876,12 +876,12 @@ impl Card {
 pub fn panel_frame() -> egui::Frame {
     egui::Frame::NONE
         .outer_margin(egui::Margin {
-            left: 12,
-            right: 12,
+            left: 10,
+            right: 10,
             top: 2,
             bottom: 0,
         })
-        .inner_margin(egui::Margin::symmetric(14, 12))
+        .inner_margin(egui::Margin::symmetric(12, 8))
         .fill(card_fill())
         .stroke(Stroke::new(1.0_f32, card_edge()))
         .corner_radius(CornerRadius::same(12))
@@ -891,12 +891,12 @@ pub fn panel_frame() -> egui::Frame {
 pub fn bar_frame() -> egui::Frame {
     egui::Frame::NONE
         .outer_margin(egui::Margin {
-            left: 12,
-            right: 12,
-            top: 8,
-            bottom: 10,
+            left: 10,
+            right: 10,
+            top: 6,
+            bottom: 8,
         })
-        .inner_margin(egui::Margin::symmetric(12, 6))
+        .inner_margin(egui::Margin::symmetric(10, 4))
         .fill(card_fill())
         .stroke(Stroke::new(1.0_f32, card_edge()))
         .corner_radius(CornerRadius::same(10))
@@ -943,7 +943,7 @@ pub fn bar_button(
         .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
         .size()
         .x;
-    let size = vec2(text_width + b(50.0), b(30.0));
+    let size = vec2(text_width + b(46.0), b(27.0));
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
@@ -1037,7 +1037,7 @@ pub fn primary_button(
     let font = egui::FontId::proportional(b(14.0));
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font, text());
     let icon_w = if icon.is_some() { b(26.0) } else { 0.0 };
-    let size = vec2(galley.size().x + icon_w + b(36.0), b(34.0));
+    let size = vec2(galley.size().x + icon_w + b(32.0), b(28.0));
     let sense = if enabled {
         Sense::click()
     } else {
@@ -1113,6 +1113,23 @@ pub fn title(ui: &mut egui::Ui, text: &str) {
     });
 }
 
+/// Szerokość przycisku z ikoną o napisie szerokości `text_width`.
+pub fn icon_button_width(text_width: f32) -> f32 {
+    text_width + b(38.0)
+}
+
+/// Szerokość napisu przycisku z ikoną.
+pub fn icon_button_text_width(ui: &egui::Ui, label: &str) -> f32 {
+    ui.painter()
+        .layout_no_wrap(
+            label.to_owned(),
+            egui::FontId::proportional(b(12.5)),
+            Color32::WHITE,
+        )
+        .size()
+        .x
+}
+
 /// Zwykły przycisk z ikoną. `accent` - wyróżniony jasną obwódką (główna
 /// czynność w wierszu); wyłączony jest wyszarzony i nie reaguje na kliknięcie.
 pub fn icon_button(
@@ -1128,7 +1145,7 @@ pub fn icon_button(
         .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
         .size()
         .x;
-    let size = vec2(text_width + b(42.0), b(28.0));
+    let size = vec2(icon_button_width(text_width), b(25.0));
     let sense = if enabled {
         Sense::click()
     } else {
@@ -1209,11 +1226,11 @@ pub fn sub_tab_icon(
     label: &str,
     selected: bool,
 ) -> egui::Response {
-    let font = egui::FontId::proportional(b(14.0));
+    let font = egui::FontId::proportional(b(13.0));
     let color = if selected { text() } else { muted() };
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font, color);
     let icon_w = if icon.is_some() { b(22.0) } else { 0.0 };
-    let size = vec2(galley.size().x + icon_w + b(20.0), b(32.0));
+    let size = vec2(galley.size().x + icon_w + b(18.0), b(27.0));
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
         let p = ui.painter();

@@ -289,7 +289,7 @@ fn is_hidden(name: &str) -> bool {
 }
 
 /// Wysokość wiersza (jak w GPU-Z: nazwa, wartość, wykres na całą długość).
-const ROW_H: f32 = 32.0;
+const ROW_H: f32 = 27.0;
 
 impl SensorsView {
     pub fn ui(&mut self, ui: &mut egui::Ui, samples: &Samples, _snap: Option<&Snapshot>) {
@@ -319,7 +319,7 @@ impl SensorsView {
                 .color(theme::muted()),
             );
         });
-        ui.add_space(6.0);
+        ui.add_space(3.0);
 
         let history = &samples.history;
         let last = history.back();
@@ -383,7 +383,7 @@ impl SensorsView {
                 .on_hover_text(crate::trf!("Źródło: {source}", "Source: {source}"));
             }
         });
-        ui.add_space(8.0);
+        ui.add_space(5.0);
 
         // Wiersze z wykresem - tylko czujniki, które karta udostępnia.
         let mut lines: Vec<Line> = rows()
@@ -520,5 +520,5 @@ fn line_ui(ui: &mut egui::Ui, line: &Line, show: Show) {
             &|v| line.fmt(v),
         );
     });
-    ui.add_space(5.0);
+    ui.add_space(3.0);
 }
