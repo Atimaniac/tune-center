@@ -446,7 +446,6 @@ impl AmdTab {
 
         if vendor_header(
             ui,
-            "AMD",
             &self.info.name,
             self.generation.map(|g| g.name()),
         ) {

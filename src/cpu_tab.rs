@@ -261,8 +261,7 @@ impl IntelTab {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let mut action = None;
 
-        let vendor = if self.info.intel { "INTEL" } else { "CPU" };
-        if vendor_header(ui, vendor, &self.info.name, None) {
+        if vendor_header(ui, &self.info.name, None) {
             action = Some(Action::Reload);
         }
         ui.add_space(10.0);
@@ -501,20 +500,12 @@ fn title(ui: &mut egui::Ui, icon: Icon, text: &str) {
     ui.add_space(2.0);
 }
 
-/// Nagłówek zakładki: producent, nazwa procesora, rodzina i przycisk
+/// Nagłówek zakładki: nazwa procesora, rodzina i przycisk
 /// "Odczytaj z procesora". Zwraca true po kliknięciu przycisku.
-pub fn vendor_header(ui: &mut egui::Ui, vendor: &str, name: &str, family: Option<&str>) -> bool {
+pub fn vendor_header(ui: &mut egui::Ui, name: &str, family: Option<&str>) -> bool {
     let mut clicked = false;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 12.0;
-        ui.label(
-            RichText::new(vendor)
-                .size(26.0)
-                .strong()
-                .italics()
-                .color(theme::text()),
-        );
-        theme::vsep(ui, 28.0);
         let name = if name.is_empty() {
             crate::i18n::tr("Procesor", "Processor")
         } else {

@@ -1325,6 +1325,9 @@ impl eframe::App for App {
         }
 
         // --- nagłówek: logo, nazwa i przyciski zakładek ---
+        // Brakująca szerokość wiersza zakładek (gdy zakładki nie mieszczą
+        // się w jednym wierszu nawet przy najmniejszym napisie).
+        let mut missing = 0.0_f32;
         let header = egui::Panel::top("header")
             .frame(egui::Frame::NONE.inner_margin(egui::Margin {
                 left: 18,
@@ -1333,8 +1336,8 @@ impl eframe::App for App {
                 bottom: 6,
             }))
             .show(ui, |ui| {
-                // Zakładki są w jednym wierszu; zawijają się tylko na ekranie
-                // węższym niż okno.
+                // Zakładki są w jednym wierszu. Gdy się nie mieszczą, okno się
+                // poszerza; zawijają się tylko, gdy ekran jest za wąski.
                 ui.horizontal_wrapped(|ui| {
                     const ROW: f32 = 54.0;
                     ui.spacing_mut().item_spacing = egui::vec2(3.0, 8.0);
@@ -1365,7 +1368,9 @@ impl eframe::App for App {
                         .sum();
                     let ratio = WORDMARK_SIZE[0] as f32 / WORDMARK_SIZE[1] as f32;
                     let room = ui.available_width() - tabs - GAP - 2.0;
-                    let width = (WORDMARK_HEIGHT * ratio).min(room).max(110.0);
+                    const MIN_WORDMARK: f32 = 110.0;
+                    missing = (MIN_WORDMARK - room).max(0.0);
+                    let width = (WORDMARK_HEIGHT * ratio).min(room).max(MIN_WORDMARK);
                     let size = egui::vec2(width, width / ratio);
                     let (name, _) =
                         ui.allocate_exact_size(egui::vec2(width + GAP, ROW), Sense::hover());
@@ -1389,6 +1394,31 @@ impl eframe::App for App {
                 });
             });
         self.header_height = header.response.rect.height();
+        // Zakładki by się zawinęły: poszerzamy okno (najwyżej do szerokości
+        // ekranu), żeby zostały w jednym wierszu.
+        if missing > 0.5 && !maximized {
+            let (inner, monitor) =
+                ctx.input(|i| (i.viewport().inner_rect, i.viewport().monitor_size));
+            if let Some(inner) = inner {
+                let limit = monitor.map_or(f32::INFINITY, |m| m.x);
+                let width = (inner.width() + missing.ceil() + 4.0).min(limit);
+                if width > inner.width() + 0.5 {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                        width,
+                        inner.height(),
+                    )));
+                    // Okno nie może wyjść poza prawą krawędź ekranu.
+                    if let Some(outer) = ctx.input(|i| i.viewport().outer_rect) {
+                        let overflow = outer.left() + width + (outer.width() - inner.width()) - limit;
+                        if overflow > 0.0 {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
+                                egui::pos2((outer.left() - overflow).max(0.0), outer.top()),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         // Przyciski okna w prawym górnym rogu, nad wierszem zakładek.
         {
             let window = ctx.content_rect();
