@@ -1197,8 +1197,12 @@ impl GpuTab {
                     }
                     ui.separator();
                     self.profile_bar(ui);
-                    if !self.demo {
-                        ui.separator();
+                });
+                // Osobny wiersz: w jednym wierszu z przyciskami pole nie
+                // mieściło się w oknie o domyślnej szerokości.
+                if !self.demo {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
                         let mut auto = self.settings.auto_apply;
                         let label = match self.settings.last_slot {
                             Some(slot) => crate::trf!("Uruchamiaj profil {} z Windows", "Apply profile {} with Windows", slot + 1),
@@ -1213,8 +1217,8 @@ impl GpuTab {
                         {
                             self.set_auto_apply(auto);
                         }
-                    }
-                });
+                    });
+                }
                 ui.add_space(2.0);
                 ui.horizontal_wrapped(|ui| {
                     if self.dirty() {
