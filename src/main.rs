@@ -100,6 +100,22 @@ fn load_logo(ctx: &egui::Context) -> egui::TextureHandle {
     )
 }
 
+/// Rozmiar grafiki napisu "TUNE CENTER" (`assets/wordmark.rgba`).
+const WORDMARK_SIZE: [usize; 2] = [629, 60];
+/// Wysokość napisu w nagłówku (punkty).
+const WORDMARK_HEIGHT: f32 = 22.0;
+
+/// Napis "TUNE CENTER" w kolorze aktualnego motywu (srebrny zostaje,
+/// niebieski jest przebarwiany jak logo).
+fn load_wordmark(ctx: &egui::Context) -> egui::TextureHandle {
+    let rgba = theme::tint_logo(include_bytes!("../assets/wordmark.rgba"));
+    ctx.load_texture(
+        "wordmark",
+        egui::ColorImage::from_rgba_unmultiplied(WORDMARK_SIZE, &rgba),
+        egui::TextureOptions::LINEAR,
+    )
+}
+
 /// Odstęp między klatkami animacji (20 klatek/s): kręcące się wentylatory,
 /// pulsujące numery profili GPU.
 pub const ANIMATION_FRAME: Duration = Duration::from_millis(50);
@@ -204,6 +220,37 @@ const TAB_SKEW: f32 = 9.0;
 /// większe są tylko przyciski, zakładki i nagłówek (`theme::b`).
 const UI_ZOOM: f32 = 1.0;
 
+/// Szerokość napisu zakładki.
+fn tab_text_width(ui: &egui::Ui, label: &str) -> f32 {
+    ui.painter()
+        .layout_no_wrap(
+            label.to_owned(),
+            theme::tab_font(theme::b(12.5)),
+            Color32::WHITE,
+        )
+        .size()
+        .x
+}
+
+/// Szerokość całej zakładki o napisie szerokości `text_width`.
+fn tab_width(text_width: f32) -> f32 {
+    text_width + theme::b(34.0) + 2.0 * TAB_SKEW
+}
+
+/// Napis zakładki. Zakładki karty i procesora pokazują model sprzętu (np.
+/// "RTX 5070", "9070 XT", "i7-12700KF"); bez modelu - NVIDIA / RADEON / CPU.
+fn tab_label(tab: Tab, label: &'static str) -> &'static str {
+    match tab {
+        Tab::Nvidia => hw_names::gpu_label().unwrap_or(match shaders::vendor() {
+            Some(shaders::Vendor::Amd) => "RADEON",
+            Some(shaders::Vendor::Intel) => "INTEL",
+            _ => label,
+        }),
+        Tab::Cpu => hw_names::cpu_label().unwrap_or(label),
+        _ => label,
+    }
+}
+
 /// Przycisk zakładki: pochylona "pigułka" z ikoną i napisem. Nieaktywny ma
 /// ciemne tło i ciemną obwódkę, aktywny jest wypełniony i świeci.
 fn tab_button(
@@ -214,12 +261,8 @@ fn tab_button(
     height: f32,
 ) -> egui::Response {
     let font = theme::tab_font(theme::b(12.5));
-    let text_width = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
-        .size()
-        .x;
-    let size = egui::vec2(text_width + theme::b(34.0) + 2.0 * TAB_SKEW, height);
+    let text_width = tab_text_width(ui, label);
+    let size = egui::vec2(tab_width(text_width), height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -290,6 +333,8 @@ struct App {
     tray: Option<tray::Tray>,
     /// Logo programu pokazywane w nagłówku i w zakładce ABOUT.
     logo: egui::TextureHandle,
+    /// Grafika napisu "TUNE CENTER" w nagłówku.
+    wordmark: egui::TextureHandle,
     /// Grafika nagłówka motywu Neon City.
     theme_art: egui::TextureHandle,
     /// Grafika dolnej krawędzi okna w motywie Neon City.
@@ -442,6 +487,7 @@ impl App {
             notice: notice.or_else(oled_fix::reapply),
             tray,
             logo,
+            wordmark: load_wordmark(&cc.egui_ctx),
             theme_art,
             theme_art_bottom,
             gpu_fans,
@@ -876,6 +922,7 @@ impl App {
                 self.fans.config.save();
                 theme::apply(ctx, self.fans.config.light_theme, style);
                 self.logo = load_logo(ctx);
+                self.wordmark = load_wordmark(ctx);
             }
             option_note(
                 ui,
@@ -1311,39 +1358,36 @@ impl eframe::App for App {
                         ],
                         Stroke::new(1.0, theme::card_edge()),
                     );
-                    // Dwukolorowy napis pogrubioną kursywą.
-                    let mut job = egui::text::LayoutJob::default();
-                    for (word, color) in
-                        [("TUNE ", theme::wordmark()), ("CENTER", theme::wordmark2())]
-                    {
-                        job.append(
-                            word,
-                            0.0,
-                            egui::TextFormat::simple(theme::wordmark_font(24.0), color),
-                        );
-                    }
-                    let galley = ui.painter().layout_job(job);
-                    let (name, _) = ui.allocate_exact_size(
-                        egui::vec2(galley.size().x + 25.0, ROW),
-                        Sense::hover(),
-                    );
-                    ui.painter().galley(
-                        egui::pos2(name.left(), name.center().y - galley.size().y / 2.0),
-                        galley,
-                        theme::wordmark(),
+                    // Napis "TUNE CENTER" jako grafika. Zakładki muszą zmieścić
+                    // się obok niego w tym samym wierszu, więc przy długich
+                    // nazwach sprzętu napis jest odpowiednio mniejszy.
+                    const GAP: f32 = 22.0;
+                    let spacing = ui.spacing().item_spacing.x;
+                    let tabs: f32 = TABS
+                        .iter()
+                        .map(|(tab, label, _)| {
+                            tab_width(tab_text_width(ui, tab_label(*tab, label))) + spacing
+                        })
+                        .sum();
+                    let ratio = WORDMARK_SIZE[0] as f32 / WORDMARK_SIZE[1] as f32;
+                    let room = ui.available_width() - tabs - GAP - 2.0;
+                    let width = (WORDMARK_HEIGHT * ratio).min(room).max(110.0);
+                    let size = egui::vec2(width, width / ratio);
+                    let (name, _) =
+                        ui.allocate_exact_size(egui::vec2(width + GAP, ROW), Sense::hover());
+                    egui::Image::from_texture(egui::load::SizedTexture::new(
+                        self.wordmark.id(),
+                        size,
+                    ))
+                    .paint_at(
+                        ui,
+                        egui::Rect::from_min_size(
+                            egui::pos2(name.left(), name.center().y - size.y / 2.0),
+                            size,
+                        ),
                     );
                     for (tab, label, icon) in TABS {
-                        // Zakładki karty i procesora: model sprzętu (np. "RTX 5070",
-                        // "9070 XT", "i7-12700KF"); bez modelu - NVIDIA / RADEON / CPU.
-                        let label = match tab {
-                            Tab::Nvidia => hw_names::gpu_label().unwrap_or(match shaders::vendor() {
-                                Some(shaders::Vendor::Amd) => "RADEON",
-                                Some(shaders::Vendor::Intel) => "INTEL",
-                                _ => label,
-                            }),
-                            Tab::Cpu => hw_names::cpu_label().unwrap_or(label),
-                            _ => label,
-                        };
+                        let label = tab_label(tab, label);
                         if tab_button(ui, label, icon, self.tab == tab, 39.0).clicked() {
                             self.tab = tab;
                         }

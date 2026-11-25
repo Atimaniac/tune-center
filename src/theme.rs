@@ -365,14 +365,6 @@ pub fn wordmark() -> Color32 {
     pal().wordmark
 }
 
-/// Kolor napisu "CENTER" w nagłówku (kolor akcentu motywu).
-pub fn wordmark2() -> Color32 {
-    match style() {
-        Style::Tune => pal().accent,
-        _ => pal().accent2,
-    }
-}
-
 /// Kolory przycisku zakładki: (tło, obwódka, tekst).
 pub fn tab_colors(selected: bool, hovered: bool) -> (Color32, Color32, Color32) {
     let p = pal();
@@ -1488,7 +1480,8 @@ pub fn switch(ui: &mut egui::Ui, id: &str, state: SwitchState, enabled: bool) ->
 }
 
 /// Logo (niebieskie RGBA) w kolorze aktualnego motywu: barwa kolorowych
-/// pikseli jest zamieniana na barwę motywu, jasność i nasycenie zostają.
+/// pikseli jest przesuwana do barwy motywu, jasność, nasycenie i różnice
+/// odcieni zostają.
 pub fn tint_logo(rgba: &[u8]) -> Vec<u8> {
     let target = match style() {
         Style::Tune => return rgba.to_vec(),
@@ -1496,21 +1489,47 @@ pub fn tint_logo(rgba: &[u8]) -> Vec<u8> {
         Style::NeonCity => 188.0,
         Style::Crimson => 4.0,
     };
-    let mut out = rgba.to_vec();
-    for px in out.chunks_exact_mut(4) {
+    // Barwa, nasycenie i jasność piksela (barwa w stopniach).
+    let hsv = |px: &[u8]| {
         let (r, g, b) = (
             px[0] as f32 / 255.0,
             px[1] as f32 / 255.0,
             px[2] as f32 / 255.0,
         );
         let max = r.max(g).max(b);
-        let min = r.min(g).min(b);
-        let s = if max > 0.0 { (max - min) / max } else { 0.0 };
+        let d = max - r.min(g).min(b);
+        let s = if max > 0.0 { d / max } else { 0.0 };
+        let h = if d <= 0.0 {
+            0.0
+        } else if max == r {
+            60.0 * ((g - b) / d).rem_euclid(6.0)
+        } else if max == g {
+            60.0 * ((b - r) / d + 2.0)
+        } else {
+            60.0 * ((r - g) / d + 4.0)
+        };
+        (h, s, max)
+    };
+    // Średnia barwa kolorowej części grafiki. Barwa każdego piksela jest
+    // przesuwana o tę samą wartość, więc przejścia odcieni zostają i grafika
+    // nie wygląda na zamalowaną jednym kolorem.
+    let (mut sum, mut weight) = (0.0_f32, 0.0_f32);
+    for px in rgba.chunks_exact(4) {
+        let (h, s, _) = hsv(px);
+        if s >= 0.18 && px[3] > 0 {
+            sum += h * s;
+            weight += s;
+        }
+    }
+    let mean = if weight > 0.0 { sum / weight } else { target };
+    let mut out = rgba.to_vec();
+    for px in out.chunks_exact_mut(4) {
+        let (h, s, max) = hsv(px);
         // Szarości i biel (napis "TUNE") zostają bez zmian.
         if s < 0.18 {
             continue;
         }
-        let [nr, ng, nb] = hsv_to_rgb(target, s, max);
+        let [nr, ng, nb] = hsv_to_rgb((target + h - mean).rem_euclid(360.0), s, max);
         px[0] = (nr * 255.0) as u8;
         px[1] = (ng * 255.0) as u8;
         px[2] = (nb * 255.0) as u8;
