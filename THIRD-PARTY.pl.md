@@ -26,10 +26,12 @@ Tune Center korzysta z poniższych składników. Są dołączane bez zmian.
 - Używany przez `sensor-bridge.exe` do odczytu czujników i sterowania
   wentylatorami.
 
-## Audiowide (czcionka interfejsu)
+## Inter (czcionka interfejsu)
 
-- Plik: `assets/Audiowide-Regular.ttf`, wbudowany w `tunecenter.exe`
-- Autor: Astigmatic (Brian J. Bonislawsky)
+- Pliki: `assets/Inter-Regular.ttf`, `assets/Inter-SemiBold.ttf` i
+  `assets/Inter-BoldItalic.ttf` (Inter 4.1), wbudowane w `tunecenter.exe`
+- Źródło: https://github.com/rsms/inter
+- Autor: The Inter Project Authors
 - Licencja: SIL Open Font License 1.1
 
 ## Odniesienia użyte przy pisaniu kodu

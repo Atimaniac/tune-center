@@ -118,6 +118,73 @@ enum Tab {
     About,
 }
 
+/// Rozmiar okna w punktach interfejsu (na ekranie razy `UI_ZOOM`); okno ma
+/// stały rozmiar albo jest zmaksymalizowane.
+const WINDOW_SIZE: [f32; 2] = [1280.0, 869.0];
+
+/// Rozmiar jednego przycisku okna (minimalizuj, maksymalizuj, zamknij).
+const WINDOW_BUTTON: egui::Vec2 = egui::vec2(48.0, 30.0);
+
+#[derive(Clone, Copy, PartialEq)]
+enum WindowButton {
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
+
+/// Przycisk okna rysowany w prawym górnym rogu nagłówka.
+fn window_button(ui: &mut egui::Ui, rect: egui::Rect, kind: WindowButton, hint: &str) -> bool {
+    let response = ui
+        .interact(rect, egui::Id::unique(("window_button", kind as u8)), Sense::click())
+        .on_hover_text(hint);
+    let p = ui.painter();
+    let hovered = response.hovered();
+    if hovered {
+        let fill = if kind == WindowButton::Close {
+            Color32::from_rgb(196, 43, 28)
+        } else {
+            theme::accent().gamma_multiply(0.25)
+        };
+        p.rect_filled(rect, 0.0, fill);
+    }
+    let color = if hovered && kind == WindowButton::Close {
+        Color32::WHITE
+    } else if hovered {
+        theme::text()
+    } else {
+        muted()
+    };
+    let stroke = Stroke::new(1.2, color);
+    let c = rect.center();
+    let h = 5.0;
+    let square = |c: egui::Pos2, h: f32| {
+        let (l, r, t, b) = (c.x - h, c.x + h, c.y - h, c.y + h);
+        p.line_segment([egui::pos2(l, t), egui::pos2(r, t)], stroke);
+        p.line_segment([egui::pos2(r, t), egui::pos2(r, b)], stroke);
+        p.line_segment([egui::pos2(r, b), egui::pos2(l, b)], stroke);
+        p.line_segment([egui::pos2(l, b), egui::pos2(l, t)], stroke);
+    };
+    match kind {
+        WindowButton::Minimize => {
+            p.line_segment([egui::pos2(c.x - h, c.y), egui::pos2(c.x + h, c.y)], stroke);
+        }
+        WindowButton::Maximize => square(c, h),
+        WindowButton::Restore => {
+            // Dwa nachodzące na siebie kwadraty: okno wróci do stałego rozmiaru.
+            square(egui::pos2(c.x - 1.5, c.y + 1.5), h - 1.5);
+            let (l, r, t, b) = (c.x - h + 3.0, c.x + h, c.y - h, c.y + h - 3.0);
+            p.line_segment([egui::pos2(l, t), egui::pos2(r, t)], stroke);
+            p.line_segment([egui::pos2(r, t), egui::pos2(r, b)], stroke);
+        }
+        WindowButton::Close => {
+            p.line_segment([egui::pos2(c.x - h, c.y - h), egui::pos2(c.x + h, c.y + h)], stroke);
+            p.line_segment([egui::pos2(c.x - h, c.y + h), egui::pos2(c.x + h, c.y - h)], stroke);
+        }
+    }
+    response.clicked()
+}
+
 /// Zakładki w kolejności przycisków w nagłówku.
 const TABS: [(Tab, &str, Icon); 8] = [
     (Tab::Nvidia, "NVIDIA", Icon::Gpu),
@@ -131,11 +198,14 @@ const TABS: [(Tab, &str, Icon); 8] = [
 ];
 
 /// Pochylenie boków przycisku zakładki (piksele).
-const TAB_SKEW: f32 = 10.0;
+const TAB_SKEW: f32 = 9.0;
 
-/// Przycisk zakładki: równoległobok z ikoną i napisem. Nieaktywny ma ciemne
-/// tło i ciemnoniebieską obwódkę, aktywny świeci jasnym błękitem i ma
-/// poświatę pod spodem.
+/// Powiększenie całego interfejsu. Treść ma zwykły rozmiar czcionki;
+/// większe są tylko przyciski, zakładki i nagłówek (`theme::b`).
+const UI_ZOOM: f32 = 1.0;
+
+/// Przycisk zakładki: pochylona "pigułka" z ikoną i napisem. Nieaktywny ma
+/// ciemne tło i ciemną obwódkę, aktywny jest wypełniony i świeci.
 fn tab_button(
     ui: &mut egui::Ui,
     label: &str,
@@ -143,27 +213,22 @@ fn tab_button(
     selected: bool,
     height: f32,
 ) -> egui::Response {
-    let font = theme::tab_font(12.5);
+    let font = theme::tab_font(theme::b(12.5));
     let text_width = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
         .size()
         .x;
-    let size = egui::vec2(text_width + 22.0 + 2.0 * TAB_SKEW + 2.0, height);
+    let size = egui::vec2(text_width + theme::b(34.0) + 2.0 * TAB_SKEW, height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
 
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
-        let shape = [
-            egui::pos2(rect.left() + TAB_SKEW, rect.top()),
-            egui::pos2(rect.right(), rect.top()),
-            egui::pos2(rect.right() - TAB_SKEW, rect.bottom()),
-            egui::pos2(rect.left(), rect.bottom()),
-        ];
+        let shape = theme::slanted_rect(rect, TAB_SKEW, 7.0);
         let (fill, edge, text) = theme::tab_colors(selected, response.hovered());
-        let mut closed = shape.to_vec();
-        closed.push(shape[0]);
         if selected {
+            let mut closed = shape.clone();
+            closed.push(shape[0]);
             theme::glow_line(p, &closed, edge, 0.9);
             // Poświata pod aktywną zakładką.
             theme::radial_glow(
@@ -174,35 +239,24 @@ fn tab_button(
             );
         }
         p.add(egui::Shape::convex_polygon(
-            shape.to_vec(),
+            shape,
             fill,
             Stroke::new(if selected { 1.5 } else { 1.0 }, edge),
         ));
-        if selected {
-            theme::glow_line(
-                p,
-                &[
-                    egui::pos2(rect.left() + 6.0, rect.bottom()),
-                    egui::pos2(rect.right() - TAB_SKEW - 6.0, rect.bottom()),
-                ],
-                theme::glow(),
-                1.0,
-            );
-        }
-        let content = text_width + 22.0;
+        let content = text_width + theme::b(22.0);
         let x = rect.center().x - content / 2.0;
         let icon_color = if selected { theme::glow() } else { text };
         icons::paint(
             p,
             egui::Rect::from_center_size(
-                egui::pos2(x + 8.0, rect.center().y),
-                egui::vec2(16.0, 16.0),
+                egui::pos2(x + theme::b(8.0), rect.center().y),
+                egui::Vec2::splat(theme::b(16.0)),
             ),
             icon,
             icon_color,
         );
         p.text(
-            egui::pos2(x + 22.0, rect.center().y),
+            egui::pos2(x + theme::b(22.0), rect.center().y),
             Align2::LEFT_CENTER,
             label,
             font,
@@ -224,6 +278,10 @@ struct App {
     /// Czy program działa jako administrator.
     elevated: bool,
     minimize: bool,
+    /// Wysokość nagłówka z poprzedniej klatki: obszar przeciągania okna.
+    header_height: f32,
+    /// Czy rozmiar okna został już dopasowany do ekranu.
+    fitted: bool,
     /// Czy istnieje zadanie uruchamiające program przy logowaniu do Windows.
     autostart: bool,
     /// Komunikat o nieudanej zmianie autostartu lub braku ikony w zasobniku.
@@ -291,6 +349,7 @@ impl App {
             fans.start_games(move || ctx.request_repaint());
         }
         theme::install_fonts(&cc.egui_ctx);
+        cc.egui_ctx.set_zoom_factor(UI_ZOOM);
         theme::apply(
             &cc.egui_ctx,
             fans.config.light_theme,
@@ -375,6 +434,8 @@ impl App {
             fans,
             bridge,
             minimize: args.iter().any(|a| a == "--minimized"),
+            header_height: 96.0,
+            fitted: false,
             elevated,
             autostart: autostart::is_enabled(),
             // OLED fix: przywrócenie wpisu usuniętego przez instalację sterownika.
@@ -727,6 +788,13 @@ impl App {
         theme::heading(ui, Icon::Options, crate::i18n::tr("Opcje", "Options"));
         ui.add_space(2.0);
 
+        // Lista opcji jest wyższa niż okno - przewijana, z suwakiem po prawej.
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| self.options_list(ui, ctx));
+    }
+
+    fn options_list(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let width = theme::grid_card_width(ui.available_width(), 380.0, 14.0, 1, 18.0).min(640.0);
         theme::card(14, 18).show(ui, |ui| {
             ui.set_width(width);
@@ -928,7 +996,7 @@ impl App {
                     ui.add_space(14.0);
                     ui.label(
                         RichText::new("TUNE CENTER")
-                            .font(theme::tab_font(26.0))
+                            .font(theme::wordmark_font(26.0))
                             .color(theme::wordmark()),
                     );
                     ui.label(
@@ -1172,33 +1240,78 @@ impl eframe::App for App {
             }),
         );
 
+        // Ekran mniejszy niż okno (np. 1366x768 albo skalowanie 150%): okno
+        // dostaje rozmiar ekranu bez paska zadań, a zakładki się przewijają.
+        if !self.fitted {
+            if let Some(monitor) = ctx.input(|i| i.viewport().monitor_size) {
+                self.fitted = true;
+                let room = egui::vec2(monitor.x, monitor.y - 48.0);
+                let size = egui::vec2(WINDOW_SIZE[0].min(room.x), WINDOW_SIZE[1].min(room.y));
+                if size.x < WINDOW_SIZE[0] || size.y < WINDOW_SIZE[1] {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                        (room.x - size.x) / 2.0,
+                        (room.y - size.y) / 2.0,
+                    )));
+                }
+            }
+        }
+
+        // --- belka okna: nagłówek zastępuje belkę Windows ---
+        // Obszar przeciągania jest zgłaszany przed nagłówkiem, więc zakładki
+        // i przyciski okna leżą nad nim i dostają swoje kliknięcia.
+        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        {
+            let window = ctx.content_rect();
+            let bar = egui::Rect::from_min_size(
+                window.min,
+                egui::vec2(window.width(), self.header_height),
+            );
+            let drag = ui.interact(bar, egui::Id::unique("window_drag"), Sense::click_and_drag());
+            if drag.double_clicked() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            } else if drag.drag_started_by(egui::PointerButton::Primary) && !maximized {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+        }
+
         // --- nagłówek: logo, nazwa i przyciski zakładek ---
         let header = egui::Panel::top("header")
             .frame(egui::Frame::NONE.inner_margin(egui::Margin {
                 left: 18,
-                right: 18,
-                top: 10,
-                bottom: 16,
+                right: 14,
+                top: 18,
+                bottom: 10,
             }))
             .show(ui, |ui| {
-                // W wąskim oknie przyciski przechodzą do kolejnego wiersza.
+                // Zakładki są w jednym wierszu; zawijają się tylko na ekranie
+                // węższym niż okno.
                 ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(2.0, 8.0);
+                    const ROW: f32 = 64.0;
+                    ui.spacing_mut().item_spacing = egui::vec2(3.0, 8.0);
                     let (logo_rect, _) =
-                        ui.allocate_exact_size(egui::vec2(76.0, 76.0), Sense::hover());
+                        ui.allocate_exact_size(egui::vec2(ROW, ROW), Sense::hover());
                     theme::radial_glow(
                         ui.painter(),
                         logo_rect.center(),
-                        egui::pos2(52.0, 52.0),
+                        egui::pos2(46.0, 46.0),
                         theme::glow().gamma_multiply(0.15),
                     );
                     egui::Image::from_texture(egui::load::SizedTexture::new(
                         self.logo.id(),
-                        egui::vec2(76.0, 76.0),
+                        egui::vec2(ROW, ROW),
                     ))
                     .paint_at(ui, logo_rect);
-                    ui.add_space(8.0);
-                    // Dwukolorowy napis (w motywie Tune oba słowa w jednym kolorze).
+                    // Pionowa kreska między logo a napisem.
+                    let (sep, _) = ui.allocate_exact_size(egui::vec2(19.0, ROW), Sense::hover());
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(sep.center().x, sep.center().y - 17.0),
+                            egui::pos2(sep.center().x, sep.center().y + 17.0),
+                        ],
+                        Stroke::new(1.0, theme::card_edge()),
+                    );
+                    // Dwukolorowy napis pogrubioną kursywą.
                     let mut job = egui::text::LayoutJob::default();
                     for (word, color) in
                         [("TUNE ", theme::wordmark()), ("CENTER", theme::wordmark2())]
@@ -1206,12 +1319,19 @@ impl eframe::App for App {
                         job.append(
                             word,
                             0.0,
-                            egui::TextFormat::simple(theme::tab_font(22.0), color),
+                            egui::TextFormat::simple(theme::wordmark_font(24.0), color),
                         );
                     }
-                    ui.label(job);
-                    ui.add_space(10.0);
-                    let tabs_x = ui.cursor().left();
+                    let galley = ui.painter().layout_job(job);
+                    let (name, _) = ui.allocate_exact_size(
+                        egui::vec2(galley.size().x + 25.0, ROW),
+                        Sense::hover(),
+                    );
+                    ui.painter().galley(
+                        egui::pos2(name.left(), name.center().y - galley.size().y / 2.0),
+                        galley,
+                        theme::wordmark(),
+                    );
                     for (tab, label, icon) in TABS {
                         // Zakładki karty i procesora: model sprzętu (np. "RTX 5070",
                         // "9070 XT", "i7-12700KF"); bez modelu - NVIDIA / RADEON / CPU.
@@ -1224,55 +1344,42 @@ impl eframe::App for App {
                             Tab::Cpu => hw_names::cpu_label().unwrap_or(label),
                             _ => label,
                         };
-                        if tab_button(ui, label, icon, self.tab == tab, 38.0).clicked() {
+                        if tab_button(ui, label, icon, self.tab == tab, 39.0).clicked() {
                             self.tab = tab;
                         }
                     }
-                    tabs_x
-                })
-                .inner
+                });
             });
-        // Świecąca linia pod nagłówkiem, z uskokiem pod zakładkami jak w panelu.
+        self.header_height = header.response.rect.height();
+        // Przyciski okna w prawym górnym rogu, nad wierszem zakładek.
         {
-            let r = header.response.rect;
-            let y = r.bottom() - 2.0;
-            let x_step = (header.inner + 4.0).min(r.right() - 120.0);
-            let p = ui.painter();
-            theme::gradient_line(
-                p,
-                y - 10.0,
-                r.left(),
-                x_step - 16.0,
-                1.5,
-                Color32::TRANSPARENT,
-                theme::accent2().gamma_multiply(0.7),
+            let window = ctx.content_rect();
+            let mut rect = egui::Rect::from_min_size(
+                egui::pos2(window.right() - WINDOW_BUTTON.x, window.top()),
+                WINDOW_BUTTON,
             );
-            theme::glow_line(
-                p,
-                &[
-                    egui::pos2(x_step - 16.0, y - 10.0),
-                    egui::pos2(x_step - 6.0, y),
-                    egui::pos2(r.right() - 80.0, y),
-                ],
-                theme::glow(),
-                0.7,
-            );
-            theme::gradient_line(
-                p,
-                y,
-                r.right() - 80.0,
-                r.right(),
-                1.5,
-                theme::glow().gamma_multiply(0.6),
-                Color32::TRANSPARENT,
-            );
+            if window_button(ui, rect, WindowButton::Close, crate::i18n::tr("Zamknij", "Close")) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            rect = rect.translate(egui::vec2(-WINDOW_BUTTON.x, 0.0));
+            let (kind, hint) = if maximized {
+                (WindowButton::Restore, crate::i18n::tr("Przywróć rozmiar", "Restore size"))
+            } else {
+                (WindowButton::Maximize, crate::i18n::tr("Pełny ekran", "Full screen"))
+            };
+            if window_button(ui, rect, kind, hint) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
+            rect = rect.translate(egui::vec2(-WINDOW_BUTTON.x, 0.0));
+            if window_button(ui, rect, WindowButton::Minimize, crate::i18n::tr("Minimalizuj", "Minimize")) {
+                self.minimize = true;
+            }
         }
-
         self.crash_window(&ctx);
 
         // --- pasek stanu na samym dole okna ---
-        let status_panel = egui::Panel::bottom("status")
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 8)))
+        egui::Panel::bottom("status")
+            .frame(theme::bar_frame())
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let (text, color) = match &status {
@@ -1288,7 +1395,16 @@ impl eframe::App for App {
                         Status::Error(e) => (e.clone(), theme::hot()),
                     };
                     theme::dot(ui, color);
-                    ui.label(RichText::new(text).size(13.0).color(theme::text()));
+                    // Długi komunikat błędu jest ucinany (całość w podpowiedzi),
+                    // żeby nie wchodził pod przyciski po prawej.
+                    ui.scope(|ui| {
+                        ui.set_max_width(400.0);
+                        ui.add(
+                            egui::Label::new(RichText::new(&text).size(13.0).color(theme::text()))
+                                .truncate(),
+                        )
+                        .on_hover_text(&text);
+                    });
                     self.nvdriver_status(ui, &ctx);
                     if let Some(notice) = &self.notice {
                         ui.separator();
@@ -1307,15 +1423,13 @@ impl eframe::App for App {
                     // przycisk uruchamia program ponownie z pytaniem UAC.
                     if !self.elevated {
                         ui.separator();
-                        let button = egui::Button::new(
-                            RichText::new(crate::i18n::tr(
-                                "Uruchom jako administrator",
-                                "Run as administrator",
-                            ))
-                            .size(12.0),
-                        );
-                        if ui
-                            .add(button)
+                        if theme::icon_button(
+                            ui,
+                            Icon::Shield,
+                            crate::i18n::tr("Uruchom jako administrator", "Run as administrator"),
+                            true,
+                            false,
+                        )
                             .on_hover_text(crate::i18n::tr(
                                 "Program działa bez uprawnień administratora. Karta graficzna, panel Nvidia, kompilacja shaderów, dyski i moc karty działają normalnie. Administrator jest potrzebny do: zakładki CPU, temperatury i mocy procesora, wentylatorów płyty głównej, zmiany HAGS i autostartu.",
                                 "The program runs without administrator rights. The graphics card, Nvidia panel, shader compilation, disks and card power work normally. Administrator rights are needed for: the CPU tab, CPU temperature and power, motherboard fans, changing HAGS and autostart.",
@@ -1337,7 +1451,7 @@ impl eframe::App for App {
                             (Tab::About, "ABOUT", Icon::About),
                             (Tab::Options, "OPTIONS", Icon::Options),
                         ] {
-                            if tab_button(ui, label, icon, self.tab == tab, 34.0).clicked() {
+                            if theme::bar_button(ui, label, icon, self.tab == tab, false).clicked() {
                                 self.tab = tab;
                             }
                         }
@@ -1349,7 +1463,7 @@ impl eframe::App for App {
                                 | update::State::Launched
                         );
                         // UPDATE: ten sam styl co zakładki; podświetlony w trakcie sprawdzania.
-                        if tab_button(ui, "UPDATE", Icon::Download, checking, 34.0)
+                        if theme::bar_button(ui, "UPDATE", Icon::Download, checking, true)
                             .on_hover_text(crate::i18n::tr("Sprawdź aktualizację", "Check for updates"))
                             .clicked()
                             && !checking
@@ -1480,31 +1594,19 @@ impl eframe::App for App {
                 });
             });
 
-        // Linia nad paskiem stanu.
-        {
-            let r = status_panel.response.rect;
-            theme::gradient_line(
-                ui.painter(),
-                r.top(),
-                r.left(),
-                r.center().x,
-                1.0,
-                Color32::TRANSPARENT,
-                theme::card_edge(),
-            );
-            theme::gradient_line(
-                ui.painter(),
-                r.top(),
-                r.center().x,
-                r.right(),
-                1.0,
-                theme::card_edge(),
-                Color32::TRANSPARENT,
-            );
+        // Obwódka okna (bez belki Windows okno nie ma własnej ramki).
+        if !maximized {
+            let r = ctx.content_rect().shrink(0.5);
+            let stroke = Stroke::new(1.0, theme::card_edge());
+            let p = ui.painter();
+            p.line_segment([r.left_top(), r.right_top()], stroke);
+            p.line_segment([r.right_top(), r.right_bottom()], stroke);
+            p.line_segment([r.right_bottom(), r.left_bottom()], stroke);
+            p.line_segment([r.left_bottom(), r.left_top()], stroke);
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(22, 12)))
+            .frame(theme::panel_frame())
             .show(ui, |ui| match self.tab {
                 Tab::Nvidia => self.nvcp.ui(ui, &mut self.gpu, snap.as_ref()),
                 Tab::Cpu => self.cpu.ui(ui),
@@ -1680,8 +1782,12 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title(tray::WINDOW_TITLE)
             .with_icon(window_icon())
-            .with_inner_size([1120.0, 760.0])
-            .with_min_inner_size([420.0, 420.0]),
+            .with_inner_size([WINDOW_SIZE[0] * UI_ZOOM, WINDOW_SIZE[1] * UI_ZOOM])
+            // Własna belka w nagłówku (przyciski okna rysuje `window_button`);
+            // rozmiaru nie zmienia się myszą - układ jest liczony na ten rozmiar
+            // albo na okno zmaksymalizowane.
+            .with_decorations(false)
+            .with_resizable(false),
         ..Default::default()
     };
     eframe::run_native(

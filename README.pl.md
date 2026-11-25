@@ -667,8 +667,9 @@ pierwszeństwo, także po aktualizacji).
 
 ## Czcionka
 
-Przyciski zakładek (GPU, CPU, FAN...) używają czcionki Audiowide wbudowanej w
-program. Cała pozostała treść jest pisana domyślną czcionką interfejsu.
+Cały interfejs jest pisany czcionką Inter wbudowaną w program: zwykłą w treści,
+półgrubą na zakładkach i przyciskach paska stanu, pogrubioną kursywą w napisie
+"TUNE CENTER".
 
 ## Aktualizacja sterownika NVIDIA
 

@@ -10,6 +10,7 @@ mod sampler;
 mod sensors_view;
 
 use crate::bridge::Snapshot;
+use crate::icons::Icon;
 use crate::theme;
 use backend::{Backend, Demo, Domain, Monitor, Multi, Offsets, Vendor};
 use curve_editor::CurveEditor;
@@ -709,7 +710,7 @@ impl GpuTab {
         for slot in 0..SLOTS {
             let filled = self.slots[slot].is_some();
             let label = RichText::new(format!("{}", slot + 1)).strong();
-            let mut button = egui::Button::new(label).min_size(egui::vec2(30.0, 24.0));
+            let mut button = egui::Button::new(label).min_size(egui::vec2(30.0, 28.0));
             if self.save_mode {
                 button = button.fill(theme::accent().linear_multiply(0.35 + 0.5 * pulse));
             } else {
@@ -742,13 +743,12 @@ impl GpuTab {
             }
         }
 
-        let save = egui::Button::new(if self.save_mode {
+        let save = if self.save_mode {
             crate::i18n::tr("Anuluj", "Cancel")
         } else {
             crate::i18n::tr("Zapisz", "Save")
-        });
-        if ui
-            .add(save)
+        };
+        if theme::icon_button(ui, Icon::Save, save, true, false)
             .on_hover_text(crate::i18n::tr(
                 "Kliknij, a potem wybierz numer od 1 do 5",
                 "Click, then choose a number from 1 to 5",
@@ -767,8 +767,7 @@ impl GpuTab {
             };
         }
 
-        if ui
-            .button(crate::i18n::tr("Eksportuj", "Export"))
+        if theme::icon_button(ui, Icon::Upload, crate::i18n::tr("Eksportuj", "Export"), true, false)
             .on_hover_text(crate::i18n::tr(
                 "Zapisuje bieżące ustawienia do wybranego pliku",
                 "Saves the current settings to a file you choose",
@@ -777,8 +776,7 @@ impl GpuTab {
         {
             self.export_profile();
         }
-        if ui
-            .button(crate::i18n::tr("Importuj", "Import"))
+        if theme::icon_button(ui, Icon::Download, crate::i18n::tr("Importuj", "Import"), true, false)
             .on_hover_text(crate::i18n::tr(
                 "Wczytuje ustawienia z pliku wyeksportowanego wcześniej",
                 "Loads settings from a previously exported file",
@@ -961,7 +959,7 @@ impl GpuTab {
     }
 
     fn tab_info(&mut self, ui: &mut egui::Ui, snap: Option<&Snapshot>) {
-        ui.heading(self.gpus.get(self.gpu).cloned().unwrap_or_default());
+        theme::title(ui, &self.gpus.get(self.gpu).cloned().unwrap_or_default());
         ui.add_space(4.0);
         {
             let samples = self.sampler.samples.lock().unwrap();
@@ -1132,19 +1130,20 @@ impl GpuTab {
                         self.reload();
                     }
                     ui.separator();
-                    for (tab, label) in [
-                        (Tab::Info, crate::i18n::tr("Informacje", "Info")),
-                        (Tab::Clocks, crate::i18n::tr("Zegary", "Clocks")),
+                    for (tab, icon, label) in [
+                        (Tab::Info, Icon::About, crate::i18n::tr("Informacje", "Info")),
+                        (Tab::Clocks, Icon::Clock, crate::i18n::tr("Zegary", "Clocks")),
                     ] {
-                        if theme::sub_tab(ui, label, self.tab == tab).clicked() {
+                        if theme::sub_tab_icon(ui, Some(icon), label, self.tab == tab).clicked() {
                             self.tab = tab;
                         }
                     }
                     // Karty AMD nie udostępniają krzywej V/F - opcja jest wyszarzona.
                     let has_curve = self.vendor() != Vendor::Amd;
                     if has_curve {
-                        if theme::sub_tab(
+                        if theme::sub_tab_icon(
                             ui,
+                            Some(Icon::Curve),
                             crate::i18n::tr("Krzywa V/F", "V/F curve"),
                             self.tab == Tab::Curve,
                         )
@@ -1167,6 +1166,7 @@ impl GpuTab {
                     }
                     if self.demo {
                         ui.separator();
+                        crate::icons::show(ui, Icon::Flask, 16.0, theme::warn());
                         ui.label(
                             RichText::new(crate::i18n::tr("TRYB DEMO", "DEMO MODE"))
                                 .color(theme::warn())
@@ -1181,28 +1181,44 @@ impl GpuTab {
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 ui.add_space(8.0);
+                // Wszystkie przyciski w jednym wierszu.
                 ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .add_enabled(self.dirty(), egui::Button::new(crate::i18n::tr("Zastosuj", "Apply")))
+                    let dirty = self.dirty();
+                    if theme::icon_button(ui, Icon::Check, crate::i18n::tr("Zastosuj", "Apply"), dirty, true)
                         .clicked()
                     {
                         self.apply();
                     }
-                    if ui.button(crate::i18n::tr("Przywróć fabryczne", "Restore stock")).clicked() {
+                    if theme::icon_button(
+                        ui,
+                        Icon::Refresh,
+                        crate::i18n::tr("Przywróć fabryczne", "Restore stock"),
+                        true,
+                        false,
+                    )
+                    .clicked()
+                    {
                         self.reset_defaults();
                     }
-                    if ui.button(crate::i18n::tr("Odczytaj z karty", "Read from card")).clicked() {
+                    if theme::icon_button(
+                        ui,
+                        Icon::Sync,
+                        crate::i18n::tr("Odczytaj z karty", "Read from card"),
+                        true,
+                        false,
+                    )
+                    .clicked()
+                    {
                         self.reload();
                         self.status = crate::i18n::tr("Odczytano ustawienia z karty.", "Settings read from the card.").to_string();
                     }
                     ui.separator();
                     self.profile_bar(ui);
                 });
-                // Osobny wiersz: w jednym wierszu z przyciskami pole nie
-                // mieściło się w oknie o domyślnej szerokości.
-                if !self.demo {
-                    ui.add_space(4.0);
-                    ui.horizontal_wrapped(|ui| {
+                ui.add_space(2.0);
+                // Drugi wiersz: stosowanie profilu przy starcie i komunikat.
+                ui.horizontal_wrapped(|ui| {
+                    if !self.demo {
                         let mut auto = self.settings.auto_apply;
                         let label = match self.settings.last_slot {
                             Some(slot) => crate::trf!("Uruchamiaj profil {} z Windows", "Apply profile {} with Windows", slot + 1),
@@ -1217,10 +1233,8 @@ impl GpuTab {
                         {
                             self.set_auto_apply(auto);
                         }
-                    });
-                }
-                ui.add_space(2.0);
-                ui.horizontal_wrapped(|ui| {
+                        ui.separator();
+                    }
                     if self.dirty() {
                         ui.label(RichText::new(crate::i18n::tr("Niezastosowane zmiany.", "Unapplied changes.")).color(theme::warn()));
                     }

@@ -365,10 +365,10 @@ pub fn wordmark() -> Color32 {
     pal().wordmark
 }
 
-/// Kolor napisu "CENTER" w nagłówku (w Tune taki sam jak "TUNE").
+/// Kolor napisu "CENTER" w nagłówku (kolor akcentu motywu).
 pub fn wordmark2() -> Color32 {
     match style() {
-        Style::Tune => pal().wordmark,
+        Style::Tune => pal().accent,
         _ => pal().accent2,
     }
 }
@@ -388,30 +388,60 @@ pub fn tab_colors(selected: bool, hovered: bool) -> (Color32, Color32, Color32) 
     }
 }
 
-/// Nazwa rodziny czcionki przycisków zakładek.
-const TAB_FONT: &str = "audiowide";
+/// Powiększenie przycisków, zakładek i nagłówka względem treści: treść jest
+/// pisana czcionką w zwykłym rozmiarze, a elementy do klikania są większe.
+pub const BUTTON_SCALE: f32 = 8.0 / 7.0;
 
-/// Rejestruje czcionkę Audiowide jako osobną rodzinę. Treść programu zostaje
-/// przy czcionce domyślnej; Audiowide jest używana tylko na przyciskach zakładek
-/// i w napisie "TUNE CENTER".
+/// Wymiar elementu do klikania (przycisk, zakładka) po powiększeniu.
+pub fn b(x: f32) -> f32 {
+    x * BUTTON_SCALE
+}
+
+/// Rodziny czcionki Inter poza zwykłym tekstem: półgruba (zakładki, przyciski
+/// paska stanu) i pogrubiona kursywa (napis "TUNE CENTER").
+const FONT_SEMIBOLD: &str = "inter-semibold";
+const FONT_WORDMARK: &str = "inter-bold-italic";
+
+/// Rejestruje czcionkę Inter: zwykła zastępuje domyślną czcionkę tekstu,
+/// półgruba i pogrubiona kursywa są osobnymi rodzinami. Domyślne czcionki
+/// egui zostają jako zapas dla znaków, których Inter nie ma.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        TAB_FONT.to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/Audiowide-Regular.ttf"
-        ))),
-    );
-    fonts.families.insert(
-        egui::FontFamily::Name(TAB_FONT.into()),
-        vec![TAB_FONT.to_owned()],
-    );
+    let files: [(&str, &'static [u8]); 3] = [
+        ("inter", include_bytes!("../assets/Inter-Regular.ttf")),
+        (FONT_SEMIBOLD, include_bytes!("../assets/Inter-SemiBold.ttf")),
+        (FONT_WORDMARK, include_bytes!("../assets/Inter-BoldItalic.ttf")),
+    ];
+    for (name, bytes) in files {
+        fonts.font_data.insert(
+            name.to_owned(),
+            std::sync::Arc::new(egui::FontData::from_static(bytes)),
+        );
+    }
+    let text = fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default();
+    text.insert(0, "inter".to_owned());
+    let fallback = text.clone();
+    for name in [FONT_SEMIBOLD, FONT_WORDMARK] {
+        let mut family = vec![name.to_owned()];
+        family.extend(fallback.iter().cloned());
+        fonts
+            .families
+            .insert(egui::FontFamily::Name(name.into()), family);
+    }
     ctx.set_fonts(fonts);
 }
 
-/// Czcionka przycisków zakładek (Audiowide).
+/// Półgruba czcionka zakładek i przycisków paska stanu.
 pub fn tab_font(size: f32) -> egui::FontId {
-    egui::FontId::new(size, egui::FontFamily::Name(TAB_FONT.into()))
+    egui::FontId::new(size, egui::FontFamily::Name(FONT_SEMIBOLD.into()))
+}
+
+/// Pogrubiona kursywa napisu "TUNE CENTER".
+pub fn wordmark_font(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(FONT_WORDMARK.into()))
 }
 
 /// Ustawia motyw całego programu.
@@ -420,6 +450,14 @@ pub fn apply(ctx: &egui::Context, light: bool, style: Style) {
     STYLE.store(style.index(), Ordering::Relaxed);
     // Jasny wariant istnieje tylko w motywie Tune.
     let light = is_light();
+    // Motyw egui nie idzie za ustawieniem Windows: przy jasnym trybie systemu
+    // egui przełączało się na własny jasny styl, bez kolorów programu (szare
+    // przyciski i wyszarzone napisy na ciemnym tle).
+    ctx.set_theme(if light {
+        egui::Theme::Light
+    } else {
+        egui::Theme::Dark
+    });
 
     let mut visuals = if light {
         egui::Visuals::light()
@@ -439,7 +477,7 @@ pub fn apply(ctx: &egui::Context, light: bool, style: Style) {
 
     // Przyciski i pola: ciemny granat z niebieską obwódką, jaśniejszą pod kursorem.
     let w = &mut visuals.widgets;
-    let radius = CornerRadius::same(6);
+    let radius = CornerRadius::same(8);
     let [base, hover, press, line] = pal().widget;
     w.inactive.bg_fill = base;
     w.inactive.weak_bg_fill = base;
@@ -470,11 +508,18 @@ pub fn apply(ctx: &egui::Context, light: bool, style: Style) {
 
     ctx.global_style_mut(|style| {
         style.spacing.button_padding = vec2(10.0, 5.0);
-        style.spacing.interact_size.y = 26.0;
+        style.spacing.interact_size.y = 28.0;
+        style
+            .text_styles
+            .insert(egui::TextStyle::Heading, tab_font(18.0));
         // Stałe paski przewijania zamiast „pływających”: animacja ich pojawiania
         // się rysowała okno ~18 razy/s, gdy kursor stał nad przewijaną listą
         // (pomiar: NVIDIA > Ustawienia 3D 15-29% rdzenia bez ruchu myszy).
         style.spacing.scroll = egui::style::ScrollStyle::solid();
+        // Szerszy suwak w kolorze tekstu: na ciemnym tle domyślny (kolor
+        // przycisku) był prawie niewidoczny i nie było widać, że niżej coś jest.
+        style.spacing.scroll.bar_width = 10.0;
+        style.spacing.scroll.foreground_color = true;
     });
 }
 
@@ -833,6 +878,132 @@ impl Card {
     }
 }
 
+// ------------------------------------------------- ramki i kształty okna
+
+/// Ramka treści zakładki: jedna duża karta z zaokrąglonymi rogami.
+pub fn panel_frame() -> egui::Frame {
+    egui::Frame::NONE
+        .outer_margin(egui::Margin {
+            left: 12,
+            right: 12,
+            top: 2,
+            bottom: 0,
+        })
+        .inner_margin(egui::Margin::symmetric(14, 12))
+        .fill(card_fill())
+        .stroke(Stroke::new(1.0_f32, card_edge()))
+        .corner_radius(CornerRadius::same(12))
+}
+
+/// Ramka paska stanu: osobna zaokrąglona belka na dole okna.
+pub fn bar_frame() -> egui::Frame {
+    egui::Frame::NONE
+        .outer_margin(egui::Margin {
+            left: 12,
+            right: 12,
+            top: 8,
+            bottom: 10,
+        })
+        .inner_margin(egui::Margin::symmetric(12, 6))
+        .fill(card_fill())
+        .stroke(Stroke::new(1.0_f32, card_edge()))
+        .corner_radius(CornerRadius::same(10))
+}
+
+/// Obrys pochylonego prostokąta z zaokrąglonymi rogami (zakładki nagłówka).
+pub fn slanted_rect(rect: Rect, skew: f32, radius: f32) -> Vec<Pos2> {
+    let corners = [
+        pos2(rect.left() + skew, rect.top()),
+        pos2(rect.right(), rect.top()),
+        pos2(rect.right() - skew, rect.bottom()),
+        pos2(rect.left(), rect.bottom()),
+    ];
+    let mut out = Vec::with_capacity(20);
+    for i in 0..4 {
+        let p = corners[i];
+        let a = p + (corners[(i + 3) % 4] - p).normalized() * radius;
+        let b = p + (corners[(i + 1) % 4] - p).normalized() * radius;
+        // Róg jako krzywa Béziera drugiego stopnia przez wierzchołek.
+        for k in 0..=4 {
+            let t = k as f32 / 4.0;
+            let u = 1.0 - t;
+            out.push(pos2(
+                u * u * a.x + 2.0 * u * t * p.x + t * t * b.x,
+                u * u * a.y + 2.0 * u * t * p.y + t * t * b.y,
+            ));
+        }
+    }
+    out
+}
+
+/// Przycisk paska stanu (UPDATE, OPTIONS, ABOUT): zaokrąglony prostokąt
+/// z ikoną. `selected` - otwarta zakładka, `primary` - wypełniony kolorem.
+pub fn bar_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    icon: Icon,
+    selected: bool,
+    primary: bool,
+) -> egui::Response {
+    let font = tab_font(b(12.5));
+    let text_width = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
+        .size()
+        .x;
+    let size = vec2(text_width + b(50.0), b(30.0));
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        let pal = pal();
+        let hovered = response.hovered();
+        let (fill, edge) = if selected {
+            (pal.tab[0], pal.glow)
+        } else if primary {
+            (if hovered { pal.widget[2] } else { pal.tab[0] }, pal.tab[3])
+        } else if hovered {
+            (pal.tab[1], pal.tab[3])
+        } else {
+            (pal.tab[2], pal.tab[4])
+        };
+        if selected {
+            p.rect_stroke(
+                rect.expand(2.0),
+                CornerRadius::same(9),
+                Stroke::new(3.0_f32, pal.glow.gamma_multiply(0.2)),
+                StrokeKind::Middle,
+            );
+        }
+        p.rect(
+            rect,
+            CornerRadius::same(7),
+            fill,
+            Stroke::new(if selected { 1.5_f32 } else { 1.0_f32 }, edge),
+            StrokeKind::Inside,
+        );
+        let color = if selected || primary || hovered {
+            text()
+        } else {
+            pal.tab[5]
+        };
+        let x = rect.center().x - (text_width + b(22.0)) / 2.0;
+        icons::paint(
+            p,
+            Rect::from_center_size(pos2(x + b(8.0), rect.center().y), vec2(b(16.0), b(16.0))),
+            icon,
+            if selected { glow() } else { color },
+        );
+        p.text(
+            pos2(x + b(22.0), rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            font,
+            color,
+        );
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 // --------------------------------------------------- nagłówki i przyciski
 
 /// Nagłówek sekcji: niebieska ikona i duży napis.
@@ -871,10 +1042,10 @@ pub fn primary_button(
     label: &str,
     enabled: bool,
 ) -> egui::Response {
-    let font = egui::FontId::proportional(14.0);
+    let font = egui::FontId::proportional(b(14.0));
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font, text());
-    let icon_w = if icon.is_some() { 26.0 } else { 0.0 };
-    let size = vec2(galley.size().x + icon_w + 36.0, 34.0);
+    let icon_w = if icon.is_some() { b(26.0) } else { 0.0 };
+    let size = vec2(galley.size().x + icon_w + b(36.0), b(34.0));
     let sense = if enabled {
         Sense::click()
     } else {
@@ -911,7 +1082,7 @@ pub fn primary_button(
         let total = galley.size().x + icon_w;
         let mut x = rect.center().x - total / 2.0;
         if let Some(icon) = icon {
-            let r = Rect::from_center_size(pos2(x + 9.0, rect.center().y), vec2(18.0, 18.0));
+            let r = Rect::from_center_size(pos2(x + b(9.0), rect.center().y), vec2(b(18.0), b(18.0)));
             icons::paint(p, r, icon, if enabled { glow() } else { muted() });
             x += icon_w;
         }
@@ -928,12 +1099,129 @@ pub fn primary_button(
     }
 }
 
+/// Tytuł zakładki: duży półgruby napis z ukośnikami w kolorze akcentu.
+pub fn title(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        ui.label(RichText::new(text).font(tab_font(19.0)).color(self::text()));
+        let (rect, _) = ui.allocate_exact_size(vec2(26.0, 12.0), Sense::hover());
+        for i in 0..3 {
+            let x = rect.left() + i as f32 * 8.0;
+            ui.painter().add(egui::Shape::convex_polygon(
+                vec![
+                    pos2(x + 5.0, rect.top()),
+                    pos2(x + 9.0, rect.top()),
+                    pos2(x + 4.0, rect.bottom()),
+                    pos2(x, rect.bottom()),
+                ],
+                accent().gamma_multiply(1.0 - i as f32 * 0.3),
+                Stroke::NONE,
+            ));
+        }
+    });
+}
+
+/// Zwykły przycisk z ikoną. `accent` - wyróżniony jasną obwódką (główna
+/// czynność w wierszu); wyłączony jest wyszarzony i nie reaguje na kliknięcie.
+pub fn icon_button(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    enabled: bool,
+    accent: bool,
+) -> egui::Response {
+    let font = egui::FontId::proportional(b(12.5));
+    let text_width = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
+        .size()
+        .x;
+    let size = vec2(text_width + b(42.0), b(28.0));
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        let hovered = enabled && response.hovered();
+        let [base, hover, press, line] = pal().widget;
+        let fill = if !enabled {
+            pal().primary[0]
+        } else if response.is_pointer_button_down_on() {
+            press
+        } else if hovered {
+            hover
+        } else {
+            base
+        };
+        let edge = if !enabled {
+            card_edge()
+        } else if accent || hovered {
+            glow()
+        } else {
+            line
+        };
+        if enabled && accent {
+            p.rect_stroke(
+                rect.expand(2.0),
+                CornerRadius::same(10),
+                Stroke::new(3.0_f32, glow().gamma_multiply(0.18)),
+                StrokeKind::Middle,
+            );
+        }
+        p.rect(
+            rect,
+            CornerRadius::same(8),
+            fill,
+            Stroke::new(1.0_f32, edge),
+            StrokeKind::Inside,
+        );
+        let color = if enabled {
+            text()
+        } else {
+            muted().gamma_multiply(0.6)
+        };
+        let x = rect.center().x - (text_width + b(20.0)) / 2.0;
+        icons::paint(
+            p,
+            Rect::from_center_size(pos2(x + b(7.0), rect.center().y), vec2(b(15.0), b(15.0))),
+            icon,
+            if enabled { glow() } else { color },
+        );
+        p.text(
+            pos2(x + b(20.0), rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            font,
+            color,
+        );
+    }
+    if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    }
+}
+
 /// Przycisk podzakładki: napis z jasnym podkreśleniem, gdy wybrany.
 pub fn sub_tab(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
-    let font = egui::FontId::proportional(14.0);
+    sub_tab_icon(ui, None, label, selected)
+}
+
+/// Przycisk podzakładki z opcjonalną ikoną przed napisem.
+pub fn sub_tab_icon(
+    ui: &mut egui::Ui,
+    icon: Option<Icon>,
+    label: &str,
+    selected: bool,
+) -> egui::Response {
+    let font = egui::FontId::proportional(b(14.0));
     let color = if selected { text() } else { muted() };
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font, color);
-    let size = vec2(galley.size().x + 20.0, 32.0);
+    let icon_w = if icon.is_some() { b(22.0) } else { 0.0 };
+    let size = vec2(galley.size().x + icon_w + b(20.0), b(32.0));
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
@@ -964,7 +1252,20 @@ pub fn sub_tab(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response
             );
         }
         let text_color = if hovered && !selected { text() } else { color };
-        p.galley(rect.center() - galley.size() / 2.0, galley, text_color);
+        let x = rect.center().x - (galley.size().x + icon_w) / 2.0;
+        if let Some(icon) = icon {
+            icons::paint(
+                p,
+                Rect::from_center_size(pos2(x + b(8.0), rect.center().y), vec2(b(16.0), b(16.0))),
+                icon,
+                if selected { glow() } else { text_color },
+            );
+        }
+        p.galley(
+            pos2(x + icon_w, rect.center().y - galley.size().y / 2.0),
+            galley,
+            text_color,
+        );
     }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }

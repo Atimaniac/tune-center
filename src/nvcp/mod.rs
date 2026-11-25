@@ -74,6 +74,21 @@ fn intel() -> bool {
     crate::shaders::vendor() == Some(crate::shaders::Vendor::Intel)
 }
 
+/// Ikona podzakładki.
+fn page_icon(page: Page) -> crate::icons::Icon {
+    use crate::icons::Icon;
+    match page {
+        Page::Overclock => Icon::Gauge,
+        Page::Settings3d => Icon::Cube,
+        Page::Dlss | Page::Fsr => Icon::Target,
+        Page::Display | Page::IntelDisplay | Page::OledFix => Icon::Monitor,
+        Page::Color => Icon::Rgb,
+        Page::Gsync | Page::FreeSync | Page::ArcSync => Icon::Sync,
+        Page::Custom => Icon::Options,
+        Page::Shaders => Icon::Code,
+    }
+}
+
 /// Zmiana ekranu czekająca na potwierdzenie.
 enum Undo {
     Mode(display::Config),
@@ -322,7 +337,8 @@ impl NvcpTab {
                         ]
                     };
                     for (page, label) in pages {
-                        if crate::theme::sub_tab(ui, label, self.page == page).clicked() {
+                        let icon = Some(page_icon(page));
+                        if crate::theme::sub_tab_icon(ui, icon, label, self.page == page).clicked() {
                             self.page = page;
                             self.status = None;
                         }

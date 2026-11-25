@@ -15,6 +15,7 @@ use super::sampler::{Samples, HISTORY};
 use crate::bridge::Snapshot;
 use crate::history;
 use crate::i18n::tr;
+use crate::icons::{self, Icon};
 use crate::theme;
 
 /// Co pokazuje kolumna wartości (jak lista rozwijana w GPU-Z).
@@ -234,6 +235,26 @@ impl Line {
         format(v, self.decimals, self.unit)
     }
 
+    /// Ikona wiersza: według jednostki, a dla zegarów i obciążeń według nazwy.
+    fn icon(&self) -> Icon {
+        let name = self.name.as_str();
+        match self.unit {
+            "°C" => Icon::Thermo,
+            "MB" => Icon::Database,
+            "W" | "V" => Icon::Power,
+            "MB/s" => Icon::Swap,
+            "MHz" if name == tr("Zegar pamięci", "Memory Clock") => Icon::Memory,
+            "MHz" if name == tr("Zegar wideo", "Video Clock") => Icon::Monitor,
+            "MHz" => Icon::Chip,
+            _ if name == tr("Obciążenie GPU", "GPU Load") => Icon::Gpu,
+            _ if name == tr("Obciążenie magistrali", "Bus Interface Load") => Icon::Bus,
+            _ if name == tr("Obciążenie kontrolera pamięci", "Memory Controller Load") => {
+                Icon::Memory
+            }
+            _ => Icon::Gauge,
+        }
+    }
+
     fn color(&self, v: f32) -> Color32 {
         if self.unit == "°C" {
             theme::temp_color(v)
@@ -268,7 +289,7 @@ fn is_hidden(name: &str) -> bool {
 }
 
 /// Wysokość wiersza (jak w GPU-Z: nazwa, wartość, wykres na całą długość).
-const ROW_H: f32 = 30.0;
+const ROW_H: f32 = 32.0;
 
 impl SensorsView {
     pub fn ui(&mut self, ui: &mut egui::Ui, samples: &Samples, _snap: Option<&Snapshot>) {
@@ -304,10 +325,11 @@ impl SensorsView {
         let last = history.back();
 
         // Odczyty bez wykresu: pasek "nazwa: wartość" nad wierszami.
-        let mut chips: Vec<(String, String, String)> = Vec::new();
+        let mut chips: Vec<(Icon, String, String, String)> = Vec::new();
         if let Some(m) = last {
             if let Some(limit) = &m.details.limit {
                 chips.push((
+                    Icon::Power,
                     tr("Ograniczenie", "PerfCap").into(),
                     limit.clone(),
                     "NVML".into(),
@@ -315,6 +337,7 @@ impl SensorsView {
             }
             if let Some(p) = m.details.pstate {
                 chips.push((
+                    Icon::Sensors,
                     tr("Stan wydajności", "Performance State").into(),
                     format!("P{p}"),
                     "NVML".into(),
@@ -322,6 +345,7 @@ impl SensorsView {
             }
             if let (Some(g), Some(w)) = (m.details.pcie_gen, m.details.pcie_width) {
                 chips.push((
+                    Icon::Chip,
                     tr("Łącze PCIe", "PCIe Link").into(),
                     format!("Gen {g} x{w}"),
                     "NVML".into(),
@@ -329,6 +353,7 @@ impl SensorsView {
             }
             if let Some(total) = m.details.mem_total_mb {
                 chips.push((
+                    Icon::Memory,
                     tr("Pamięć karty", "Memory Size").into(),
                     format!("{total} MB"),
                     "NVML".into(),
@@ -336,6 +361,7 @@ impl SensorsView {
             }
             if let Some(tdp) = m.details.tdp_w {
                 chips.push((
+                    Icon::Power,
                     tr("Limit mocy (TDP)", "Power Limit (TDP)").into(),
                     format!("{tdp:.0} W"),
                     "NVML".into(),
@@ -344,12 +370,15 @@ impl SensorsView {
         }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(8.0, 6.0);
-            for (name, value, source) in &chips {
+            for (i, (icon, name, value, source)) in chips.iter().enumerate() {
+                if i > 0 {
+                    theme::vsep(ui, 16.0);
+                }
+                icons::show(ui, *icon, 15.0, theme::accent());
                 ui.label(
-                    RichText::new(format!("  {name}: {value}  "))
+                    RichText::new(format!("{name}: {value}"))
                         .size(12.5)
-                        .color(theme::text())
-                        .background_color(theme::well()),
+                        .color(theme::text()),
                 )
                 .on_hover_text(crate::trf!("Źródło: {source}", "Source: {source}"));
             }
@@ -453,8 +482,17 @@ fn line_ui(ui: &mut egui::Ui, line: &Line, show: Show) {
             (rect, response)
         };
         let (rect, response) = cell(ui, name_w);
+        icons::paint(
+            ui.painter(),
+            egui::Rect::from_center_size(
+                rect.left_center() + Vec2::new(19.0, 0.0),
+                Vec2::splat(16.0),
+            ),
+            line.icon(),
+            color,
+        );
         ui.painter().text(
-            rect.left_center() + Vec2::new(10.0, 0.0),
+            rect.left_center() + Vec2::new(38.0, 0.0),
             egui::Align2::LEFT_CENTER,
             &line.name,
             egui::FontId::proportional(13.0),
@@ -467,7 +505,7 @@ fn line_ui(ui: &mut egui::Ui, line: &Line, show: Show) {
             rect.right_center() - Vec2::new(10.0, 0.0),
             egui::Align2::RIGHT_CENTER,
             shown.map(|v| line.fmt(v)).unwrap_or_else(|| "—".into()),
-            egui::FontId::proportional(13.5),
+            theme::tab_font(13.5),
             color,
         );
         response.on_hover_text(format!("MIN {} / MAX {}", line.fmt(min), line.fmt(max)));

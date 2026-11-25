@@ -23,10 +23,12 @@ Tune Center uses the components below. They are included unchanged.
 - License: MPL-2.0
 - Used by `sensor-bridge.exe` to read sensors and control fans.
 
-## Audiowide (interface font)
+## Inter (interface font)
 
-- File: `assets/Audiowide-Regular.ttf`, embedded in `tunecenter.exe`
-- Author: Astigmatic (Brian J. Bonislawsky)
+- Files: `assets/Inter-Regular.ttf`, `assets/Inter-SemiBold.ttf` and
+  `assets/Inter-BoldItalic.ttf` (Inter 4.1), embedded in `tunecenter.exe`
+- Source: https://github.com/rsms/inter
+- Author: The Inter Project Authors
 - License: SIL Open Font License 1.1
 
 ## References used while writing the code

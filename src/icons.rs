@@ -24,6 +24,19 @@ pub enum Icon {
     Chip,
     Bench,
     Rgb,
+    Cube,
+    Sync,
+    Monitor,
+    Code,
+    Clock,
+    Curve,
+    Flask,
+    Save,
+    Upload,
+    Shield,
+    Memory,
+    Database,
+    Bus,
 }
 
 /// Rysuje ikonę wpisaną w kwadrat `rect`.
@@ -190,6 +203,174 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             painter.circle_stroke(p(0.0, -0.13), s * 0.22, stroke);
             painter.circle_stroke(p(-0.14, 0.11), s * 0.22, stroke);
             painter.circle_stroke(p(0.14, 0.11), s * 0.22, stroke);
+        }
+        Icon::Cube => {
+            // Sześcian w rzucie izometrycznym.
+            painter.line(
+                vec![
+                    p(0.0, -0.42),
+                    p(0.36, -0.21),
+                    p(0.36, 0.21),
+                    p(0.0, 0.42),
+                    p(-0.36, 0.21),
+                    p(-0.36, -0.21),
+                    p(0.0, -0.42),
+                ],
+                stroke,
+            );
+            painter.line(vec![p(-0.36, -0.21), p(0.0, 0.0), p(0.36, -0.21)], stroke);
+            painter.line_segment([p(0.0, 0.0), p(0.0, 0.42)], stroke);
+        }
+        Icon::Sync => {
+            // Dwa łuki ze strzałkami (synchronizacja, ponowny odczyt).
+            let r = s * 0.34;
+            for (from, to) in [(1.1 * PI, 1.85 * PI), (0.1 * PI, 0.85 * PI)] {
+                arc(painter, c, r, from, to, stroke);
+                let tip = c + vec2(to.cos(), to.sin()) * r;
+                let dir = vec2(-to.sin(), to.cos());
+                let side = vec2(to.cos(), to.sin());
+                painter.add(Shape::convex_polygon(
+                    vec![
+                        tip + dir * s * 0.16,
+                        tip + side * s * 0.12,
+                        tip - side * s * 0.12,
+                    ],
+                    color,
+                    Stroke::NONE,
+                ));
+            }
+        }
+        Icon::Monitor => {
+            painter.rect_stroke(
+                Rect::from_min_max(p(-0.42, -0.34), p(0.42, 0.2)),
+                egui::CornerRadius::same((s * 0.06) as u8),
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            painter.line_segment([p(0.0, 0.2), p(0.0, 0.38)], stroke);
+            painter.line_segment([p(-0.2, 0.38), p(0.2, 0.38)], stroke);
+        }
+        Icon::Code => {
+            painter.line(vec![p(-0.14, -0.26), p(-0.4, 0.0), p(-0.14, 0.26)], stroke);
+            painter.line(vec![p(0.14, -0.26), p(0.4, 0.0), p(0.14, 0.26)], stroke);
+        }
+        Icon::Clock => {
+            painter.circle_stroke(c, s * 0.4, stroke);
+            painter.line(vec![p(0.0, -0.24), p(0.0, 0.0), p(0.17, 0.1)], stroke);
+        }
+        Icon::Curve => {
+            let pts = vec![p(-0.42, 0.26), p(-0.16, -0.04), p(0.06, 0.14), p(0.4, -0.26)];
+            painter.line(pts.clone(), stroke);
+            for pt in pts {
+                painter.circle_filled(pt, w * 1.3, color);
+            }
+        }
+        Icon::Flask => {
+            painter.line(
+                vec![
+                    p(-0.1, -0.42),
+                    p(-0.1, -0.1),
+                    p(-0.36, 0.38),
+                    p(0.36, 0.38),
+                    p(0.1, -0.1),
+                    p(0.1, -0.42),
+                ],
+                stroke,
+            );
+            painter.line_segment([p(-0.18, -0.42), p(0.18, -0.42)], stroke);
+            painter.line_segment([p(-0.24, 0.16), p(0.24, 0.16)], stroke);
+        }
+        Icon::Save => {
+            // Kartka z zagiętym rogiem.
+            painter.line(
+                vec![
+                    p(-0.3, -0.42),
+                    p(0.1, -0.42),
+                    p(0.3, -0.22),
+                    p(0.3, 0.42),
+                    p(-0.3, 0.42),
+                    p(-0.3, -0.42),
+                ],
+                stroke,
+            );
+            painter.line_segment([p(-0.14, 0.02), p(0.14, 0.02)], stroke);
+            painter.line_segment([p(-0.14, 0.22), p(0.14, 0.22)], stroke);
+        }
+        Icon::Upload => {
+            painter.line_segment([p(0.0, 0.14), p(0.0, -0.42)], stroke);
+            painter.line(vec![p(-0.2, -0.2), p(0.0, -0.42), p(0.2, -0.2)], stroke);
+            painter.line(
+                vec![p(-0.38, 0.12), p(-0.38, 0.38), p(0.38, 0.38), p(0.38, 0.12)],
+                stroke,
+            );
+        }
+        Icon::Shield => {
+            painter.line(
+                vec![
+                    p(0.0, -0.44),
+                    p(0.36, -0.3),
+                    p(0.36, 0.04),
+                    p(0.22, 0.3),
+                    p(0.0, 0.44),
+                    p(-0.22, 0.3),
+                    p(-0.36, 0.04),
+                    p(-0.36, -0.3),
+                    p(0.0, -0.44),
+                ],
+                stroke,
+            );
+            painter.line(vec![p(-0.15, 0.0), p(-0.03, 0.13), p(0.17, -0.11)], stroke);
+        }
+        Icon::Memory => {
+            // Moduł pamięci ze stykami.
+            painter.rect_stroke(
+                Rect::from_min_max(p(-0.44, -0.22), p(0.44, 0.18)),
+                egui::CornerRadius::same((s * 0.05) as u8),
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            for x in [-0.3, -0.15, 0.0, 0.15, 0.3] {
+                painter.line_segment([p(x, 0.18), p(x, 0.34)], stroke);
+            }
+            for x in [-0.24, 0.0, 0.24] {
+                painter.line_segment([p(x, -0.1), p(x, 0.04)], stroke);
+            }
+        }
+        Icon::Database => {
+            // Walec: elipsa u góry, półelipsy w środku i na dole.
+            let ellipse = |cy: f32, from: f32, to: f32| {
+                let n = 20;
+                let pts: Vec<Pos2> = (0..=n)
+                    .map(|i| {
+                        let a = from + (to - from) * i as f32 / n as f32;
+                        p(a.cos() * 0.34, cy + a.sin() * 0.12)
+                    })
+                    .collect();
+                painter.line(pts, stroke);
+            };
+            ellipse(-0.28, 0.0, TAU);
+            ellipse(0.0, 0.0, PI);
+            ellipse(0.28, 0.0, PI);
+            painter.line_segment([p(-0.34, -0.28), p(-0.34, 0.28)], stroke);
+            painter.line_segment([p(0.34, -0.28), p(0.34, 0.28)], stroke);
+        }
+        Icon::Bus => {
+            // Drzewko połączeń: węzeł u góry i trzy na dole.
+            let node = |x: f32, y: f32| {
+                painter.rect_stroke(
+                    Rect::from_center_size(p(x, y), vec2(s * 0.2, s * 0.2)),
+                    egui::CornerRadius::same(1),
+                    stroke,
+                    egui::StrokeKind::Middle,
+                );
+            };
+            node(0.0, -0.32);
+            for x in [-0.32, 0.0, 0.32] {
+                node(x, 0.32);
+                painter.line_segment([p(x, 0.0), p(x, 0.22)], stroke);
+            }
+            painter.line_segment([p(0.0, -0.22), p(0.0, 0.0)], stroke);
+            painter.line_segment([p(-0.32, 0.0), p(0.32, 0.0)], stroke);
         }
     }
 }
