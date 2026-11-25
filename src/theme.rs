@@ -1496,6 +1496,26 @@ pub fn switch(ui: &mut egui::Ui, id: &str, state: SwitchState, enabled: bool) ->
     })
 }
 
+/// Napis "TUNE CENTER" w kolorze motywu. W jasnym motywie srebrne "TUNE"
+/// jest przyciemniane do granatu, bo na białym tle było słabo widoczne.
+pub fn tint_wordmark(rgba: &[u8]) -> Vec<u8> {
+    let mut out = tint_logo(rgba);
+    if is_light() {
+        for px in out.chunks_exact_mut(4) {
+            let max = px[0].max(px[1]).max(px[2]) as f32;
+            let min = px[0].min(px[1]).min(px[2]) as f32;
+            // Tylko szarości (srebro); niebieskie "CENTER" zostaje.
+            if max > 0.0 && (max - min) / max < 0.18 {
+                let k = max / 255.0;
+                px[0] = (14.0 + 26.0 * k) as u8;
+                px[1] = (30.0 + 40.0 * k) as u8;
+                px[2] = (58.0 + 60.0 * k) as u8;
+            }
+        }
+    }
+    out
+}
+
 /// Logo (niebieskie RGBA) w kolorze aktualnego motywu: barwa kolorowych
 /// pikseli jest przesuwana do barwy motywu, jasność, nasycenie i różnice
 /// odcieni zostają.

@@ -715,6 +715,9 @@ fn score_row(
     w: f32,
 ) {
     ui.horizontal(|ui| {
+        // Stały odstęp: karta leży w wierszu z odstępem GAP, który inaczej by
+        // się tu odziedziczył i poszerzył wiersz poza kartę.
+        ui.spacing_mut().item_spacing.x = 8.0;
         ui.add_sized(
             [120.0, 24.0],
             egui::Label::new(RichText::new(title).color(theme::text())),

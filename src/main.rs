@@ -108,7 +108,7 @@ const WORDMARK_HEIGHT: f32 = 22.0;
 /// Napis "TUNE CENTER" w kolorze aktualnego motywu (srebrny zostaje,
 /// niebieski jest przebarwiany jak logo).
 fn load_wordmark(ctx: &egui::Context) -> egui::TextureHandle {
-    let rgba = theme::tint_logo(include_bytes!("../assets/wordmark.rgba"));
+    let rgba = theme::tint_wordmark(include_bytes!("../assets/wordmark.rgba"));
     ctx.load_texture(
         "wordmark",
         egui::ColorImage::from_rgba_unmultiplied(WORDMARK_SIZE, &rgba),
@@ -941,6 +941,7 @@ impl App {
                 self.fans.config.light_theme = light;
                 self.fans.config.save();
                 theme::apply(ctx, light, style);
+                self.wordmark = load_wordmark(ctx);
             }
             option_note(
                 ui,
@@ -1040,12 +1041,13 @@ impl App {
                 )));
                 ui.add_space(10.0);
                 ui.vertical(|ui| {
-                    ui.add_space(14.0);
-                    ui.label(
-                        RichText::new("TUNE CENTER")
-                            .font(theme::wordmark_font(26.0))
-                            .color(theme::wordmark()),
-                    );
+                    ui.add_space(22.0);
+                    let ratio = WORDMARK_SIZE[0] as f32 / WORDMARK_SIZE[1] as f32;
+                    ui.add(egui::Image::from_texture(egui::load::SizedTexture::new(
+                        self.wordmark.id(),
+                        egui::vec2(30.0 * ratio, 30.0),
+                    )));
+                    ui.add_space(4.0);
                     ui.label(
                         RichText::new(crate::trf!("Wersja {}", "Version {}", env!("CARGO_PKG_VERSION"))).color(muted()),
                     );
