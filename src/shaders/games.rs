@@ -1,6 +1,6 @@
 //! Wyszukiwanie zainstalowanych gier w sklepach: Steam, Epic Games, GOG,
-//! Ubisoft Connect, EA app i Xbox (PC). Tylko odczyt manifestów sklepów
-//! i rejestru - niczego nie zmienia.
+//! Ubisoft Connect, EA app, Xbox (PC), Battle.net i Riot Games. Tylko odczyt
+//! manifestów sklepów i rejestru - niczego nie zmienia.
 
 use std::path::{Path, PathBuf};
 
@@ -12,6 +12,8 @@ pub enum Store {
     Ubisoft,
     Ea,
     Xbox,
+    BattleNet,
+    Riot,
 }
 
 impl Store {
@@ -23,6 +25,8 @@ impl Store {
             Store::Ubisoft => "Ubisoft Connect",
             Store::Ea => "EA app",
             Store::Xbox => "Xbox",
+            Store::BattleNet => "Battle.net",
+            Store::Riot => "Riot Games",
         }
     }
 }
@@ -46,11 +50,16 @@ pub fn find_all() -> Vec<Game> {
         games.extend(gog());
         games.extend(ubisoft());
         games.extend(ea());
+        games.extend(uninstall_games());
     }
+    games.extend(riot_metadata());
     games.extend(xbox());
     games.retain(|g| g.dir.is_dir());
-    games.sort_by_key(|g| g.name.to_lowercase());
+    // Ta sama gra może przyjść z dwóch źródeł (np. rejestr i metadane Riot):
+    // duplikaty po folderze, potem kolejność po nazwie.
+    games.sort_by_key(|g| path_key(&g.dir));
     games.dedup_by(|a, b| same_path(&a.dir, &b.dir));
+    games.sort_by_key(|g| g.name.to_lowercase());
     games
 }
 
@@ -274,6 +283,147 @@ fn ea() -> Vec<Game> {
     out
 }
 
+// ------------------- Battle.net / Riot (rejestr deinstalacji) ----------------
+
+/// Wartość argumentu `--nazwa=wartość` z wiersza polecenia deinstalatora.
+fn cli_arg(cmd: &str, name: &str) -> Option<String> {
+    let needle = format!("--{name}=");
+    let rest = &cmd[cmd.find(&needle)? + needle.len()..];
+    let rest = rest.trim_start_matches('"');
+    let end = rest.find(['"', ' ']).unwrap_or(rest.len());
+    let value = rest[..end].trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+/// Gra z wpisu w rejestrze deinstalacji Windows: Battle.net (deinstalator
+/// Blizzard z `--uid=`) albo Riot Client (klucz `Riot Game <produkt>.<kanał>`).
+pub fn uninstall_game(key: &str, name: &str, dir: &str, uninstall: &str) -> Option<Game> {
+    if dir.trim().is_empty() || name.trim().is_empty() {
+        return None;
+    }
+    let dir = PathBuf::from(dir.trim().trim_matches('"').replace('/', "\\"));
+    let lower = uninstall.to_lowercase();
+    if lower.contains("blizzard uninstaller") {
+        let uid = cli_arg(uninstall, "uid")?;
+        if uid.eq_ignore_ascii_case("battle.net") {
+            return None;
+        }
+        return Some(Game {
+            id: format!("battlenet:{uid}"),
+            name: name.trim().to_owned(),
+            store: Store::BattleNet,
+            dir,
+        });
+    }
+    let product = key.strip_prefix("Riot Game ")?;
+    if product.to_lowercase().starts_with("riot_client") {
+        return None;
+    }
+    Some(Game {
+        id: format!("riot:{product}"),
+        name: name.trim().to_owned(),
+        store: Store::Riot,
+        dir,
+    })
+}
+
+#[cfg(windows)]
+fn uninstall_games() -> Vec<Game> {
+    use super::registry::{Key, HKCU, HKLM};
+    let mut out = Vec::new();
+    for (root, base) in [
+        (HKLM, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKLM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKCU, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ] {
+        let Some(parent) = Key::open(root, base) else {
+            continue;
+        };
+        for sub in parent.subkeys() {
+            let Some(k) = Key::open(root, &format!(r"{base}\{sub}")) else {
+                continue;
+            };
+            let field = |v: &str| k.string(v).unwrap_or_default();
+            if let Some(game) = uninstall_game(
+                &sub,
+                &field("DisplayName"),
+                &field("InstallLocation"),
+                &field("UninstallString"),
+            ) {
+                out.push(game);
+            }
+        }
+    }
+    out
+}
+
+/// Nazwa gry Riot po identyfikatorze produktu.
+fn riot_name(product: &str) -> Option<&'static str> {
+    Some(match product {
+        "league_of_legends" => "League of Legends",
+        "valorant" => "VALORANT",
+        "bacon" => "Legends of Runeterra",
+        "lion" => "2XKO",
+        "teamfighttactics" => "Teamfight Tactics",
+        _ => return None,
+    })
+}
+
+/// Gra z pliku `<produkt>.<kanał>.product_settings.yaml` klienta Riot.
+pub fn riot_game(file_stem: &str, yaml: &str) -> Option<Game> {
+    let product_line = file_stem.strip_suffix(".product_settings")?;
+    let product = product_line.split('.').next()?;
+    if product.starts_with("riot_client") {
+        return None;
+    }
+    let path = yaml.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("product_install_full_path:")?;
+        Some(rest.trim().trim_matches(|c| c == '"' || c == '\'').to_owned())
+    })?;
+    if path.is_empty() {
+        return None;
+    }
+    let dir = PathBuf::from(path.replace('/', "\\"));
+    let name = match riot_name(product) {
+        Some(n) => n.to_owned(),
+        None => dir.file_name()?.to_string_lossy().into_owned(),
+    };
+    Some(Game {
+        id: format!("riot:{product_line}"),
+        name,
+        store: Store::Riot,
+        dir,
+    })
+}
+
+/// Gry z metadanych klienta Riot (`C:\ProgramData\Riot Games\Metadata`).
+fn riot_metadata() -> Vec<Game> {
+    let base = std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+        .join("Riot Games")
+        .join("Metadata");
+    let mut out = Vec::new();
+    for product in std::fs::read_dir(base).into_iter().flatten().flatten() {
+        for file in std::fs::read_dir(product.path()).into_iter().flatten().flatten() {
+            let path = file.path();
+            if path.extension().is_none_or(|x| x != "yaml") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
+                continue;
+            };
+            if let Some(game) = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|yaml| riot_game(&stem, &yaml))
+            {
+                out.push(game);
+            }
+        }
+    }
+    out
+}
+
 // --------------------------------- Xbox ------------------------------------
 
 /// Gry z aplikacji Xbox: `<dysk>:\XboxGames\<gra>\Content`.
@@ -341,5 +491,43 @@ mod tests {
         let partial =
             r#"{"DisplayName":"X","InstallLocation":"E:\\X","bIsIncompleteInstall":true}"#;
         assert!(epic_game(partial).is_none());
+    }
+    #[test]
+    fn reads_battle_net_and_riot() {
+        let cod = uninstall_game(
+            "Call of Duty",
+            "Call of Duty",
+            r"D:\Call of Duty",
+            r#""C:\ProgramData\Battle.net\Agent\Blizzard Uninstaller.exe" --lang=plPL --uid=auks --displayname="Call of Duty""#,
+        )
+        .unwrap();
+        assert_eq!((cod.id.as_str(), cod.store), ("battlenet:auks", Store::BattleNet));
+        assert_eq!(cod.dir, PathBuf::from(r"D:\Call of Duty"));
+        let launcher = uninstall_game(
+            "Battle.net",
+            "Battle.net",
+            r"D:\Battle.net",
+            r#""C:\ProgramData\Battle.net\Agent\Blizzard Uninstaller.exe" --lang=plPL --uid=battle.net --displayname="Battle.net""#,
+        );
+        assert!(launcher.is_none());
+
+        let lol = uninstall_game(
+            "Riot Game league_of_legends.live",
+            "League of Legends",
+            "C:/Riot Games/League of Legends",
+            r#""C:\Riot Games\Riot Client\RiotClientServices.exe" --uninstall-product=league_of_legends --uninstall-patchline=live"#,
+        )
+        .unwrap();
+        assert_eq!(lol.id, "riot:league_of_legends.live");
+        assert_eq!(lol.dir, PathBuf::from(r"C:\Riot Games\League of Legends"));
+        assert!(uninstall_game("Riot Game Riot_Client.", "Riot Client", r"C:\Riot Games\Riot Client", "x").is_none());
+        assert!(uninstall_game("7-Zip", "7-Zip", r"C:\7-Zip", r"C:\7-Zip\Uninstall.exe").is_none());
+
+        let yaml = "product_install_full_path: \"C:/Riot Games/League of Legends\"\nproduct_install_root: \"C:/Riot Games\"\n";
+        let game = riot_game("league_of_legends.live.product_settings", yaml).unwrap();
+        assert_eq!(game.name, "League of Legends");
+        assert_eq!(game.id, "riot:league_of_legends.live");
+        assert_eq!(game.dir, PathBuf::from(r"C:\Riot Games\League of Legends"));
+        assert!(riot_game("riot_client.product_settings", yaml).is_none());
     }
 }

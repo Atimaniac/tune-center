@@ -621,8 +621,8 @@ impl ShaderTab {
         });
         ui.label(
             RichText::new(tr(
-                "Steam, Epic Games, GOG, Ubisoft Connect, EA app i Xbox. Gry są tylko czytane - nic w nich nie jest zmieniane.",
-                "Steam, Epic Games, GOG, Ubisoft Connect, EA app and Xbox. Games are only read - nothing in them is changed.",
+                "Steam, Epic Games, GOG, Ubisoft Connect, EA app, Xbox, Battle.net i Riot Games. Gry są tylko czytane - nic w nich nie jest zmieniane.",
+                "Steam, Epic Games, GOG, Ubisoft Connect, EA app, Xbox, Battle.net and Riot Games. Games are only read - nothing in them is changed.",
             ))
             .small()
             .color(muted()),
