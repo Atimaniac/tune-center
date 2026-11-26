@@ -25,12 +25,12 @@ use super::rootsig;
 pub const HOST_ARG: &str = "--shader-warm";
 
 /// Próg czasu tworzenia potoku uznawanego za trafienie w pamięć podręczną.
-const CACHED_MS: u64 = 250;
+pub(super) const CACHED_MS: u64 = 250;
 
 // ------------------------------ proces kompilujący --------------------------
 
 #[cfg(windows)]
-mod d3d {
+pub(super) mod d3d {
     use std::collections::HashMap;
     use std::ffi::c_void;
 
@@ -1115,7 +1115,7 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
     // Źródło: "unity <folder _Data>", "dagor <zrzut .shdump.bin DX11>" albo
     // "unreal <paczka .pak>" (archiwa shaderów SM5 z paczki).
     let (kind, source) = match (args.first().map(String::as_str), args.get(1)) {
-        (Some(k @ ("unity" | "dagor" | "unreal" | "iostore" | "source2" | "loose")), Some(p)) => {
+        (Some(k @ ("unity" | "dagor" | "unreal" | "iostore" | "source2" | "loose" | "luminous" | "gow1" | "frostbite")), Some(p)) => {
             (k, p.clone())
         }
         (Some(p), None) => ("unity", p.to_owned()),
@@ -1249,6 +1249,29 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
     let want_layouts = std::env::var_os("TC_INPUT_LAYOUT").is_some_and(|v| v == "1");
 
     std::thread::scope(|scope| {
+        // Czytniki silników (`readers`): bajty z kontenerami DXBC.
+        if super::readers::KINDS.contains(&kind) && !super::readers::is_dx12(kind) {
+            let tx = tx.clone();
+            let (seen, found, errors, say, source) = (&seen, &found, &errors, &say, &source);
+            scope.spawn(move || {
+                let result = super::readers::for_each11(
+                    kind,
+                    Path::new(source),
+                    &mut |done, total| say(format!("scan {done} {total}")),
+                    &mut |bytes| {
+                        unity::carve_dxbc(bytes, |d| {
+                            if seen.lock().unwrap().insert(d.digest()) {
+                                found.fetch_add(1, Relaxed);
+                                let _ = tx.send((d.stage, d.code.to_vec()));
+                            }
+                        })
+                    },
+                );
+                if let Err(e) = result {
+                    errors.lock().unwrap().push(e);
+                }
+            });
+        }
         // Dagor DX11: jeden zrzut, shadery rozpakowywane po kolei.
         if let Some(dump) = &dagor_dump {
             let tx = tx.clone();
@@ -1493,6 +1516,9 @@ pub fn run_host_d3d11(args: &[String]) -> i32 {
     }
     if found.load(Relaxed) == 0 && loose {
         say("warning w plikach gry nie ma jawnych shaderów DXBC / no plain DXBC shaders in the game files".into());
+    }
+    if found.load(Relaxed) == 0 && super::readers::KINDS.contains(&kind) {
+        say("fatal czytnik nie znalazł shaderów DirectX 11 / the reader found no DirectX 11 shaders".into());
     }
     say(format!("result {ok} {}", done - ok));
     0
@@ -2167,6 +2193,12 @@ pub enum Job {
     Source2 { game: PathBuf },
     /// Folder gry bez rozpoznanego silnika (jawne kontenery DXBC).
     Loose { game: PathBuf },
+    /// Folder gry z kontenerami DirectX 12 z wbudowaną root signature.
+    Carved { game: PathBuf },
+    /// Folder gry REDengine 3 (pamięć shaderów DirectX 12).
+    Red3 { game: PathBuf },
+    /// Folder gry odczytywanej przez czytnik silnika (`readers`, rodzaj `kind`).
+    Reader { kind: String, game: PathBuf },
 }
 
 /// Uruchomiona kompilacja jednej gry.
@@ -2279,6 +2311,18 @@ impl Warm {
                 }
                 Job::Loose { game } => {
                     cmd.arg(HOST_ARG_D3D11).arg("loose").arg(game);
+                }
+                Job::Carved { game } => {
+                    cmd.arg(super::warm12::HOST_ARG).arg("carved").arg(game);
+                }
+                Job::Red3 { game } => {
+                    cmd.arg(super::warm12::HOST_ARG).arg("red3").arg(game);
+                }
+                Job::Reader { kind, game } if super::readers::is_dx12(kind) => {
+                    cmd.arg(super::warm12::HOST_ARG).arg(format!("reader:{kind}")).arg(game);
+                }
+                Job::Reader { kind, game } => {
+                    cmd.arg(HOST_ARG_D3D11).arg(kind).arg(game);
                 }
             }
             cmd.stdout(std::process::Stdio::piped())

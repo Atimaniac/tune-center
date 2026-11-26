@@ -271,6 +271,27 @@ udostępnia pobierania gotowych shaderów; Tune Center czyta je z plików gry.
   Unity. Active Matter: 8632 shadery, ok. 90 s.
 - **Source 2 DirectX 11** (np. Counter-Strike 2): shadery DirectX z plików
   `.vcs` w paczkach VPK (`shaders*_dir.vpk`), także z ramek zstd.
+- **REDengine 3 DirectX 12** (Wiedźmin 3): shadery materiałów i silnika z
+  pamięci shaderów gry (`content\content0\shaderdx12_0.cache` i
+  `staticshaderDx12_0.cache`, kompresja zlib), potoki z technik gry, trzy
+  root signature silnika (compute, z teselacją lub GS, pozostałe). Na
+  kartach NVIDIA tworzony jest tylko potok, który wnosi nowy shader.
+- **Czytniki silników** (z samych plików gry, bez kluczy i bez
+  odszyfrowywania): RAGE gen9 (GTA V Enhanced, DX12 - biblioteki shaderów z
+  archiwów `update\*.rpf` po sygnaturze), ForzaTech (Forza Horizon, DX12 -
+  shadery w archiwach zip z wbudowaną root signature), Santa Monica (God of
+  War Ragnarök, DX12 - programy z paczek `*.shaderpack` z root signature
+  gry; God of War 2018, DX11), Northlight (Control, DX12 - rekordy potoków,
+  dwie root signature silnika), Luminous Studio (Final Fantasy XV, DX11 -
+  archiwa EARC), Frostbite (DX11 - bloki archiwów `cas_NN.cas`; bloki
+  zaciemnione i ze słownikiem gry są pomijane). Żadna z tych gier nie była
+  sprawdzona na prawdziwych plikach - tylko testy na danych syntetycznych.
+- **Gry DirectX 12 dowolnego silnika**: kontenery DXIL/DXBC z wbudowaną
+  root signature (część `RTS0`) wycinane z plików gry - pliki z „shader”,
+  „pso” itp. w nazwie w całości, pozostałe najpierw próbkami. Shadery
+  pikseli łączone z shaderami wierzchołków z tego samego pliku i z tą samą
+  root signature po semantykach sygnatur; compute osobno. Shadery bez root
+  signature (silnik buduje ją w trakcie gry) są pomijane.
 - **Inne gry DirectX 11** (nierozpoznany silnik): próba - luźne pliki
   shaderów gry (`.cso`, `.fxo` itp.) przeszukiwane pod kątem kontenerów DXBC.
 - **AMD i Intel**: sterowniki tych firm biorą pod uwagę także układ wejścia

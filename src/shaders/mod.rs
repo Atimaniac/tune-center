@@ -23,6 +23,17 @@ pub mod unity;
 pub mod unreal;
 pub mod unreal_pak;
 pub mod warm;
+pub mod warm12;
+pub mod container;
+pub mod inflate;
+pub mod red3;
+pub mod readers;
+pub mod rage;
+pub mod forza;
+pub mod santamonica;
+pub mod northlight;
+pub mod luminous;
+pub mod frostbite;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -304,6 +315,48 @@ pub fn plan(info: &Info) -> (&'static str, bool) {
             tr(
                 "DirectX 11: shadery z paczek VPK gry",
                 "DirectX 11: shaders from the game's VPK packages",
+            ),
+            true,
+        ),
+        Engine::Known(_) if info.reader.is_some_and(readers::is_dx12) => (
+            tr(
+                "DirectX 12: shadery i potoki z plików gry (czytnik silnika)",
+                "DirectX 12: shaders and pipelines from the game files (engine reader)",
+            ),
+            true,
+        ),
+        Engine::Known(_) if info.api.as_deref() == Some("DirectX 12") => (
+            tr(
+                "DirectX 12: shadery gry nie niosą root signature - silnik buduje ją w trakcie gry, z samych plików się nie da",
+                "DirectX 12: the game's shaders carry no root signature - the engine builds it at run time, not possible from the files alone",
+            ),
+            false,
+        ),
+        Engine::Known(_) => (
+            tr(
+                "DirectX 11: shadery z archiwów gry (czytnik silnika)",
+                "DirectX 11: shaders from the game's archives (engine reader)",
+            ),
+            true,
+        ),
+        Engine::RedEngine3 => (
+            tr(
+                "DirectX 12: shadery materiałów i silnika z pamięci shaderów gry, potoki z technik gry",
+                "DirectX 12: material and engine shaders from the game's shader cache, pipelines from the game's techniques",
+            ),
+            true,
+        ),
+        Engine::Unknown if has(ShaderKind::CarvedDx12) && has(ShaderKind::LooseDxbc) => (
+            tr(
+                "DirectX 12: shadery z wbudowaną root signature z plików gry; DirectX 11: wyszukiwanie shaderów (próba)",
+                "DirectX 12: shaders with an embedded root signature from the game files; DirectX 11: searching for shaders (attempt)",
+            ),
+            true,
+        ),
+        Engine::Unknown if has(ShaderKind::CarvedDx12) => (
+            tr(
+                "DirectX 12: shadery z wbudowaną root signature wycięte z plików gry",
+                "DirectX 12: shaders with an embedded root signature carved from the game files",
             ),
             true,
         ),
@@ -827,6 +880,9 @@ impl ShaderTab {
                         ShaderKind::UnityAssets => "Unity",
                         ShaderKind::Source2Vpk => "Source 2",
                         ShaderKind::LooseDxbc => tr("plik shaderów", "shader file"),
+                        ShaderKind::CarvedDx12 => tr("DirectX 12 (z root signature)", "DirectX 12 (with root signature)"),
+                        ShaderKind::Red3Cache => "REDengine 3",
+                        ShaderKind::ReaderFile => e.info.engine.name(),
                     };
                     let file = s.path.strip_prefix(&e.game.dir).unwrap_or(&s.path);
                     ui.label(format!("{kind}: {} ({})", file.display(), engine::human(s.bytes)));
@@ -1022,12 +1078,46 @@ fn api_options(info: &Info) -> ApiOptions {
                 "Source 2 on DirectX 12/Vulkan: not supported - Counter-Strike 2 runs on DirectX 11",
             )),
         ),
-        Engine::Unknown if has(ShaderKind::LooseDxbc) => (
-            Ok(()),
+        Engine::Known(_) => {
+            let dx12 = info.reader.is_some_and(readers::is_dx12);
+            let other = tr(
+                "czytnik tego silnika obsługuje tylko drugie API",
+                "this engine's reader supports the other API only",
+            );
+            if !dx12 && info.api.as_deref() == Some("DirectX 12") {
+                let no = tr(
+                    "gra działa tylko w DirectX 12, a jej shadery nie niosą root signature",
+                    "the game runs on DirectX 12 only and its shaders carry no root signature",
+                );
+                (Err(no), Err(no))
+            } else {
+                (if dx12 { Err(other) } else { Ok(()) }, if dx12 { Ok(()) } else { Err(other) })
+            }
+        }
+        Engine::RedEngine3 => (
             Err(tr(
-                "DirectX 12 wymaga stanu potoków gry - z samych plików nieznanego silnika się nie da",
-                "DirectX 12 needs the game's pipeline state - not possible from an unknown engine's files",
+                "REDengine 3: obsługiwana jest pamięć shaderów DirectX 12",
+                "REDengine 3: the DirectX 12 shader cache is supported",
             )),
+            Ok(()),
+        ),
+        Engine::Unknown if has(ShaderKind::LooseDxbc) || has(ShaderKind::CarvedDx12) => (
+            if has(ShaderKind::LooseDxbc) {
+                Ok(())
+            } else {
+                Err(tr(
+                    "w plikach gry nie ma jawnych shaderów DirectX 11",
+                    "the game files hold no plain DirectX 11 shaders",
+                ))
+            },
+            if has(ShaderKind::CarvedDx12) {
+                Ok(())
+            } else {
+                Err(tr(
+                    "DirectX 12 wymaga stanu potoków gry - shadery w plikach nie niosą root signature",
+                    "DirectX 12 needs the game's pipeline state - the shaders in its files carry no root signature",
+                ))
+            },
         ),
         _ => {
             let no = tr("ten silnik nie jest obsługiwany", "this engine is not supported");
@@ -1150,6 +1240,46 @@ fn job_for(e: &Entry, api: Api) -> Result<Option<(String, warm::Job, String)>, &
             "Tune Center reads the DirectX 11 shaders (.vcs files) from the game's VPK packages and the graphics driver compiles them into its cache under the name {exe}, as the game would. The game must be closed. The game is never started, so VAC has nothing to detect."
         );
         (exe, warm::Job::Source2 { game: e.game.dir.clone() }, about)
+    } else if let (Engine::Known(name), Some(kind)) = (e.info.engine, e.info.reader) {
+        if d3d11 == readers::is_dx12(kind) {
+            return Ok(None);
+        }
+        let exe = e.info.reader_exe.clone().or_else(|| loose::game_exe(&e.game.dir)).ok_or(tr(
+            "Nie znaleziono pliku .exe gry.",
+            "Game .exe not found.",
+        ))?;
+        let about = if readers::is_dx12(kind) {
+            crate::trf!(
+                "{name}: Tune Center czyta shadery DirectX 12 z plików gry i tworzy potoki z root signature, które gra niesie albo których używa silnik, a sterownik karty kompiluje je pod nazwą {exe}, tak jak zrobiłaby to gra. Sprawdź, czy {exe} to plik, który uruchamia grę. Gra musi być zamknięta.",
+                "{name}: Tune Center reads the DirectX 12 shaders from the game files and builds pipelines with the root signatures the game ships or the engine uses, and the graphics driver compiles them under the name {exe}, as the game would. Check that {exe} is the file that runs the game. The game must be closed."
+            )
+        } else {
+            crate::trf!(
+                "{name}: Tune Center czyta shadery DirectX 11 z archiwów gry, a sterownik karty kompiluje je pod nazwą {exe}, tak jak zrobiłaby to gra. Sprawdź, czy {exe} to plik, który uruchamia grę. Gra musi być zamknięta.",
+                "{name}: Tune Center reads the DirectX 11 shaders from the game's archives and the graphics driver compiles them under the name {exe}, as the game would. Check that {exe} is the file that runs the game. The game must be closed."
+            )
+        };
+        (exe, warm::Job::Reader { kind: kind.to_owned(), game: e.game.dir.clone() }, about)
+    } else if !d3d11 && e.info.engine == Engine::RedEngine3 {
+        let exe = loose::game_exe(&e.game.dir).ok_or(tr(
+            "Nie znaleziono pliku .exe gry.",
+            "Game .exe not found.",
+        ))?;
+        let about = crate::trf!(
+            "Tune Center czyta shadery DirectX 12 z pamięci shaderów gry (content\\content0), tworzy potoki z technik gry z root signature silnika, a sterownik karty kompiluje je pod nazwą {exe}, tak jak zrobiłaby to gra. Gra musi być zamknięta.",
+            "Tune Center reads the DirectX 12 shaders from the game's shader cache (content\\content0), builds pipelines from the game's techniques with the engine's root signatures, and the graphics driver compiles them under the name {exe}, as the game would. The game must be closed."
+        );
+        (exe, warm::Job::Red3 { game: e.game.dir.clone() }, about)
+    } else if !d3d11 && e.info.engine == Engine::Unknown && e.info.shaders.iter().any(|s| s.kind == ShaderKind::CarvedDx12) {
+        let exe = loose::game_exe(&e.game.dir).ok_or(tr(
+            "Nie znaleziono pliku .exe gry.",
+            "Game .exe not found.",
+        ))?;
+        let about = crate::trf!(
+            "Silnik nierozpoznany: Tune Center wycina z plików gry shadery DirectX 12, które niosą własną root signature, łączy shadery wierzchołków i pikseli tak jak potok D3D12, a sterownik karty kompiluje je pod nazwą {exe}. Shadery bez root signature (silnik buduje ją w trakcie gry) są pomijane. Sprawdź, czy {exe} to plik, który uruchamia grę. Gra musi być zamknięta.",
+            "Unknown engine: Tune Center carves from the game files the DirectX 12 shaders that carry their own root signature, pairs vertex and pixel shaders as a D3D12 pipeline does, and the graphics driver compiles them under the name {exe}. Shaders without a root signature (the engine builds it at run time) are skipped. Check that {exe} is the file that runs the game. The game must be closed."
+        );
+        (exe, warm::Job::Carved { game: e.game.dir.clone() }, about)
     } else if d3d11 && e.info.engine == Engine::Unknown {
         let exe = loose::game_exe(&e.game.dir).ok_or(tr(
             "Nie znaleziono pliku .exe gry.",

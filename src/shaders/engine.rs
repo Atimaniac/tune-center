@@ -9,6 +9,9 @@ pub enum Engine {
     Unity,
     Dagor,
     Source2,
+    RedEngine3,
+    /// Silnik obsługiwany przez czytnik z `readers` (nazwa do wyświetlenia).
+    Known(&'static str),
     Unknown,
 }
 
@@ -19,6 +22,8 @@ impl Engine {
             Engine::Unity => "Unity",
             Engine::Dagor => "Dagor Engine",
             Engine::Source2 => "Source 2",
+            Engine::RedEngine3 => "REDengine 3",
+            Engine::Known(name) => name,
             Engine::Unknown => crate::i18n::tr("nieznany", "unknown"),
         }
     }
@@ -40,6 +45,12 @@ pub enum ShaderKind {
     Source2Vpk,
     /// Plik gry z jawnymi kontenerami DXBC (silnik nierozpoznany).
     LooseDxbc,
+    /// Plik gry z kontenerami DirectX 12 z wbudowaną root signature.
+    CarvedDx12,
+    /// Pamięć shaderów REDengine 3 (DirectX 12).
+    Red3Cache,
+    /// Plik z shaderami odczytywany przez czytnik silnika (`readers`).
+    ReaderFile,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,6 +74,10 @@ pub struct Info {
     pub encrypted: bool,
     /// Unreal 5: gra ma pamięć potoków DirectX 12 (`*.upipelinecache`).
     pub ue_pso_cache: bool,
+    /// Czytnik silnika (`readers::KINDS`), który rozpoznał grę.
+    pub reader: Option<&'static str>,
+    /// Plik .exe gry według czytnika.
+    pub reader_exe: Option<String>,
 }
 
 impl Info {
@@ -70,6 +85,10 @@ impl Info {
         self.shaders.iter().map(|s| s.bytes).sum()
     }
 }
+
+/// Najmniej shaderów DirectX 12 z root signature w próbce, żeby uznać, że gra
+/// tak trzyma shadery (pojedyncze shadery narzędzi i bibliotek się nie liczą).
+const CARVED_MIN: usize = 32;
 
 /// Pliki i katalogi do `depth` poziomów w głąb (bez wchodzenia głębiej).
 fn walk(root: &Path, depth: usize, out: &mut Vec<(PathBuf, bool, u64)>) {
@@ -105,6 +124,8 @@ pub fn inspect(dir: &Path) -> Info {
         scskiller_recorder: dir.join("scskiller.cfg").is_file(),
         encrypted: false,
         ue_pso_cache: false,
+        reader: None,
+        reader_exe: None,
     };
 
     // Anty-cheat: tylko po nazwach plików i katalogów.
@@ -126,6 +147,32 @@ pub fn inspect(dir: &Path) -> Info {
                 info.anti_cheat.push(ac);
             }
         }
+    }
+
+    // REDengine 3: content\content0\shaderdx12_0.cache.
+    if super::red3::detect(dir) {
+        info.engine = Engine::RedEngine3;
+        info.api = Some("DirectX 12".into());
+        for path in [super::red3::materials_path(dir), super::red3::static_path(dir)] {
+            if let Ok(m) = std::fs::metadata(&path) {
+                info.shaders.push(ShaderFile { path, kind: ShaderKind::Red3Cache, bytes: m.len() });
+            }
+        }
+        return info;
+    }
+
+    // Silniki z czytnikiem (RAGE, ForzaTech, Santa Monica, Northlight,
+    // Luminous, Frostbite).
+    if let Some((kind, d)) = super::readers::detect(dir) {
+        info.engine = Engine::Known(d.engine);
+        info.version = d.version;
+        info.api = Some(d.api.into());
+        info.reader = Some(kind);
+        info.reader_exe = d.exe;
+        for (path, bytes) in d.files {
+            info.shaders.push(ShaderFile { path, kind: ShaderKind::ReaderFile, bytes });
+        }
+        return info;
     }
 
     // Dagor: compiledShaders\*.shdump.bin.
@@ -271,6 +318,17 @@ pub fn inspect(dir: &Path) -> Info {
                 kind: ShaderKind::LooseDxbc,
                 bytes,
             });
+        }
+        // Kontenery DirectX 12 z wbudowaną root signature (szybka próba:
+        // pliki shaderów w całości, pozostałe próbkami, do 64 MB).
+        let census = super::container::census(dir, 64 << 20);
+        if census.graphics + census.compute >= CARVED_MIN {
+            if !info.shaders.iter().any(|s| s.kind == ShaderKind::LooseDxbc) {
+                info.api = Some("DirectX 12".into());
+            }
+            for (path, bytes) in census.files {
+                info.shaders.push(ShaderFile { path, kind: ShaderKind::CarvedDx12, bytes });
+            }
         }
     }
     info

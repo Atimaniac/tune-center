@@ -158,6 +158,8 @@ mod tests {
             scskiller_recorder: false,
             encrypted: false,
             ue_pso_cache: false,
+            reader: None,
+            reader_exe: None,
         };
         let s = stamp(&info);
         assert_eq!(status(None, &info, Some("621.35")), Status::Never);

@@ -1771,6 +1771,10 @@ fn main() -> eframe::Result<()> {
         std::process::exit(shaders::warm::run_host_ue12(&args[2..]));
     }
     #[cfg(windows)]
+    if args.get(1).map(String::as_str) == Some(shaders::warm12::HOST_ARG) {
+        std::process::exit(shaders::warm12::run_host(&args[2..]));
+    }
+    #[cfg(windows)]
     if args.get(1).map(String::as_str) == Some(shaders::warm::HOST_ARG_PROBE) {
         std::process::exit(shaders::warm::run_cache_probe());
     }
