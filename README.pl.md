@@ -23,9 +23,8 @@ przełącza się przyciskami w nagłówku, obok logo:
   (dawny FanCtl).
 - **SENSORS** - najważniejsze temperatury z wykresami z ostatnich 2 minut.
 - **POWER** - aktualny pobór mocy procesora i karty graficznej, suma
-  oraz licznik energii zużytej w bieżącej sesji; zasilacz z USB (Corsair
-  HXi/RMi, MSI Ai) i rozładowująca się bateria laptopa pokazują pobór
-  całego komputera.
+  oraz licznik energii zużytej w bieżącej sesji; rozładowująca się bateria
+  laptopa pokazuje pobór całego komputera.
 - **TUNE** - ustawienia Windows wpływające na opóźnienia i DPC, z kopią
   oryginalnych wartości i przywracaniem.
 - **RGB** - podświetlenie RAM, taśm Skydimo, urządzeń Logitech G, kart
@@ -44,18 +43,21 @@ samym dole okna. W dalszej części opisu sekcje noszą polskie nazwy:
 "Karta graficzna" to NVIDIA > Overclock, "Procesor" - CPU, "Wentylatory" - FAN,
 "Czujniki" - SENSORS.
 
-Interfejs i logika są w Rust (egui). Czujniki płyty głównej obsługuje mały
-proces pomocniczy `sensor-bridge` oparty na bibliotece LibreHardwareMonitor,
-a kartę graficzną - bezpośrednio biblioteki sterowników: `nvapi64.dll`
-(Nvidia) i `amdadlx64.dll` (AMD, ADLX).
+Interfejs i logika są w Rust (egui). Czujniki procesora, pamięci i płyty
+głównej (układy Super I/O Nuvoton, ITE i Fintek) oraz wentylatory płyty
+obsługuje sam program przez sterownik PawnIO - bez procesu w tle i bez .NET.
+Na około 300 modelach płyt ASUS, Gigabyte, MSI, ASRock, Biostar i EVGA
+czujniki i wentylatory mają nazwy dopasowane do płyty (np. "VRM MOS",
+"CPU Fan" zamiast "Temperature #3", "Fan #1").
+Kartę graficzną obsługują bezpośrednio biblioteki sterowników: `nvapi64.dll`
+i `nvml.dll` (Nvidia), `amdadlx64.dll` (AMD, ADLX) i Intel IGCL.
 
 ## Wymagania
 
 - Rust: https://rustup.rs (toolchain `stable-x86_64-pc-windows-msvc`,
   instalator poprosi o Visual Studio Build Tools)
-- .NET SDK 8: https://dotnet.microsoft.com/download
-- Sterownik PawnIO (https://pawnio.eu) - potrzebny nowszym wersjom
-  LibreHardwareMonitor do dostępu do układu Super I/O płyty głównej
+- Sterownik PawnIO (https://pawnio.eu) - dostęp do procesora, pamięci i
+  układu Super I/O płyty głównej (opcjonalny)
 - Sterownik Nvidia, AMD Adrenalin albo Intel (dla zakładki karty graficznej)
 
 ## Budowanie i uruchamianie
@@ -64,8 +66,8 @@ W PowerShell, w katalogu projektu:
 
     .\build.ps1
 
-Gotowy program trafia do `dist\`. Pliki `tunecenter.exe` i `sensor-bridge.exe`
-muszą leżeć w tym samym katalogu. Uruchom `dist\tunecenter.exe`. Program działa bez uprawnień
+Gotowy program trafia do `dist\` (`tunecenter.exe` i moduły PawnIO w
+`modules\`). Uruchom `dist\tunecenter.exe`. Program działa bez uprawnień
 administratora (karta graficzna, panel Nvidia, kompilacja shaderów, dyski);
 administrator jest potrzebny do zakładki CPU, temperatury i mocy procesora,
 wentylatorów płyty głównej, zmiany HAGS i autostartu - przycisk "Uruchom
@@ -85,8 +87,10 @@ Parametry:
 Powstanie `installer-output\TuneCenter-Setup.exe`. Instalator:
 
 - kopiuje program do `C:\Program Files\Tune Center` i tworzy skrót w menu Start,
-- sprawdza, czy są .NET 11 Runtime i sterownik PawnIO; brakujące proponuje
-  zainstalować (pola wyboru), pobierając je przez `winget`,
+- sprawdza, czy jest sterownik PawnIO; gdy go brak albo jest starszy niż
+  2.2.0, proponuje go zainstalować lub zaktualizować przez `winget` (pole
+  wyboru); .NET nie jest potrzebny,
+- przy aktualizacji usuwa pliki dawnego procesu czujników (`sensor-bridge`),
 - podaje wydawcę "Atimaniac" (Programy i funkcje, właściwości pliku),
 - usuwa wpis "zawsze jako administrator" ze starszych wersji,
 - przy odinstalowaniu usuwa zadanie autostartu i pliki ustawień.
@@ -539,11 +543,10 @@ których wartość się zmienia, a nie ze stałych wartości wpisanych przez BIO
 - Razem to pobór samego procesora i karty graficznej według ich własnych
   czujników, a nie całego komputera; płyta, dyski, wentylatory i straty
   zasilacza nie są wliczone.
-- **Cały komputer**: zasilacz z USB (Corsair HXi/RMi, MSI Ai) albo
-  rozładowująca się bateria laptopa dostaje osobny kafelek z poborem całego
-  komputera, za kafelkiem Razem i poza jego sumą. Temperatury i obroty
-  wentylatora zasilacza są tylko do odczytu. Dysków, chipsetu i urządzeń
-  USB nie da się zmierzyć osobno - nie podają poboru mocy.
+- **Cały komputer**: rozładowująca się bateria laptopa dostaje osobny
+  kafelek z poborem całego komputera, za kafelkiem Razem i poza jego sumą.
+  Dysków, chipsetu i urządzeń USB nie da się zmierzyć osobno - nie podają
+  poboru mocy.
 - Moc procesora wymaga uprawnień administratora i sterownika PawnIO.
 
 ## RGB - oświetlenie
@@ -647,7 +650,7 @@ Większość pozycji wymaga uprawnień administratora.
   procesor je ma) przez 5-60 min albo do zatrzymania, wykresy temperatury i
   mocy procesora, automatyczne zatrzymanie przy 85/90/95 °C. Każdy wynik
   obliczeń jest sprawdzany - błąd oznacza niestabilne ustawienia procesora.
-  Limit temperatury wymaga odczytu temperatury procesora (proces czujników,
+  Limit temperatury wymaga odczytu temperatury procesora (PawnIO,
   administrator).
 - **Stabilność karty graficznej**: 2 minuty pełnego obciążenia przez
   Direct3D 11 - obliczenia FP32 na całym rdzeniu, przebieg mieszany
@@ -676,10 +679,9 @@ ma obszaru powiadomień (np. zastępcza powłoka zamiast Eksploratora - brak okn
 `Shell_TrayWnd`), okno nie jest chowane, tylko zwyczajnie minimalizowane na
 pasek zadań; OPTIONS pokazuje wtedy notatkę.
 
-Proces czujników `sensor-bridge.exe` jest uruchamiany ponownie, gdy sam się
-zakończy (np. po awarii biblioteki sterownika), do 5 razy z rzędu; Windows nie
-pokazuje wtedy okna "program przestał działać", a wentylatory dostają swoje
-ustawienia od nowa.
+Czujniki są odczytywane co sekundę w osobnym wątku programu (bez procesu w
+tle). Przy zamykaniu programu, a także przy jego awarii, wentylatory płyty
+wracają pod sterowanie BIOS-u.
 
 Okno schowane w zasobniku nie jest rysowane i praktycznie nie obciąża
 procesora (wcześniejsze wersje z eframe 0.29 zajmowały wtedy cały rdzeń).
@@ -787,31 +789,32 @@ wszystkich motywach takie same. Wybór jest zapamiętywany.
 
 | Odczyt | Źródło | Sterownik PawnIO |
 | --- | --- | --- |
-| Karta Nvidia: temperatura, hotspot, zegary, napięcie, użycie | NVAPI (sterownik Nvidii) | nie |
-| Karta Nvidia: pobór mocy, wysterowanie wentylatora | NVML (sterownik Nvidii) | nie |
+| Karta Nvidia: temperatura, zegary, napięcie, użycie | NVAPI (sterownik Nvidii) | nie |
+| Karta Nvidia: pobór mocy, temperatura pamięci, wentylatory | NVML (sterownik Nvidii) | nie |
 | Karta AMD: temperatura, hotspot, wentylator, moc, zegary | ADLX (sterownik AMD) | nie |
 | Temperatura karty w SENSORS | wprost ze sterownika karty | nie |
 | Moc karty w POWER | wprost ze sterownika karty; czujniki są zapasem | nie |
-| Wentylatory karty w FAN (odczyt i sterowanie) | wprost ze sterownika karty (NVAPI / ADLX) | nie |
-| Dyski | API dysków Windows; czujniki są zapasem | nie |
-| Temperatura i moc procesora | LibreHardwareMonitor | tak |
-| Wentylatory i temperatury płyty głównej | LibreHardwareMonitor | tak |
+| Wentylatory karty w FAN (odczyt i sterowanie) | wprost ze sterownika karty (NVML / ADLX) | nie |
+| Dyski | API dysków Windows | nie |
+| Bateria laptopa | API baterii Windows | nie |
+| Temperatura płyty, gdy jej układu nie da się odczytać | strefy termiczne ACPI (licznik wydajności Windows) | nie |
+| Temperatura i moc procesora | własny kod programu (moduły PawnIO IntelMSR / AMDFamily17) | tak |
+| Temperatury pamięci RAM | własny kod programu (moduły PawnIO SmbusI801 / SmbusPIIX4) | tak |
+| Wentylatory i temperatury płyty głównej | własny kod programu (moduł PawnIO LpcIO) | tak |
 | Zakładka CPU (strojenie) | moduły PawnIO | tak |
 | Podświetlenie RAM (zakładka RGB) | moduł PawnIO SmbusI801 | tak |
 
 PawnIO jest opcjonalny: instalator pozwala go odznaczyć, a program bez niego
 pokazuje wszystko z górnej części tabeli. Licznik energii w POWER działa wtedy
-z samej karty graficznej - także gdy proces czujników w ogóle nie wystartował.
-Gdy okno jest schowane w zasobniku, interfejs nie jest rysowany, ale odczyty
-ze sterownika karty są dalej odświeżane, gdy proces czujników przysyła dane
-(co sekundę). Jeśli odczyt ze sterownika jest starszy niż 3 s, licznik
+z samej karty graficznej. Gdy okno jest schowane w zasobniku, interfejs nie
+jest rysowany, ale odczyty są dalej odświeżane co sekundę. Jeśli odczyt ze sterownika jest starszy niż 3 s, licznik
 przechodzi na czujniki.
 
 ### Wentylatory karty graficznej przez sterownik
 
 Program steruje wentylatorami karty sam, w osobnym wątku (działa też przy
-oknie schowanym w zasobniku): Nvidia przez NVAPI (ClientFanCoolers), AMD
-przez ADLX (krzywa wentylatora). Wszystkie wentylatory jednej karty dostają to samo
+oknie schowanym w zasobniku): Nvidia przez NVML, AMD przez ADLX (krzywa
+wentylatora). Wszystkie wentylatory jednej karty dostają to samo
 wysterowanie i są w zakładce FAN jedną kartą "GPU Fan".
 
 Zabezpieczenia:
@@ -826,25 +829,22 @@ Jeśli program zostanie zabity (np. z Menedżera zadań) w trakcie sterowania
 ręcznego, wentylator zostaje na ostatnim wysterowaniu do ponownego
 uruchomienia programu albo restartu komputera.
 
-Gdy sterownik karty nie udostępnia sterowania, program sam wraca do
-sterowania przez proces czujników (LibreHardwareMonitor). Można to też
-wymusić w OPTIONS, wyłączając "Wentylatory karty graficznej przez sterownik
-karty". Po zmianie sposobu sterowania ustawienia wentylatora karty (tryb,
-krzywa) trzeba wybrać ponownie, bo wentylator ma inny identyfikator.
+Gdy sterownik karty nie udostępnia sterowania, wentylatorem karty steruje
+sama karta. Ustawienia zapisane przez starsze wersje (sterowanie przez proces
+czujników) są przenoszone na sterowanie przez sterownik.
 
 ### Temperatury dysków
 
 Zakładka SENSORS czyta temperatury dysków wprost z Windows
 (`IOCTL_STORAGE_QUERY_PROPERTY`), co 10 sekund. Tą drogą temperaturę podają
-przede wszystkim dyski NVMe; dla dysków, których Windows nie podaje (część
-SATA), zostaje odczyt z procesu czujników.
+przede wszystkim dyski NVMe i część dysków SATA; dysku, którego Windows nie
+podaje, program nie pokazuje.
 
-Starsze wersje LibreHardwareMonitor (do 0.9.4) zamiast PawnIO używały
-sterownika WinRing0. Nie wracamy do niego: Windows Defender blokuje go jako
-podatny na ataki.
+Starsze programy do czujników używały sterownika WinRing0. Nie korzystamy z
+niego: Windows Defender blokuje go jako podatny na ataki.
 
 Odczyty karty graficznej działają także wtedy, gdy PawnIO nie jest
-zainstalowany albo proces czujników nie wystartował.
+zainstalowany.
 
 Temperatury procesora i wentylatorów płyty głównej nie da się odczytać bez
 sterownika jądra. Intel i AMD nie udostępniają do tego API dla zwykłych
@@ -883,13 +883,14 @@ nic nie jest zmieniane. Raport `tunecenter-diagnostics.txt` (obok programu,
 a gdy tam nie wolno pisać - w %TEMP%) zawiera dla każdego punktu OK / WARN /
 FAIL i surowe dane:
 
-- system: Windows, administrator, UAC, płyta i BIOS, .NET 11, pliki procesu
-  czujników, moduły i sterownik PawnIO,
+- system: Windows, administrator, UAC, płyta i BIOS, moduły i sterownik
+  PawnIO,
 - procesor: identyfikator CPUID, surowe odczyty MSR (Intel) albo generacja,
   wersja tabeli PM i odczyty SMU (AMD), wszystko, co pokazuje zakładka CPU,
 - karta: identyfikatory PCI, okna pamięci (ReBAR), brakujące funkcje NVAPI /
   NVML, ADLX, odczyty czujników, wentylator, offsety, krzywa V/F,
-- czujniki (LibreHardwareMonitor): układ Super I/O, temperatury, wentylatory,
+- czujniki (PawnIO): układ Super I/O, temperatury, wentylatory, uwagi z
+  wykrywania,
 - dyski, RGB (wykryte urządzenia i lista wszystkich urządzeń USB HID), TUNE,
   gry i silniki do kompilacji shaderów, raporty awarii.
 
@@ -897,16 +898,15 @@ Bez numerów seryjnych i adresów MAC; nazwa użytkownika i komputera są
 zastępowane. "Zgłoś na GitHubie" kopiuje raport do schowka i otwiera nowe
 zgłoszenie z szablonu "Compatibility report" (tytuł i podsumowanie są
 wypełnione, raport wkleja się Ctrl+V). Uruchomiona z OPTIONS korzysta z
-działającego procesu czujników; w trybie `--diagnose` uruchamia go na chwilę
-tylko wtedy, gdy nie działa już inny (żeby nie oddać wentylatorów BIOS-owi).
+odczytów działającego programu; w trybie `--diagnose` czyta czujniki sama,
+bez zmiany wentylatorów.
 
 ## Awarie
 
-Gdy program albo proces czujników ulegnie awarii, pokazuje się okno z opisem
-błędu (kod, moduł, w którym wystąpił, komunikat .NET procesu czujników).
-Raport trafia do pliku `tunecenter-crash.log` albo `sensor-bridge-crash.log`
-obok programu; przy następnym starcie program pokazuje ostatni raport.
-Proces czujników po awarii uruchamia się ponownie sam.
+Gdy program ulegnie awarii, wentylatory płyty wracają pod sterowanie BIOS-u,
+a raport (kod błędu, moduł, w którym wystąpił) trafia do pliku
+`tunecenter-crash.log` obok programu; przy następnym starcie program pokazuje
+go w oknie.
 
 ## Znane ograniczenia
 

@@ -29,7 +29,7 @@ Program zapisuje w swoim folderze następujące pliki:
 | Plik | Zawartość |
 | --- | --- |
 | `tunecenter-config.json`, `gpu-*.json` | Twoje ustawienia i profile, w tym foldery gier, którym przypisałeś profil |
-| `tunecenter-crash.log`, `sensor-bridge-crash.log` | Raporty awarii: wersja programu, czas, kod błędu i moduł, który zawiódł |
+| `tunecenter-crash.log` | Raporty awarii: wersja programu, czas, kod błędu i moduł, który zawiódł |
 | `tunecenter-diagnostics.txt` | Raport zgodności, tworzony tylko po uruchomieniu diagnostyki zgodności |
 
 Historia odczytów na wykresach obejmuje ostatnie 120 sekund i jest trzymana
@@ -43,7 +43,7 @@ wyłącznie w pamięci.
 | Pobranie aktualizacji programu: po kliknięciu instalacji | `github.com` | Żądanie pliku instalatora |
 | Sprawdzanie sterownika NVIDIA: około 30 sekund po starcie i co 6 godzin | `www.nvidia.com`, `gfwsl.geforce.com` | Zapytanie o listę produktów NVIDIA, a potem identyfikator modelu Twojej karty graficznej i rodzina wersji Windows |
 | Pobranie sterownika NVIDIA: po kliknięciu instalacji | `download.nvidia.com` | Żądanie paczki sterownika |
-| Instalacja, tylko dla brakujących składników | źródła `winget` firmy Microsoft | Żądania instalacji .NET Runtime oraz, jeśli go zaznaczysz, PawnIO |
+| Instalacja, tylko dla brakujących składników | źródła `winget` firmy Microsoft | Żądania instalacji lub aktualizacji PawnIO, jeśli ją zaznaczysz |
 
 Jak przy każdym połączeniu z internetem, te serwery widzą Twój adres IP.
 Zapytania nie zawierają nazwy użytkownika, nazwy komputera, numerów seryjnych
@@ -74,8 +74,8 @@ zgłoszenia.
 
 ## Składniki innych autorów
 
-Tune Center korzysta ze sterownika PawnIO, biblioteki LibreHardwareMonitor
-oraz sterowników NVIDIA i AMD zainstalowanych w systemie. Ich lista jest w
+Tune Center korzysta ze sterownika PawnIO oraz sterowników NVIDIA, AMD i
+Intel zainstalowanych w systemie. Ich lista jest w
 pliku [THIRD-PARTY.pl.md](THIRD-PARTY.pl.md); podlegają one własnym warunkom.
 
 ## Dzieci

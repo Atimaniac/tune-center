@@ -187,11 +187,11 @@ fn anonymize(text: &str) -> String {
     out
 }
 
-/// Dane, które działający program ma już w pamięci (żeby nie uruchamiać
-/// drugiej kopii procesu czujników ani nie przeszkadzać wątkowi RGB).
+/// Dane, które działający program ma już w pamięci (żeby nie otwierać drugi
+/// raz usługi czujników ani nie przeszkadzać wątkowi RGB).
 #[derive(Default)]
 pub struct Live {
-    pub bridge: Option<(Option<crate::bridge::Snapshot>, String)>,
+    pub bridge: Option<(Option<crate::bridge::Snapshot>, String, Vec<String>)>,
     pub rgb: Option<crate::rgb::Snapshot>,
     pub elevated: bool,
 }
@@ -358,25 +358,7 @@ fn system(r: &mut Report, live: &Live, hw: &mut Vec<String>) {
         hw.push(board.trim().to_owned());
     }
 
-    if crate::bridge::dotnet_runtime_installed() {
-        r.ok(".NET 11 runtime installed");
-    } else {
-        r.fail(".NET 11 runtime not found (sensor process cannot start)");
-    }
     let dir = program_dir().unwrap_or_default();
-    for f in [
-        "sensor-bridge.exe",
-        "sensor-bridge.dll",
-        "sensor-bridge.runtimeconfig.json",
-        "sensor-bridge.deps.json",
-        "LibreHardwareMonitorLib.dll",
-    ] {
-        if dir.join(f).exists() {
-            r.ok(format!("{f} present"));
-        } else {
-            r.fail(format!("{f} missing next to the program"));
-        }
-    }
     let modules = dir.join("modules");
     let version = std::fs::read_to_string(modules.join("version.txt")).unwrap_or_default();
     for m in [
@@ -385,6 +367,7 @@ fn system(r: &mut Report, live: &Live, hw: &mut Vec<String>) {
         "AMDFamily17.bin",
         "SmbusI801.bin",
         "SmbusPIIX4.bin",
+        "LpcIO.bin",
     ] {
         if modules.join(m).exists() {
             r.ok(format!("PawnIO module {m} present ({})", version.trim()));
@@ -699,25 +682,24 @@ fn gpu(r: &mut Report, hw: &mut Vec<String>) {
 }
 
 fn sensors(r: &mut Report, live: &Live) {
-    r.section("Sensors (sensor-bridge / LibreHardwareMonitor)");
-    let (snap, status) = match &live.bridge {
-        Some((snap, status)) => (snap.clone(), status.clone()),
-        None => bridge_once(),
+    r.section("Sensors (PawnIO, native)");
+    let (snap, status, notes) = match &live.bridge {
+        Some((snap, status, notes)) => (snap.clone(), status.clone(), notes.clone()),
+        None => sensors_once(),
     };
-    r.info(format!("sensor process: {status}"));
+    r.info(format!("sensor service: {status}"));
+    for n in &notes {
+        r.warn(n.clone());
+    }
     let Some(s) = snap else {
-        if status.starts_with("another sensor-bridge") {
-            r.warn("no data from the sensor process");
-        } else {
-            r.fail("no data from the sensor process");
-        }
+        r.fail("no data from the sensor service");
         return;
     };
     if let Some(e) = &s.error {
-        r.fail(format!("sensor process error: {e}"));
+        r.fail(format!("sensor service error: {e}"));
     }
     if !s.admin {
-        r.warn("sensor process runs without administrator rights");
+        r.warn("sensors read without administrator rights");
     }
     let mut kinds: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
     for t in &s.temps {
@@ -743,7 +725,7 @@ fn sensors(r: &mut Report, live: &Live) {
     let board: Vec<&str> = s.temps.iter().filter(|t| t.kind == "SuperIO").map(|t| t.hw.as_str()).collect();
     for hw in board.iter().copied().collect::<std::collections::BTreeSet<_>>() {
         if !s.temps.iter().any(|t| t.hw == hw && t.value.is_some()) {
-            r.warn(format!("{hw}: the sensor library cannot read this chip (vendor firmware) - no motherboard temperatures from it"));
+            r.warn(format!("{hw}: this chip cannot be read (vendor firmware) - no motherboard temperatures from it"));
         }
     }
     let mut read_only: Vec<&str> = s
@@ -781,84 +763,26 @@ fn sensors(r: &mut Report, live: &Live) {
     }
 }
 
-/// Jednorazowe uruchomienie procesu czujników (tryb `--diagnose`). Nie
-/// uruchamiamy go, gdy działa już inny - mógłby oddać wentylatory BIOS-owi.
-fn bridge_once() -> (Option<crate::bridge::Snapshot>, String) {
-    use std::io::{BufRead, Write};
-    use std::process::{Command, Stdio};
-    if other_bridge_running() {
-        return (None, "another sensor-bridge.exe is running - not started (run the diagnostics from OPTIONS instead)".into());
-    }
-    let Some(path) = program_dir().map(|d| d.join("sensor-bridge.exe")) else {
-        return (None, "no program folder".into());
+/// Jednorazowy odczyt czujników (tryb `--diagnose`). Usługa tylko czyta -
+/// nie zmienia wentylatorów, więc nie przeszkadza działającemu programowi.
+fn sensors_once() -> (Option<crate::bridge::Snapshot>, String, Vec<String>) {
+    let service = crate::hw::service::Service::open();
+    let Ok(mut s) = service.lock() else {
+        return (None, "service unavailable".into(), Vec::new());
     };
-    let mut cmd = Command::new(&path);
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return (None, format!("start failed: {e}")),
-    };
-    let stdout = child.stdout.take();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let Some(out) = stdout else { return };
-        for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
-            if let Ok(mut s) = serde_json::from_str::<crate::bridge::Snapshot>(&line) {
-                s.sanitize();
-                // Pierwszy pełny odczyt (z czujnikami) albo błąd.
-                if !s.temps.is_empty() || s.error.is_some() {
-                    let _ = tx.send(s);
-                    return;
-                }
-            }
-        }
-    });
-    let snap = rx.recv_timeout(std::time::Duration::from_secs(25)).ok();
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(b"quit\n");
-    }
+    // Drugi odczyt: moc procesora liczona z różnicy liczników energii.
+    let _ = s.read();
     std::thread::sleep(std::time::Duration::from_millis(500));
-    let _ = child.kill();
-    let mut stderr = String::new();
-    if let Some(mut e) = child.stderr.take() {
-        use std::io::Read;
-        let _ = e.read_to_string(&mut stderr);
-    }
-    let status = match (&snap, stderr.trim()) {
-        (Some(_), _) => "started for the diagnostics, first reading received".to_owned(),
-        (None, "") => "no reading within 25 s".to_owned(),
-        (None, e) => format!(
-            "no reading; stderr:\n{}",
-            e.lines().take(40).collect::<Vec<_>>().join("\n")
-        ),
-    };
-    (snap, status)
-}
-
-fn other_bridge_running() -> bool {
-    std::process::Command::new("tasklist")
-        .args(["/FI", "IMAGENAME eq sensor-bridge.exe", "/NH"])
-        .output()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .to_lowercase()
-                .contains("sensor-bridge.exe")
-        })
-        .unwrap_or(false)
+    let mut snap = s.read();
+    snap.sanitize();
+    (Some(snap), "read for the diagnostics".into(), s.notes.clone())
 }
 
 fn disks(r: &mut Report) {
     r.section("Disks (Windows storage API)");
     let list = crate::disks::read_now();
     if list.is_empty() {
-        r.warn("no disk reports a temperature through the Windows API (SATA disks use the sensor process)");
+        r.warn("no disk reports a temperature through the Windows API");
     }
     for d in list {
         r.ok(format!("{}: {:.0} °C", d.name, d.temp_c));
@@ -971,7 +895,6 @@ fn crash_logs(r: &mut Report) {
     for f in [
         "tunecenter-crash.log",
         "tunecenter-crash-previous.log",
-        "sensor-bridge-crash.log",
     ] {
         if let Ok(text) = std::fs::read_to_string(dir.join(f)) {
             any = true;

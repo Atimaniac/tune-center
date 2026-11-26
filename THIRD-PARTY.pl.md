@@ -4,7 +4,7 @@
 
 Tune Center korzysta z poniższych składników. Są dołączane bez zmian.
 
-## PawnIO.Modules - IntelMSR.bin, RyzenSMU.bin, AMDFamily17.bin
+## PawnIO.Modules - IntelMSR.bin, RyzenSMU.bin, AMDFamily17.bin, SmbusI801.bin, SmbusPIIX4.bin, LpcIO.bin
 
 - Źródło: https://github.com/namazso/PawnIO.Modules
 - Autor: namazso
@@ -19,12 +19,14 @@ Tune Center korzysta z poniższych składników. Są dołączane bez zmian.
 - Nie jest dołączany; instaluje się go osobno (instalator Tune Center może
   to zrobić przez winget).
 
-## LibreHardwareMonitorLib
+## LibreHardwareMonitor - tablice czujników płyt głównych
 
 - Źródło: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
 - Licencja: MPL-2.0
-- Używany przez `sensor-bridge.exe` do odczytu czujników i sterowania
-  wentylatorami.
+- Plik `src/hw/boards.rs` zawiera tablice płyt z jego `SuperIOHardware.cs` i
+  `Identification.cs` (nazwy temperatur, wentylatorów i sterowania dla
+  konkretnych płyt). Ten plik pozostaje na licencji MPL-2.0; sama biblioteka
+  nie jest używana ani dołączana.
 
 ## Inter (czcionka interfejsu)
 
@@ -36,6 +38,13 @@ Tune Center korzysta z poniższych składników. Są dołączane bez zmian.
 
 ## Odniesienia użyte przy pisaniu kodu
 
+- LibreHardwareMonitor (https://github.com/LibreHardwareMonitor/LibreHardwareMonitor,
+  MPL-2.0): układ rejestrów Super I/O (Nuvoton, ITE, Fintek) oraz źródła
+  czujników procesora i pamięci; nazwy i identyfikatory czujników są zgodne,
+  żeby zapisane ustawienia wentylatorów działały dalej. Kod nie został
+  skopiowany.
+- RAMSPDToolkit (https://github.com/Blacktempel/RAMSPDToolkit): układ SPD
+  czujników temperatury pamięci DDR4/DDR5.
 - PowerMonkey (https://github.com/psyq321/PowerMonkey, Apache-2.0): układ pól
   i numery poleceń skrzynki OC procesorów Intel (MSR 0x150).
 - ZenStates-Core (https://github.com/irusanov/ZenStates-Core, GPL-3.0): numery

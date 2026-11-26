@@ -4,7 +4,7 @@
 //! Program działa bez administratora: karta graficzna (NVAPI/NVML), panel
 //! Nvidia, kompilacja shaderów, dyski i pamięć działają tak samo. Administrator
 //! jest potrzebny do: zakładki CPU (PawnIO), temperatur i mocy procesora oraz
-//! wentylatorów płyty głównej (LibreHardwareMonitor), zmiany HAGS i autostartu.
+//! czujników i wentylatorów płyty głównej (PawnIO), zmiany HAGS i autostartu.
 
 /// Czy proces działa z uprawnieniami administratora.
 #[cfg(windows)]

@@ -28,7 +28,7 @@ The program saves these files in its own folder:
 | File | Contents |
 | --- | --- |
 | `tunecenter-config.json`, `gpu-*.json` | Your settings and profiles, including the folders of games you assigned profiles to |
-| `tunecenter-crash.log`, `sensor-bridge-crash.log` | Crash reports: program version, time, error code and the module that failed |
+| `tunecenter-crash.log` | Crash reports: program version, time, error code and the module that failed |
 | `tunecenter-diagnostics.txt` | The compatibility report, created only when you run the compatibility check |
 
 Sensor history shown in the charts covers the last 120 seconds and is kept
@@ -42,7 +42,7 @@ only in memory.
 | Program update download: when you click install | `github.com` | A request for the installer file |
 | NVIDIA driver check: about 30 seconds after startup and every 6 hours | `www.nvidia.com`, `gfwsl.geforce.com` | A request for the list of NVIDIA products, then the product identifier of your graphics card model and the Windows version family |
 | NVIDIA driver download: when you click install | `download.nvidia.com` | A request for the driver package |
-| Installation, only for missing components | Microsoft `winget` sources | Requests to install the .NET Runtime and, if you select it, PawnIO |
+| Installation, only for missing components | Microsoft `winget` sources | Requests to install or update PawnIO, if you select it |
 
 As with any internet connection, these servers see your IP address. The
 requests contain no user name, computer name, serial numbers or other
@@ -72,8 +72,8 @@ crash logs you attach to an issue.
 
 ## Third-party components
 
-Tune Center uses the PawnIO driver, LibreHardwareMonitor and the NVIDIA and
-AMD drivers already on your system. They are listed in
+Tune Center uses the PawnIO driver and the NVIDIA, AMD and Intel drivers
+already on your system. They are listed in
 [THIRD-PARTY.md](THIRD-PARTY.md) and are governed by their own terms.
 
 ## Children

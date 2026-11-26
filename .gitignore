@@ -2,8 +2,6 @@
 /target/
 /dist/
 /installer-output/
-sensor-bridge/bin/
-sensor-bridge/obj/
 
 # Ustawienia użytkownika zapisywane obok programu
 tunecenter-config.json

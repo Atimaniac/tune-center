@@ -447,10 +447,7 @@ impl Backend for NvApi {
             }
         }
 
-        // Hotspot podaje biblioteka czujników (proces czujników); temperaturę
-        // pamięci - NVML.
-        m.hotspot_c = self.names.get(gpu).and_then(|n| crate::bridge::gpu_hotspot(n));
-        m.details.mem_temp_c = self.names.get(gpu).and_then(|n| crate::bridge::gpu_memory_temp(n));
+        // Temperatura pamięci - NVML (hotspotu oficjalne API Nvidii nie podają).
         if let Some(nvml) = &self.nvml {
             let name = self.names.get(gpu).map(String::as_str).unwrap_or("");
             let r = nvml.read(gpu, name, self.detail);

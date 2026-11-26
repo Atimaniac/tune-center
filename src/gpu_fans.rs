@@ -63,7 +63,7 @@ pub fn decide(cfg: Option<&FanConfig>, temps: &[Temp], card_temp: Option<f32>) -
 
 impl GpuFans {
     /// Uruchamia sterowanie. Zwraca `None`, gdy żadna karta nie pozwala
-    /// sterować wentylatorem przez sterownik - wtedy zostaje proces czujników.
+    /// sterować wentylatorem przez sterownik.
     pub fn start(config: Fans, board: TempBoard, wake: impl Fn() + Send + 'static) -> Option<Self> {
         let shared = Arc::new(Mutex::new(Shared {
             config,

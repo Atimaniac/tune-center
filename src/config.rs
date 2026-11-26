@@ -74,10 +74,6 @@ pub struct Config {
     /// Minimalizowanie do zasobnika systemowego zamiast do paska zadań.
     #[serde(default = "yes")]
     pub tray: bool,
-    /// Wentylatory karty graficznej sterowane wprost przez sterownik karty
-    /// (NVAPI / ADLX) zamiast przez proces czujników.
-    #[serde(default = "yes")]
-    pub gpu_fans_direct: bool,
     /// Sprawdzanie przy starcie, czy jest nowsza wersja programu.
     #[serde(default = "yes")]
     pub check_updates: bool,
@@ -154,7 +150,6 @@ impl Default for Config {
             tray: true,
             check_updates: true,
             nv_driver_check: true,
-            gpu_fans_direct: true,
             rgb: crate::rgb::Config::default(),
             leds_off: false,
             leds_saved: Vec::new(),
@@ -280,6 +275,18 @@ impl Config {
         if !self.profiles.contains_key(&self.global_profile) {
             self.global_profile = self.active.clone();
         }
+        // Karty graficzne obsługuje sterownik karty (moduł `gpu_fans`), nie
+        // LibreHardwareMonitor: jego identyfikatory kart przechodzą na własne.
+        for profile in self.profiles.values_mut() {
+            let fans = std::mem::take(&mut profile.fans);
+            profile.fans = fans
+                .into_iter()
+                .map(|(id, mut cfg)| {
+                    cfg.source = cfg.source.map(|s| gpu_id_from_lhm(&s).unwrap_or(s));
+                    (gpu_id_from_lhm(&id).unwrap_or(id), cfg)
+                })
+                .collect();
+        }
     }
 
     pub fn fans(&self) -> &Fans {
@@ -340,5 +347,32 @@ mod tests {
         again.rgb.devices.clear();
         again.migrate_rgb();
         assert!(again.rgb.devices.is_empty());
+    }
+}
+
+/// Identyfikator karty graficznej z LibreHardwareMonitor na własny
+/// (`gpu_fans`): `/gpu-nvidia/0/temperature/N` → `driver-gpu-0/temp`,
+/// `/gpu-amd/0/control/N` → `driver-gpu-0`. Inne identyfikatory - `None`.
+pub fn gpu_id_from_lhm(id: &str) -> Option<String> {
+    let rest = ["/gpu-nvidia/", "/gpu-amd/", "/gpu-intel/"].iter().find_map(|p| id.strip_prefix(p))?;
+    let mut parts = rest.split('/');
+    let index: usize = parts.next()?.parse().ok()?;
+    match parts.next()? {
+        "temperature" => Some(format!("driver-gpu-{index}/temp")),
+        "control" => Some(format!("driver-gpu-{index}")),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod gpu_id_tests {
+    use super::gpu_id_from_lhm;
+
+    #[test]
+    fn maps_lhm_gpu_ids() {
+        assert_eq!(gpu_id_from_lhm("/gpu-nvidia/0/temperature/0").as_deref(), Some("driver-gpu-0/temp"));
+        assert_eq!(gpu_id_from_lhm("/gpu-amd/1/control/0").as_deref(), Some("driver-gpu-1"));
+        assert_eq!(gpu_id_from_lhm("/lpc/nct6796dr/0/temperature/0"), None);
+        assert_eq!(gpu_id_from_lhm("driver-gpu-0/temp"), None);
     }
 }

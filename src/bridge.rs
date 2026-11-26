@@ -1,40 +1,30 @@
-//! Komunikacja z procesem pomocniczym `sensor-bridge` (C# + LibreHardwareMonitor)
-//! oraz sterowanie wentylatorami.
-//!
-//! Bridge co sekundę wypisuje jedną linię JSON ze stanem czujników, a polecenia
-//! przyjmuje na stdin: `set <id> <procent>`, `auto <id>`, `quit`.
-//! Sterowanie działa w wątku czytającym, niezależnie od interfejsu, więc krzywe
-//! są stosowane także wtedy, gdy okno jest zminimalizowane.
+//! Czujniki i sterowanie wentylatorami płyty: usługa w procesie programu
+//! (`hw::service`, sterownik PawnIO i własny kod) odczytuje stan co sekundę w
+//! osobnym wątku, a krzywe są stosowane także wtedy, gdy okno jest
+//! zminimalizowane. Typy odczytów (identyfikatory, nazwy, rodzaje
+//! podzespołów) są zgodne z dawnym procesem LibreHardwareMonitor, więc zapisane
+//! ustawienia wentylatorów działają bez zmian.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use serde::Deserialize;
 
 use crate::config::{FanConfig, Fans, Mode, MIN_PCT};
 use crate::curve;
+use crate::hw::service::Service;
 use crate::power::{self, GpuSlot, Reading, SharedMeter};
 
-const BRIDGE: &str = if cfg!(windows) {
-    "sensor-bridge.exe"
-} else {
-    "sensor-bridge"
-};
-
-#[derive(Deserialize, Clone, Debug)]
+/// Odczyt temperatury.
+#[derive(Clone, Debug)]
 pub struct Temp {
     pub id: String,
     /// Nazwa czujnika, np. "CPU Package".
     pub name: String,
     /// Nazwa podzespołu, np. "Intel Core i5-13600K".
-    #[serde(default)]
     pub hw: String,
-    /// Typ podzespołu wg LibreHardwareMonitor: Cpu, GpuNvidia, SuperIO, Storage...
-    #[serde(default)]
+    /// Typ podzespołu: Cpu, GpuNvidia, SuperIO, Memory, Battery...
     pub kind: String,
     pub value: Option<f32>,
 }
@@ -45,63 +35,49 @@ impl Temp {
     }
 }
 
-#[derive(Deserialize, Clone, Debug)]
+/// Wentylator, którym można sterować.
+#[derive(Clone, Debug)]
 pub struct Fan {
     pub id: String,
     pub name: String,
-    #[serde(default)]
     pub hw: String,
     /// Typ podzespołu, do którego należy wentylator (np. SuperIO, GpuAmd).
-    #[serde(default)]
     pub kind: String,
     pub rpm: Option<f32>,
     pub percent: Option<f32>,
 }
 
-/// Odczyt obrotów dowolnego wentylatora (także takiego, którym nie da się sterować).
+/// Czujnik obrotów (także bez sterowania).
 #[allow(dead_code)]
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Speed {
     pub name: String,
-    #[serde(default)]
     pub hw: String,
     pub rpm: Option<f32>,
     pub percent: Option<f32>,
 }
 
 /// Odczyt mocy w watach.
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Power {
     pub name: String,
-    #[serde(default)]
     pub hw: String,
-    #[serde(default)]
     pub kind: String,
     pub value: Option<f32>,
 }
 
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Snapshot {
-    #[serde(default)]
     pub temps: Vec<Temp>,
     /// Wentylatory, którymi można sterować.
-    #[serde(default)]
     pub fans: Vec<Fan>,
-    /// Wszystkie czujniki obrotów (część protokołu sensor-bridge, na razie nieużywane).
-    #[serde(default)]
+    /// Wszystkie czujniki obrotów (na razie nieużywane w interfejsie).
     #[allow(dead_code)]
     pub speeds: Vec<Speed>,
     /// Czujniki mocy (W).
-    #[serde(default)]
     pub powers: Vec<Power>,
-    #[serde(default = "yes")]
     pub admin: bool,
-    #[serde(default)]
     pub error: Option<String>,
-}
-
-fn yes() -> bool {
-    true
 }
 
 #[derive(Clone, Debug)]
@@ -128,82 +104,6 @@ pub fn target(cfg: Option<&FanConfig>, temps: &[Temp]) -> Option<f32> {
     }
 }
 
-struct Inner {
-    /// Proces czujników (podmieniany przy ponownym uruchomieniu po awarii).
-    child: Child,
-    /// Program się zamyka - zakończenie procesu nie jest awarią.
-    quitting: bool,
-    stdin: ChildStdin,
-    snapshot: Option<Snapshot>,
-    status: Status,
-    /// Konfiguracja aktywnego profilu.
-    fans: Fans,
-    /// Ostatnio wysłane wysterowanie: Some(p) = wymuszone p %, None = oddane BIOS-owi.
-    applied: HashMap<String, Option<f32>>,
-    /// Typy podzespołów, których wentylatorami steruje sterownik karty
-    /// graficznej (moduł `gpu_fans`), a nie ten proces.
-    skip_kinds: Vec<&'static str>,
-    /// Ostatnie wiersze stderr procesu czujników (np. stos wyjątku .NET).
-    stderr: StderrLines,
-    /// Raport ostatniej awarii procesu czujników i czy użytkownik go jeszcze nie widział.
-    crash: Option<String>,
-    crash_unseen: bool,
-}
-
-/// Ostatnie wiersze wyjścia błędów procesu czujników.
-type StderrLines = Arc<Mutex<std::collections::VecDeque<String>>>;
-const STDERR_LINES: usize = 60;
-
-/// Raport awarii procesu czujników: kod wyjścia i ostatnie wiersze stderr;
-/// dopisywany też do `sensor-bridge-crash.log` obok programu.
-fn crash_report(code: Option<i32>, stderr: &StderrLines) -> String {
-    let code_text = match code {
-        Some(c) => {
-            let u = c as u32;
-            format!("0x{u:08X} ({c}) - {}", crate::crash::describe(u))
-        }
-        None => "?".into(),
-    };
-    let lines: Vec<String> = stderr
-        .lock()
-        .map(|l| l.iter().cloned().collect())
-        .unwrap_or_default();
-    let mut text = format!(
-        "{} - {BRIDGE} {}\n{} {code_text}\n",
-        crate::bench::now_text(),
-        env!("CARGO_PKG_VERSION"),
-        crate::i18n::tr("Kod wyjścia:", "Exit code:"),
-    );
-    if lines.is_empty() {
-        text.push_str(crate::i18n::tr(
-            "(proces nie wypisał komunikatu błędu)",
-            "(the process printed no error message)",
-        ));
-    } else {
-        text.push_str(&lines.join("\n"));
-    }
-    if text.contains("NvidiaML") || text.to_lowercase().contains("nvml") {
-        text.push_str(crate::i18n::tr(
-            "\n\nBłąd w bibliotece sterownika NVIDIA (NVML) - zwykle przy instalacji lub przeładowaniu sterownika karty.",
-            "\n\nError in the NVIDIA driver library (NVML) - usually while the graphics driver is being installed or reloaded.",
-        ));
-    }
-    if let Some(path) = std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().map(|d| d.join("sensor-bridge-crash.log")))
-    {
-        use std::io::Write as _;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = writeln!(f, "{text}\n----------------------------------------");
-        }
-    }
-    text
-}
-
 /// Wartość obrotów, która oznacza brak odczytu (licznik 0xFFFF), a nie
 /// prawdziwą prędkość - np. układ NCT6683D na płytach ASRock.
 const RPM_INVALID: f32 = 65_000.0;
@@ -211,54 +111,13 @@ const RPM_INVALID: f32 = 65_000.0;
 /// Układy Super I/O, którymi nie sterujemy - tylko odczyt. NCT6683D ma na
 /// płytach (np. ASRock) własny firmware producenta; zapisy z systemu są
 /// uznawane za ryzykowne (sterownik Linuksa też je blokuje).
-/// Ostatnie temperatury hotspot i pamięci (memory junction) kart graficznych z
-/// biblioteki czujników: (nazwa karty, nazwa czujnika małymi literami, °C).
-/// Sterownik Nvidii udostępnia je tylko nieudokumentowaną funkcją NVAPI, więc
-/// program bierze je stąd.
-static GPU_TEMPS: std::sync::Mutex<Vec<(String, String, f32)>> = std::sync::Mutex::new(Vec::new());
-
-fn publish_gpu_hotspots(snap: &Snapshot) {
-    let list: Vec<(String, String, f32)> = snap
-        .temps
-        .iter()
-        .filter(|t| t.kind.starts_with("Gpu"))
-        .filter_map(|t| Some((t.hw.clone(), t.name.trim().to_lowercase(), t.value?)))
-        .filter(|(_, n, _)| n == "gpu hot spot" || n == "gpu memory junction")
-        .collect();
-    if let Ok(mut g) = GPU_TEMPS.lock() {
-        *g = list;
-    }
-}
-
-/// Temperatura czujnika `sensor` ("gpu hot spot", "gpu memory junction")
-/// karty o nazwie `name`, jeśli proces czujników ją podaje.
-fn gpu_temp(name: &str, sensor: &str) -> Option<f32> {
-    let name = name.to_lowercase();
-    let g = GPU_TEMPS.lock().ok()?;
-    g.iter()
-        .find(|(hw, s, _)| {
-            let hw = hw.to_lowercase();
-            s == sensor && !hw.is_empty() && (hw.contains(&name) || name.contains(&hw))
-        })
-        .map(|(_, _, v)| *v)
-}
-
-/// Hotspot karty o nazwie `name`.
-pub fn gpu_hotspot(name: &str) -> Option<f32> {
-    gpu_temp(name, "gpu hot spot")
-}
-
-/// Temperatura pamięci (memory junction) karty o nazwie `name`.
-pub fn gpu_memory_temp(name: &str) -> Option<f32> {
-    gpu_temp(name, "gpu memory junction")
-}
-
 pub fn read_only_chip(hw: &str) -> bool {
     hw.to_ascii_uppercase().contains("NCT6683")
 }
 
 impl Snapshot {
-    /// Odczyty "brak danych" (65535 obr./min) jako brak odczytu.
+    /// Odczyty "brak danych" (65535 obr./min) jako brak odczytu i nazwa
+    /// próbki inżynierskiej procesora zamieniona na właściwą.
     pub fn sanitize(&mut self) {
         let fix = |rpm: &mut Option<f32>| {
             if rpm.is_some_and(|r| r >= RPM_INVALID) {
@@ -271,7 +130,6 @@ impl Snapshot {
         for s in &mut self.speeds {
             fix(&mut s.rpm);
         }
-        // Próbka inżynierska Intela: "Genuine Intel 0000" -> właściwa nazwa.
         let cpu = |hw: &mut String| {
             if crate::cpu::is_engineering_name(hw) && !crate::cpu::is_engineering_name(crate::cpu::name()) {
                 *hw = crate::cpu::name().to_owned();
@@ -284,16 +142,26 @@ impl Snapshot {
     }
 }
 
-impl Inner {
-    fn send(&mut self, line: &str) {
-        let _ = writeln!(self.stdin, "{line}");
-        let _ = self.stdin.flush();
-    }
+struct Inner {
+    service: Arc<Mutex<Service>>,
+    /// Program się zamyka - wątek odczytów kończy pracę.
+    quitting: bool,
+    snapshot: Option<Snapshot>,
+    status: Status,
+    /// Konfiguracja aktywnego profilu.
+    fans: Fans,
+    /// Ostatnio wysłane wysterowanie: Some(p) = wymuszone p %, None = oddane BIOS-owi.
+    applied: HashMap<String, Option<f32>>,
+    /// Typy podzespołów, których wentylatorami steruje sterownik karty
+    /// graficznej (moduł `gpu_fans`), a nie ta usługa.
+    skip_kinds: Vec<&'static str>,
+}
 
-    /// Przelicza tryby na wysterowanie i wysyła do bridge'a tylko zmiany.
+impl Inner {
+    /// Przelicza tryby na wysterowanie i ustawia tylko zmiany.
     fn apply(&mut self) {
         let Some(snap) = &self.snapshot else { return };
-        let mut commands = Vec::new();
+        let mut changes = Vec::new();
 
         for fan in &snap.fans {
             if self.skip_kinds.contains(&fan.kind.as_str()) || read_only_chip(&fan.hw) {
@@ -305,107 +173,75 @@ impl Inner {
             let prev = self.applied.get(&fan.id).copied();
             match (target, prev) {
                 (Some(p), Some(Some(q))) if (p - q).abs() < 1.0 => {}
-                (Some(p), _) => {
-                    commands.push(format!("set {} {p:.0}", fan.id));
-                    self.applied.insert(fan.id.clone(), Some(p));
-                }
-                (None, Some(Some(_))) => {
-                    commands.push(format!("auto {}", fan.id));
-                    self.applied.insert(fan.id.clone(), None);
-                }
+                (Some(p), _) => changes.push((fan.id.clone(), Some(p))),
+                (None, Some(Some(_))) => changes.push((fan.id.clone(), None)),
                 (None, _) => {}
             }
         }
 
-        for cmd in commands {
-            self.send(&cmd);
+        if changes.is_empty() {
+            return;
+        }
+        let Ok(mut service) = self.service.lock() else { return };
+        for (id, value) in changes {
+            if service.set(&id, value).is_ok() {
+                self.applied.insert(id, value);
+            }
         }
     }
+}
+
+/// Jeden odczyt: licznik energii, tablica temperatur dla wentylatorów kart,
+/// stan i sterowanie wentylatorami.
+fn handle_snapshot(
+    inner: &Arc<Mutex<Inner>>,
+    mut snap: Snapshot,
+    meter: &SharedMeter,
+    gpu: &GpuSlot,
+    board: &crate::gpu_fans::TempBoard,
+) {
+    snap.sanitize();
+    let mut s = inner.lock().unwrap();
+    if let Some(err) = &snap.error {
+        s.status = Status::Error(err.clone());
+        return;
+    }
+    s.status = Status::Running;
+    let readings: Vec<Reading> = snap
+        .powers
+        .iter()
+        .map(|p| Reading {
+            name: &p.name,
+            hw: &p.hw,
+            kind: &p.kind,
+            watts: p.value,
+        })
+        .collect();
+    // Moc karty graficznej: odczyt ze sterownika, jeśli świeży.
+    let now = Instant::now();
+    let driver = power::fresh(gpu, now);
+    let readings = power::with_driver_gpu(readings, driver.as_ref());
+    if let Ok(mut meter) = meter.lock() {
+        meter.update(&readings, now);
+    }
+    drop(readings);
+    if let Ok(mut b) = board.lock() {
+        b.clone_from(&snap.temps);
+    }
+    s.snapshot = Some(snap);
+    s.apply();
 }
 
 pub struct Backend {
     inner: Arc<Mutex<Inner>>,
 }
 
-/// Ile razy z rzędu ponawiamy uruchomienie procesu czujników po awarii.
-const MAX_RESTARTS: u32 = 5;
-/// Proces, który przepracował tyle czasu, zeruje licznik ponowień.
-const STABLE_AFTER: Duration = Duration::from_secs(120);
-
-/// Wersja .NET, której wymaga sensor-bridge (TargetFramework w csproj).
-const DOTNET_MAJOR: &str = "11.";
-
-/// Czy jest runtime .NET w wersji wymaganej przez sensor-bridge
-/// (`%ProgramFiles%\dotnet\shared\Microsoft.NETCore.App\11.*`).
-pub fn dotnet_runtime_installed() -> bool {
-    let base = std::env::var_os("ProgramFiles")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Program Files"));
-    std::fs::read_dir(base.join(r"dotnet\shared\Microsoft.NETCore.App"))
-        .map(|list| {
-            list.flatten()
-                .any(|e| e.file_name().to_string_lossy().starts_with(DOTNET_MAJOR))
-        })
-        .unwrap_or(false)
-}
-
-/// Uruchamia proces czujników bez okna konsoli; jego stderr (komunikaty
-/// błędów, stos wyjątku .NET) trafia do `stderr`.
-fn start_child(
-    path: &std::path::Path,
-    stderr: &StderrLines,
-) -> Result<(Child, ChildStdin, ChildStdout), String> {
-    let mut cmd = Command::new(path);
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    let mut child = cmd.spawn().map_err(|e| {
-        crate::trf!(
-            "Nie udało się uruchomić {BRIDGE}: {e}",
-            "Could not start {BRIDGE}: {e}"
-        )
-    })?;
-    let stdin = child.stdin.take().ok_or(crate::i18n::tr(
-        "Brak stdin procesu pomocniczego",
-        "The helper process has no stdin",
-    ))?;
-    let stdout = child.stdout.take().ok_or(crate::i18n::tr(
-        "Brak stdout procesu pomocniczego",
-        "The helper process has no stdout",
-    ))?;
-    if let Some(err) = child.stderr.take() {
-        let buf = stderr.clone();
-        if let Ok(mut b) = buf.lock() {
-            b.clear();
-        }
-        crate::spawn("bridge-stderr", move || {
-            for line in BufReader::new(err).lines().map_while(Result::ok) {
-                if let Ok(mut b) = buf.lock() {
-                    if b.len() >= STDERR_LINES {
-                        b.pop_front();
-                    }
-                    b.push_back(line);
-                }
-            }
-        });
-    }
-    Ok((child, stdin, stdout))
-}
-
 impl Backend {
+    /// Uruchamia usługę czujników i wątek odczytów co sekundę.
     /// `meter`: licznik energii sesji (liczy także przy schowanym oknie);
-    /// `gpu`: ostatni odczyt mocy karty wprost ze sterownika.
+    /// `gpu`: ostatni odczyt mocy karty wprost ze sterownika;
     /// `board`: tablica, na którą trafiają temperatury z każdego odczytu;
     /// `skip_kinds`: typy kart, których wentylatorami steruje sterownik karty.
-    ///
-    /// Gdy proces czujników zakończy się sam (np. awaria biblioteki
-    /// sterownika), jest uruchamiany ponownie (do `MAX_RESTARTS` razy z rzędu),
-    /// a wentylatory dostają ponownie swoje ustawienia.
     pub fn spawn(
         ctx: egui::Context,
         fans: Fans,
@@ -413,167 +249,39 @@ impl Backend {
         gpu: GpuSlot,
         board: crate::gpu_fans::TempBoard,
         skip_kinds: Vec<&'static str>,
-    ) -> Result<Self, String> {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let dir = exe.parent().ok_or(crate::i18n::tr(
-            "Nie można ustalić katalogu programu",
-            "Cannot determine the program folder",
-        ))?;
-        let path = dir.join(BRIDGE);
-        if !path.exists() {
-            return Err(crate::trf!(
-                "Nie znaleziono {BRIDGE} obok programu ({}).",
-                "{BRIDGE} was not found next to the program ({}).",
-                dir.display()
-            ));
-        }
-
-        let stderr: StderrLines = Arc::default();
-        let (child, stdin, stdout) = start_child(&path, &stderr)?;
+    ) -> Self {
+        let service = Service::open();
         let inner = Arc::new(Mutex::new(Inner {
-            stdin,
-            child,
+            service: service.clone(),
             quitting: false,
             snapshot: None,
             status: Status::Starting,
             fans,
             applied: HashMap::new(),
             skip_kinds,
-            stderr: stderr.clone(),
-            crash: None,
-            crash_unseen: false,
         }));
-
         let thread_inner = inner.clone();
-        crate::spawn("bridge", move || {
-            let mut stdout = stdout;
-            let mut restarts = 0u32;
-            loop {
-                let started = Instant::now();
-                for line in BufReader::new(stdout).lines() {
-                    let Ok(line) = line else { break };
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-                    if let Ok(mut snap) = serde_json::from_str::<Snapshot>(&line) {
-                        snap.sanitize();
-                        publish_gpu_hotspots(&snap);
-                        let mut s = thread_inner.lock().unwrap();
-                        if let Some(err) = &snap.error {
-                            s.status = Status::Error(err.clone());
-                        } else {
-                            s.status = Status::Running;
-                            let readings: Vec<Reading> = snap
-                                .powers
-                                .iter()
-                                .map(|p| Reading {
-                                    name: &p.name,
-                                    hw: &p.hw,
-                                    kind: &p.kind,
-                                    watts: p.value,
-                                })
-                                .collect();
-                            // Moc karty graficznej: odczyt ze sterownika, jeśli świeży.
-                            let now = Instant::now();
-                            let driver = power::fresh(&gpu, now);
-                            let readings = power::with_driver_gpu(readings, driver.as_ref());
-                            if let Ok(mut meter) = meter.lock() {
-                                meter.update(&readings, now);
-                            }
-                            drop(readings);
-                            if let Ok(mut b) = board.lock() {
-                                b.clone_from(&snap.temps);
-                            }
-                            s.snapshot = Some(snap);
-                            s.apply();
-                        }
-                    }
-                    ctx.request_repaint();
-                }
-
-                // Proces się zakończył. Przy zamykaniu programu - koniec;
-                // inaczej (awaria) uruchamiamy go ponownie.
-                {
-                    let mut s = thread_inner.lock().unwrap();
-                    if s.quitting {
-                        break;
-                    }
-                    let exit = s.child.wait().ok();
-                    // Awaria (kod różny od 0): raport z kodem i komunikatem błędu,
-                    // okno w programie pokazuje go jeden raz.
-                    if let Some(code) = exit.and_then(|e| e.code()).filter(|c| *c != 0) {
-                        // Chwila na odczyt ostatnich wierszy stderr (wątek czytający).
-                        std::thread::sleep(Duration::from_millis(300));
-                        s.crash = Some(crash_report(Some(code), &s.stderr));
-                        s.crash_unseen = true;
-                    }
-                    if started.elapsed() > STABLE_AFTER {
-                        restarts = 0;
-                    }
-                    if restarts >= MAX_RESTARTS {
-                        if !matches!(s.status, Status::Error(_)) {
-                            // Najczęstsza przyczyna po aktualizacji: brak runtime .NET 11
-                            // (np. winget w instalatorze nie zadziałał).
-                            let text = if dotnet_runtime_installed() {
-                                crate::i18n::tr(
-                                    "Proces sensor-bridge kilka razy z rzędu zakończył działanie.",
-                                    "The sensor-bridge process exited several times in a row.",
-                                )
-                            } else {
-                                crate::i18n::tr(
-                                    "Brak .NET 11 Runtime - czujniki i wentylatory nie działają. Zainstaluj go: winget install Microsoft.DotNet.Runtime.11 (albo dotnet.microsoft.com/download/dotnet/11.0).",
-                                    "The .NET 11 Runtime is missing - sensors and fans do not work. Install it: winget install Microsoft.DotNet.Runtime.11 (or dotnet.microsoft.com/download/dotnet/11.0).",
-                                )
-                            };
-                            s.status = Status::Error(text.into());
-                        }
-                        break;
-                    }
-                    s.status = Status::Starting;
-                }
-                ctx.request_repaint();
-                restarts += 1;
-                std::thread::sleep(Duration::from_secs(2));
-
-                match start_child(&path, &stderr) {
-                    Ok((child, stdin, out)) => {
-                        let mut s = thread_inner.lock().unwrap();
-                        if s.quitting {
-                            // Program zamyka się w trakcie ponowienia.
-                            s.child = child;
-                            s.stdin = stdin;
-                            s.send("quit");
-                            break;
-                        }
-                        s.child = child;
-                        s.stdin = stdin;
-                        // Nowy proces nie zna wysterowania - wyślemy je od nowa.
-                        s.applied.clear();
-                        stdout = out;
-                    }
-                    Err(e) => {
-                        thread_inner.lock().unwrap().status = Status::Error(e);
-                        break;
-                    }
-                }
+        crate::spawn("sensors", move || loop {
+            let started = Instant::now();
+            if thread_inner.lock().map(|s| s.quitting).unwrap_or(true) {
+                break;
             }
+            let snap = match service.lock() {
+                Ok(mut s) => s.read(),
+                Err(_) => break,
+            };
+            handle_snapshot(&thread_inner, snap, &meter, &gpu, &board);
             ctx.request_repaint();
+            std::thread::sleep(Duration::from_secs(1).saturating_sub(started.elapsed()));
         });
-
-        Ok(Self { inner })
+        Self { inner }
     }
 
-    /// Raport ostatniej awarii procesu czujników i czy jest jeszcze niepokazany.
-    pub fn crash_report(&self) -> Option<(String, bool)> {
-        let s = self.inner.lock().ok()?;
-        s.crash.clone().map(|c| (c, s.crash_unseen))
-    }
-
-    /// Okno z raportem zamknięte - następne pokaże dopiero nowa awaria.
-    pub fn dismiss_crash(&self) {
-        if let Ok(mut s) = self.inner.lock() {
-            s.crash_unseen = false;
-        }
+    /// Uwagi usługi czujników (brak modułu, nierozpoznany układ) - diagnostyka.
+    pub fn notes(&self) -> Vec<String> {
+        let Ok(s) = self.inner.lock() else { return Vec::new() };
+        let notes = s.service.lock().map(|x| x.notes.clone()).unwrap_or_default();
+        notes
     }
 
     pub fn state(&self) -> (Option<Snapshot>, Status) {
@@ -591,24 +299,11 @@ impl Backend {
 
 impl Drop for Backend {
     fn drop(&mut self) {
-        // Bridge po `quit` przywraca sterowanie BIOS-u dla wszystkich wentylatorów.
+        // Oddajemy płycie wszystkie wentylatory i zatrzymujemy wątek odczytów.
         if let Ok(mut s) = self.inner.lock() {
             s.quitting = true;
-            s.send("quit");
-        }
-        let deadline = Instant::now() + Duration::from_secs(3);
-        loop {
-            let Ok(mut s) = self.inner.lock() else { break };
-            match s.child.try_wait() {
-                Ok(Some(_)) | Err(_) => break,
-                Ok(None) if Instant::now() > deadline => {
-                    let _ = s.child.kill();
-                    break;
-                }
-                Ok(None) => {
-                    drop(s);
-                    std::thread::sleep(Duration::from_millis(50));
-                }
+            if let Ok(mut service) = s.service.lock() {
+                service.restore_all();
             }
         }
     }
@@ -618,13 +313,17 @@ impl Drop for Backend {
 mod invalid_rpm_tests {
     use super::*;
 
+    fn fan(id: &str, hw: &str, rpm: f32) -> Fan {
+        Fan { id: id.into(), name: "Fan".into(), hw: hw.into(), kind: "SuperIO".into(), rpm: Some(rpm), percent: Some(40.0) }
+    }
+
     #[test]
     fn rpm_sentinel_and_read_only_chip() {
-        let json = r#"{"temps":[],"fans":[
-            {"id":"a","name":"Fan #1","hw":"Nuvoton NCT6683D","kind":"SuperIO","rpm":65535.0,"percent":100.0},
-            {"id":"b","name":"Fan #2","hw":"Nuvoton NCT6796D-R","kind":"SuperIO","rpm":1200.0,"percent":40.0}],
-            "speeds":[{"name":"x","hw":"h","rpm":65535.0,"percent":null}]}"#;
-        let mut s: Snapshot = serde_json::from_str(json).unwrap();
+        let mut s = Snapshot {
+            fans: vec![fan("a", "Nuvoton NCT6683D", 65535.0), fan("b", "Nuvoton NCT6796D-R", 1200.0)],
+            speeds: vec![Speed { name: "x".into(), hw: "h".into(), rpm: Some(65535.0), percent: None }],
+            ..Default::default()
+        };
         s.sanitize();
         assert_eq!(s.fans[0].rpm, None);
         assert_eq!(s.fans[1].rpm, Some(1200.0));
@@ -632,25 +331,5 @@ mod invalid_rpm_tests {
         assert!(read_only_chip("Nuvoton NCT6683D"));
         assert!(!read_only_chip("Nuvoton NCT6796D-R"));
         assert!(!read_only_chip("Nuvoton NCT6701D"));
-    }
-}
-
-#[cfg(test)]
-mod gpu_temps_tests {
-    use super::*;
-
-    #[test]
-    fn picks_exact_sensor_of_the_named_card() {
-        *GPU_TEMPS.lock().unwrap() = vec![
-            ("NVIDIA GeForce RTX 5070".into(), "gpu hot spot".into(), 37.9),
-            ("NVIDIA GeForce RTX 5070".into(), "gpu memory junction".into(), 38.0),
-            ("AMD Radeon RX 6600".into(), "gpu hot spot".into(), 51.0),
-        ];
-        assert_eq!(gpu_hotspot("NVIDIA GeForce RTX 5070"), Some(37.9));
-        assert_eq!(gpu_memory_temp("NVIDIA GeForce RTX 5070"), Some(38.0));
-        assert_eq!(gpu_hotspot("AMD Radeon RX 6600"), Some(51.0));
-        assert_eq!(gpu_memory_temp("AMD Radeon RX 6600"), None);
-        assert_eq!(gpu_hotspot("NVIDIA GeForce RTX 4090"), None);
-        GPU_TEMPS.lock().unwrap().clear();
     }
 }

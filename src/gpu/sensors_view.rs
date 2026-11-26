@@ -4,7 +4,7 @@
 //!
 //! Źródła: NVML (oficjalne API monitorowania Nvidii), NVAPI (temperatury,
 //! zegary, obciążenie silników, napięcie, topologia mocy), Windows (pamięć
-//! systemu) i proces czujników (temperatura procesora).
+//! systemu) i usługa czujników (temperatura procesora).
 
 use std::collections::VecDeque;
 
@@ -85,10 +85,10 @@ fn rows() -> Vec<Row> {
             None,
             |m| m.details.video_mhz.map(|v| v as f32)
         ),
-        row!("Hot Spot", "LHM", "°C", 1, None, |m| m.hotspot_c),
+        row!("Hot Spot", "ADLX", "°C", 1, None, |m| m.hotspot_c),
         row!(
             tr("Temperatura pamięci", "Memory Temperature"),
-            "NVML / LHM",
+            "NVML / ADLX",
             "°C",
             1,
             None,

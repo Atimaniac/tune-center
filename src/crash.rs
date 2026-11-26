@@ -85,6 +85,8 @@ fn show(report: &str, closing: bool) {
 /// Instaluje obsługę paniki i awarii natywnych. Wołane na początku `main`.
 pub fn install() {
     std::panic::set_hook(Box::new(|info| {
+        // Najpierw oddajemy wentylatory płycie - dalej może już nie być okazji.
+        crate::hw::service::emergency_restore();
         let thread = std::thread::current();
         let name = thread.name().unwrap_or("?").to_owned();
         let message = info
@@ -183,6 +185,7 @@ mod native {
     use super::describe;
 
     unsafe extern "system" fn filter(info: *const ExceptionPointers) -> i32 {
+        crate::hw::service::emergency_restore();
         let (code, address) = match info.as_ref().and_then(|i| i.record.as_ref()) {
             Some(r) => (r.code, r.address as *const c_void),
             None => (0, std::ptr::null()),

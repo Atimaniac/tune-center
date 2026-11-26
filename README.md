@@ -81,11 +81,11 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 - Every write is verified by reading it back; settings last until reboot and are never applied automatically.
 
 ### FAN, SENSORS, POWER
-- Motherboard fans (via LibreHardwareMonitor) and GPU fans (directly through the NVIDIA/AMD driver): auto, manual or curve from any temperature sensor; GPU fans return to auto above 88 °C.
+- Motherboard fans (Nuvoton, ITE and Fintek Super I/O chips, read and controlled by the program itself through PawnIO - no background process; sensors and fans named for the specific board on about 300 ASUS, Gigabyte, MSI, ASRock, Biostar and EVGA models) and GPU fans (directly through the NVIDIA/AMD driver): auto, manual or curve from any temperature sensor; GPU fans return to auto above 88 °C.
 - **Game profiles** – assign a fan profile to any game detected in Steam, Epic, GOG, Ubisoft, EA, Xbox, Battle.net or Riot Games (or any .exe); it switches on while the game runs and the global profile returns when it closes.
 - Key temperatures (CPU, GPU, motherboard, disks, RAM) with NORMAL/HIGH/HOT badges, min/max and charts. When the motherboard's sensor chip can't be read, the board temperature comes from Windows ACPI thermal zones (only zones that actually change, not fixed BIOS values).
 - CPU and GPU power with LOW/MEDIUM/HIGH load against the power limit, session energy and cost (price per kWh in OPTIONS).
-- **Whole computer** – a USB power supply (Corsair HXi/RMi, MSI Ai) or a discharging laptop battery shows the power draw of the whole PC, next to the CPU + GPU total. Power supply temperatures and fan speed are shown read-only.
+- **Whole computer** – a discharging laptop battery shows the power draw of the whole PC, next to the CPU + GPU total.
 
 ### TUNE – latency and DPC
 Windows and driver settings recommended by Microsoft, NVIDIA and hardware vendors (Memory Integrity, Virtual Machine Platform, NIC interrupt moderation, EEE and vendor power saving (Green Ethernet, Gigabit Lite, Selective Suspend and more), USB selective suspend, PCIe link power management, CPU core parking off, Ultimate Performance plan, mouse acceleration off, SysMain off on SSD-only PCs, NVIDIA V-Sync + frame cap below the refresh rate for G-SYNC, Low Latency Mode) plus settings to test on your own hardware (NVIDIA maximum performance power mode, MSI interrupt mode per device, memory compression off, Fault Tolerant Heap off, fast startup off, Win32PrioritySeparation, SystemResponsiveness, Multi-Plane Overlay off). Every option shows its current value; the original values are backed up before the first change.
@@ -96,12 +96,12 @@ Single-thread and multi-thread CPU score (10 s each, own scale for before/after 
 **Graphics card stability** – 2 minutes of full load through Direct3D 11: FP32 math on the whole GPU, a power-heavy mixed memory + math pass and write/read checks of 512 MB of video memory. Every calculation and memory read is verified, so an unstable overclock or undervolt shows up as errors. When the test ends, a window shows the score (GFLOPS FP32 and memory GB/s), STABLE / UNSTABLE, the comparison with your best result, and average/min/max with 2-minute charts of core clock, memory clock, temperature and power draw. Results are kept in the history.
 
 ### OPTIONS and ABOUT
-Both open from the buttons next to *UPDATE* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), themes (Tune with an optional light variant, Neon Green, Neon City, Crimson), GPU fans through the driver, update checks, energy price, **compatibility check**. ABOUT shows the version, the author, a link to this repository and the license notice. Lighting moved to the RGB tab in 0.28.0 (settings are carried over).
+Both open from the buttons next to *UPDATE* in the bottom-right corner. Polish / English, start with Windows, minimize to tray (single instance – starting it again brings the window back), themes (Tune with an optional light variant, Neon Green, Neon City, Crimson), update checks, energy price, **compatibility check**. ABOUT shows the version, the author, a link to this repository and the license notice. Lighting moved to the RGB tab in 0.28.0 (settings are carried over).
 
 ## Installation
 
 1. Download **`TuneCenter-Setup.exe`** from the [latest release](https://github.com/Atimaniac/tune-center/releases/latest).
-2. Run it. The installer offers to install the **.NET 11 Runtime** and the **PawnIO** driver (both through winget) if they are missing.
+2. Run it. The installer offers to install the **PawnIO** driver (through winget) if it is missing. No .NET or other runtime is needed.
 3. Start Tune Center. Later updates install from the app with one click (*UPDATE*, bottom right).
 
 Running as administrator is optional – the GPU, NVIDIA settings, shader compilation, disks and GPU power work without it. CPU tuning, CPU temperature and power, motherboard fans and some TUNE items need administrator rights (a button in the status bar restarts the app elevated).
@@ -109,13 +109,12 @@ Running as administrator is optional – the GPU, NVIDIA settings, shader compil
 ### Requirements
 - Windows 10 or 11, 64-bit
 - NVIDIA (GTX/RTX), AMD Radeon or Intel graphics with a current driver
-- [.NET 11 Runtime](https://dotnet.microsoft.com/download/dotnet/11.0) – for the sensor process (installed by the setup)
-- [PawnIO](https://pawnio.eu) – optional; needed for CPU tuning, CPU sensors and RAM lighting (installed by the setup)
+- [PawnIO](https://pawnio.eu) – optional; needed for CPU tuning, CPU, motherboard and RAM sensors, motherboard fans and RAM lighting (installed by the setup)
 
 ### If something goes wrong
 **Something does not work on your hardware?** Run *OPTIONS > Compatibility check* (or `tunecenter.exe --diagnose`). It only reads - CPU registers, graphics driver functions, sensors, disks, RGB devices, TUNE items, games - and writes `tunecenter-diagnostics.txt` without serial numbers or your user name. *Report on GitHub* copies the report and opens a ready [compatibility issue](https://github.com/Atimaniac/tune-center/issues/new?template=compatibility.yml) - paste it with Ctrl+V. With it, support for new hardware can be fixed without access to it.
 
-When Tune Center or its sensor process crashes, a window shows what happened (error code, the module that failed, the .NET error of the sensor process). The report is saved next to the program in `tunecenter-crash.log` or `sensor-bridge-crash.log` – please attach it to a [GitHub issue](https://github.com/Atimaniac/tune-center/issues).
+When Tune Center crashes, a window shows what happened at the next start (error code, the module that failed). The report is saved next to the program in `tunecenter-crash.log` – please attach it to a [GitHub issue](https://github.com/Atimaniac/tune-center/issues).
 
 ## ⚠️ Disclaimer
 
@@ -124,8 +123,8 @@ Tune Center changes clocks, voltages, power limits, fan speeds and system settin
 ## Building from source
 
 ```powershell
-# Rust (stable, MSVC), .NET 11 SDK, Inno Setup 6
-.\build.ps1             # cargo build --release, sensor-bridge, PawnIO modules -> dist\
+# Rust (stable, MSVC), Inno Setup 6
+.\build.ps1             # cargo build --release, PawnIO modules -> dist\
 .\build-installer.ps1   # installer -> installer-output\TuneCenter-Setup.exe
 ```
 
@@ -154,6 +153,6 @@ The full license text is in [LICENSE](LICENSE); it is also installed next to the
 
 ## Credits
 
-Built with [egui/eframe](https://github.com/emilk/egui), [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) and [PawnIO](https://pawnio.eu). See [THIRD-PARTY.md](THIRD-PARTY.md) for all components and references.
+Built with [egui/eframe](https://github.com/emilk/egui) and [PawnIO](https://pawnio.eu). See [THIRD-PARTY.md](THIRD-PARTY.md) for all components and references.
 
 <sub>Polish documentation: [README.pl.md](README.pl.md)</sub>

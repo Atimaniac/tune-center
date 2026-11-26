@@ -46,6 +46,7 @@ mod gpu_bench;
 mod gpu_fans;
 mod hags;
 mod history;
+mod hw;
 mod hw_names;
 mod i18n;
 mod icons;
@@ -425,7 +426,8 @@ impl App {
         // Oświetlenie RGB: ustawienia stosowane od razu po starcie (także z autostartu).
         let elevated = elevation::is_elevated();
         let rgb = rgb_tab::RgbTab::start(&fans.config.rgb, elevated, &cc.egui_ctx);
-        let gpu_fans = if fans.config.gpu_fans_direct && !demo {
+        // Wentylatorami kart steruje zawsze sterownik karty.
+        let gpu_fans = if !demo {
             let ctx = cc.egui_ctx.clone();
             gpu_fans::GpuFans::start(fans.config.fans().clone(), board.clone(), move || {
                 ctx.request_repaint()
@@ -438,14 +440,15 @@ impl App {
             .map(|g| g.kinds().to_vec())
             .unwrap_or_default();
 
-        let bridge = Backend::spawn(
+        // Czujniki w procesie programu (PawnIO, bez .NET).
+        let bridge: Result<Backend, String> = Ok(Backend::spawn(
             cc.egui_ctx.clone(),
             fans.config.fans().clone(),
             meter.clone(),
             gpu_power.clone(),
             board,
             skip_kinds,
-        );
+        ));
 
         let logo = load_logo(&cc.egui_ctx);
         let theme_art = cc.egui_ctx.load_texture(
@@ -529,25 +532,15 @@ impl App {
     /// `--tab <nvidia|cpu|fan|sensors|power|tune|options|about>` i
     /// `--page <info|clocks|curve|3d|dlss|display|color|gsync|custom|shaders>`:
     /// program otwiera się na wskazanej zakładce (np. ze skrótu na pulpicie).
-    /// Okno z raportem awarii: poprzednie uruchomienie programu albo
-    /// awaria procesu czujników w tym uruchomieniu.
+    /// Okno z raportem awarii poprzedniego uruchomienia programu.
     fn crash_window(&mut self, ctx: &egui::Context) {
-        let bridge_crash = self.bridge.as_ref().ok().and_then(|b| b.crash_report());
-        let (report, from_bridge) = match (&self.crash_report, &bridge_crash) {
-            (Some(r), _) => (r.clone(), false),
-            (None, Some((r, true))) => (r.clone(), true),
-            _ => return,
-        };
+        let Some(report) = self.crash_report.clone() else { return };
         let mut open = true;
         let mut close = false;
-        let title = if from_bridge {
-            crate::i18n::tr("Awaria procesu czujników", "Sensor process crash")
-        } else {
-            crate::i18n::tr(
-                "Poprzednio program zakończył się błędem",
-                "The program crashed last time",
-            )
-        };
+        let title = crate::i18n::tr(
+            "Poprzednio program zakończył się błędem",
+            "The program crashed last time",
+        );
         egui::Window::new(title)
             .collapsible(false)
             .resizable(true)
@@ -556,17 +549,10 @@ impl App {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label(
-                    RichText::new(if from_bridge {
-                        crate::i18n::tr(
-                            "Proces czujników (sensor-bridge) zakończył się błędem i został uruchomiony ponownie. Szczegóły:",
-                            "The sensor process (sensor-bridge) crashed and was restarted. Details:",
-                        )
-                    } else {
-                        crate::i18n::tr(
-                            "Raport zapisany przy awarii (plik tunecenter-crash.log obok programu):",
-                            "Report saved at the crash (tunecenter-crash.log next to the program):",
-                        )
-                    })
+                    RichText::new(crate::i18n::tr(
+                        "Raport zapisany przy awarii (plik tunecenter-crash.log obok programu):",
+                        "Report saved at the crash (tunecenter-crash.log next to the program):",
+                    ))
                     .color(muted()),
                 );
                 ui.add_space(6.0);
@@ -599,14 +585,8 @@ impl App {
                 });
             });
         if !open || close {
-            if from_bridge {
-                if let Ok(b) = &self.bridge {
-                    b.dismiss_crash();
-                }
-            } else {
-                crash::acknowledge();
-                self.crash_report = None;
-            }
+            crash::acknowledge();
+            self.crash_report = None;
         }
     }
 
@@ -952,31 +932,15 @@ impl App {
                 },
             );
 
-            let mut direct = self.fans.config.gpu_fans_direct;
-            if ui
-                .checkbox(&mut direct, crate::i18n::tr("Wentylatory karty graficznej przez sterownik karty", "Graphics card fans through the card driver"))
-                .changed()
-            {
-                self.fans.config.gpu_fans_direct = direct;
-                self.fans.config.save();
-            }
-            option_note(
-                ui,
-                crate::i18n::tr(
-                    "Program steruje wentylatorami karty wprost przez sterownik Nvidii lub AMD. Po wyłączeniu robi to proces czujników (LibreHardwareMonitor). Zmiana działa po ponownym uruchomieniu programu; ustawienia wentylatora karty trzeba wtedy wybrać ponownie.",
-                    "The program controls the card's fans directly through the Nvidia or AMD driver. When turned off, the sensor process (LibreHardwareMonitor) does it. The change takes effect after restarting the program; the card fan settings must then be chosen again.",
-                ),
-            );
-
             self.nvdriver_options(ui, ctx);
 
             {
                 let elevated = self.elevated;
                 let bridge = self.bridge.as_ref().map_or_else(
-                    |e| (None, e.clone()),
+                    |e| (None, e.clone(), Vec::new()),
                     |b| {
                         let (snap, status) = b.state();
-                        (snap, format!("{status:?}"))
+                        (snap, format!("{status:?}"), b.notes())
                     },
                 );
                 let rgb = self.rgb.snapshot();
@@ -1090,8 +1054,7 @@ impl App {
                 width,
                 crate::i18n::tr("Użyte składniki", "Components used"),
                 &[
-                    crate::i18n::tr("PawnIO i PawnIO.Modules (namazso) - dostęp do sprzętu.", "PawnIO and PawnIO.Modules (namazso) - hardware access."),
-                    crate::i18n::tr("LibreHardwareMonitor - odczyt czujników i sterowanie wentylatorami.", "LibreHardwareMonitor - sensor readings and fan control."),
+                    crate::i18n::tr("PawnIO i PawnIO.Modules (namazso) - dostęp do sprzętu; czujniki i wentylatory płyty obsługuje własny kod programu.", "PawnIO and PawnIO.Modules (namazso) - hardware access; motherboard sensors and fans are handled by the program's own code."),
                     crate::i18n::tr("NVIDIA NVAPI i NVML, AMD ADLX, Intel Graphics Control Library - karty graficzne.", "NVIDIA NVAPI and NVML, AMD ADLX, Intel Graphics Control Library - graphics cards."),
                     crate::i18n::tr("egui / eframe - interfejs.", "egui / eframe - user interface."),
                     crate::i18n::tr("Pełna lista i licencje: plik THIRD-PARTY.md obok programu.", "Full list and licenses: the THIRD-PARTY.md file next to the program."),
@@ -1103,7 +1066,7 @@ impl App {
                 crate::i18n::tr("Sterownik PawnIO jest opcjonalny", "The PawnIO driver is optional"),
                 &[
                     crate::i18n::tr("Bez PawnIO działają: zakładka NVIDIA, temperatura, wentylatory i pobór mocy karty graficznej, temperatury dysków, TUNE oraz podświetlenie na USB.", "Without PawnIO these work: the NVIDIA tab, graphics card temperature, fans and power draw, disk temperatures, TUNE and USB lighting."),
-                    crate::i18n::tr("PawnIO jest potrzebny do: temperatury i mocy procesora, wentylatorów płyty głównej, zakładki CPU oraz podświetlenia pamięci RAM. Tych danych Windows nie udostępnia bez sterownika.", "PawnIO is needed for: CPU temperature and power, motherboard fans, the CPU tab and RAM lighting. Windows does not expose that data without a driver."),
+                    crate::i18n::tr("PawnIO jest potrzebny do: temperatury i mocy procesora, temperatur płyty głównej i pamięci RAM, wentylatorów płyty głównej, zakładki CPU oraz podświetlenia pamięci RAM. Tych danych Windows nie udostępnia bez sterownika.", "PawnIO is needed for: CPU temperature and power, motherboard and RAM temperatures, motherboard fans, the CPU tab and RAM lighting. Windows does not expose that data without a driver."),
                 ],
             );
         });
@@ -1187,7 +1150,7 @@ fn about_card(ui: &mut egui::Ui, width: f32, title: &str, lines: &[&str]) {
 impl eframe::App for App {
     /// Praca niezwiązana z rysowaniem. eframe woła to przed każdym `ui`,
     /// a gdy okno jest ukryte w zasobniku - zamiast `ui`, po każdym
-    /// `request_repaint` (proces czujników budzi okno co sekundę).
+    /// `request_repaint` (wątek czujników budzi okno co sekundę).
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.rgb.logic(&mut self.fans.config.rgb) {
             self.fans.config.save();

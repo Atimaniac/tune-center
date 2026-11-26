@@ -35,6 +35,11 @@ pub struct PawnIo {
     close: FnClose,
 }
 
+// SAFETY: uchwyt PawnIO to uchwyt jądra - wolno go używać z dowolnego wątku.
+// Program woła moduł z jednego wątku naraz (właściciel `PawnIo` albo `Mutex`),
+// a blokady sprzętowe (ISA, SMBus, PCI) i tak serializują dostęp.
+unsafe impl Send for PawnIo {}
+
 /// Miejsca, w których instalator PawnIO umieszcza bibliotekę.
 fn library_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();

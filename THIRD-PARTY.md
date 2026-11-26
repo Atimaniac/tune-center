@@ -2,7 +2,7 @@
 
 Tune Center uses the components below. They are included unchanged.
 
-## PawnIO.Modules – IntelMSR.bin, RyzenSMU.bin, AMDFamily17.bin, SmbusI801.bin
+## PawnIO.Modules – IntelMSR.bin, RyzenSMU.bin, AMDFamily17.bin, SmbusI801.bin, SmbusPIIX4.bin, LpcIO.bin
 
 - Source: https://github.com/namazso/PawnIO.Modules
 - Author: namazso
@@ -17,11 +17,14 @@ Tune Center uses the components below. They are included unchanged.
 - Not bundled; it is installed separately (the Tune Center installer can do
   it through winget).
 
-## LibreHardwareMonitorLib
+## LibreHardwareMonitor – motherboard sensor tables
 
 - Source: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
 - License: MPL-2.0
-- Used by `sensor-bridge.exe` to read sensors and control fans.
+- `src/hw/boards.rs` contains the motherboard tables from its
+  `SuperIOHardware.cs` and `Identification.cs` (temperature, fan and fan
+  control names for specific boards). That file stays under MPL-2.0; the
+  library itself is not used or bundled.
 
 ## Inter (interface font)
 
@@ -35,6 +38,12 @@ Tune Center uses the components below. They are included unchanged.
 
 No code was copied from these projects; they were used as documentation.
 
+- LibreHardwareMonitor (https://github.com/LibreHardwareMonitor/LibreHardwareMonitor,
+  MPL-2.0): Super I/O register layouts (Nuvoton, ITE, Fintek), CPU and memory
+  sensor sources; sensor names and identifiers are kept compatible so saved fan
+  settings keep working.
+- RAMSPDToolkit (https://github.com/Blacktempel/RAMSPDToolkit): SPD layout of
+  DDR4/DDR5 thermal sensors.
 - PowerMonkey (https://github.com/psyq321/PowerMonkey, Apache-2.0): field
   layout and command numbers of the Intel OC mailbox (MSR 0x150).
 - ZenStates-Core (https://github.com/irusanov/ZenStates-Core, GPL-3.0): Ryzen

@@ -4,27 +4,31 @@ Set-Location $PSScriptRoot
 
 New-Item -ItemType Directory -Force -Path dist | Out-Null
 
-Write-Host "== Krok 1/3: Rust (cargo build) =="
+Write-Host "== Krok 1/2: Rust (cargo build) =="
 cargo build --release
 if ($LASTEXITCODE -ne 0) { throw "cargo build nie powiodl sie (kod $LASTEXITCODE). Blad jest powyzej." }
 
-Write-Host "== Krok 2/3: .NET (dotnet publish) =="
-dotnet publish sensor-bridge\SensorBridge.csproj -c Release -r win-x64 --self-contained false -o dist
-if ($LASTEXITCODE -ne 0) { throw "dotnet publish nie powiodl sie (kod $LASTEXITCODE). Blad jest powyzej." }
+# Pozostalosci dawnego procesu czujnikow (.NET, LibreHardwareMonitor) z
+# poprzednich budowan - program od 0.42.0 czyta czujniki sam.
+$old = @("sensor-bridge.*", "LibreHardwareMonitorLib.dll", "BlackSharp.Core.dll", "DiskInfoToolkit.dll",
+    "HidSharp.dll", "Mono.Posix.NETStandard.dll", "MonoPosixHelper.dll", "libMonoPosixHelper.dll",
+    "RAMSPDToolkit-NDD.dll", "System.CodeDom.dll", "System.IO.Ports.dll", "System.Management.dll", "de-DE", "es-ES")
+foreach ($o in $old) { Remove-Item "dist\$o" -Recurse -Force -ErrorAction SilentlyContinue }
 
 Copy-Item target\release\tunecenter.exe dist\ -Force
 Copy-Item THIRD-PARTY.md dist\ -Force
 Copy-Item LICENSE, PRIVACY.md, PRIVACY.pl.md dist\ -Force
 
-# Zakladka "Procesor" potrzebuje oficjalnych, podpisanych modulow PawnIO:
+# Zakladka "Procesor" i czujniki potrzebuja oficjalnych, podpisanych modulow PawnIO:
 # IntelMSR.bin (Intel) oraz RyzenSMU.bin i AMDFamily17.bin (AMD Ryzen);
-# SmbusI801.bin i SmbusPIIX4.bin (SMBus chipsetow Intel i AMD) - podswietlenie RAM.
+# SmbusI801.bin i SmbusPIIX4.bin (SMBus chipsetow Intel i AMD) - RAM;
+# LpcIO.bin - uklady Super I/O plyty glownej (temperatury, wentylatory).
 # Pobieramy je z najnowszego wydania projektu PawnIO.Modules i kopiujemy bez
 # zmian. Numer wydania trafia do dist\modules\version.txt - przy nowszym
 # wydaniu wszystkie moduly sa pobierane ponownie.
 # Bez nich program dziala, tylko zakladka "Procesor" jest nieaktywna.
-Write-Host "== Krok 3/3: moduly PawnIO =="
-$modules = @("IntelMSR.bin", "RyzenSMU.bin", "AMDFamily17.bin", "SmbusI801.bin", "SmbusPIIX4.bin")
+Write-Host "== Krok 2/2: moduly PawnIO =="
+$modules = @("IntelMSR.bin", "RyzenSMU.bin", "AMDFamily17.bin", "SmbusI801.bin", "SmbusPIIX4.bin", "LpcIO.bin")
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $release = Invoke-RestMethod "https://api.github.com/repos/namazso/PawnIO.Modules/releases/latest" -Headers @{ "User-Agent" = "TuneCenter-build" }
