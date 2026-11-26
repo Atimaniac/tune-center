@@ -167,7 +167,177 @@ fn table(ui: &mut egui::Ui, r: &Report) {
 }
 
 impl Dpc {
-    pub fn ui(&mut self, ui: &mut egui::Ui, elevated: bool) {
+    /// Karta z rdzeniami obsługującymi kartę graficzną i dźwięk oraz
+    /// przeniesieniem dźwięku na inny rdzeń. `backups` - kopie stanu sprzed
+    /// zmian (z ustawień programu); zwraca `true`, gdy lista się zmieniła.
+    fn irq_card(&mut self, ui: &mut egui::Ui, elevated: bool, backups: &mut Vec<crate::irq::Backup>) -> bool {
+        use crate::irq::{gpu_core, pick_target, shared, Role};
+        let ctx = ui.ctx().clone();
+        self.irq.ensure_scanned(elevated, move || ctx.request_repaint());
+        let measured = self.irq.measured();
+        let gpu = gpu_core(&self.irq.devices, measured);
+        let mut changed = false;
+        let mut rescan = false;
+        let mut pin: Option<(String, u16)> = None;
+        let mut undo = false;
+
+        theme::card(8, 10).show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.label(RichText::new(tr("Rdzenie przerwań: karta graficzna i dźwięk", "Interrupt cores: graphics card and audio")).strong())
+                    .on_hover_text(tr(
+                        "Sterownik karty graficznej potrafi zająć rdzeń procesora na ułamek milisekundy. Jeśli ten sam rdzeń obsługuje przerwania dźwięku (kontroler HD Audio albo kontroler USB, do którego podłączony jest DAC), dźwięk czeka w kolejce i słychać trzaski. Na różnych rdzeniach sobie nie przeszkadzają.",
+                        "The graphics driver can hold a processor core for a fraction of a millisecond. If the same core serves audio interrupts (the HD Audio controller or the USB controller your DAC is plugged into), audio waits in the queue and crackles. On different cores they do not disturb each other.",
+                    ));
+                if self.irq.devices.is_empty() {
+                    ui.label(RichText::new(tr("Nie znaleziono urządzeń.", "No devices found.")).color(theme::muted()));
+                    return;
+                }
+                ui.add_space(4.0);
+                egui::Grid::new("irq_devices").num_columns(3).spacing([22.0, 5.0]).show(ui, |ui| {
+                    for d in &self.irq.devices {
+                        let kind = match d.role {
+                            Role::Gpu => tr("Karta graficzna", "Graphics card"),
+                            Role::Audio => tr("Dźwięk", "Audio"),
+                        };
+                        ui.label(RichText::new(kind).color(theme::accent()));
+                        let via = if d.role == Role::Audio && d.controller != d.name {
+                            crate::trf!("{} (przez: {})", "{} (through: {})", d.name, d.controller)
+                        } else {
+                            d.name.clone()
+                        };
+                        ui.label(via);
+                        // Rdzeń: zmierzony (karta), przypięty albo z przydziału Windows.
+                        let (text, hover) = match (d.role, measured, d.pinned, d.core()) {
+                            (Role::Gpu, Some(m), ..) => (
+                                crate::trf!("rdzeń {m} (zmierzony)", "core {m} (measured)"),
+                                tr("Rdzeń, na którym przez 2 s wykonywały się DPC sterownika karty.", "The core on which the driver's DPCs ran during a 2 s trace.").to_owned(),
+                            ),
+                            (_, _, Some(p), _) => (
+                                crate::trf!("rdzeń {p} (przypięty)", "core {p} (pinned)"),
+                                tr("Rdzeń ustawiony wpisem w rejestrze urządzenia.", "The core set by an entry in the device's registry key.").to_owned(),
+                            ),
+                            (_, _, None, Some(c)) if d.exact() => (
+                                crate::trf!("rdzeń {c}", "core {c}"),
+                                tr("Rdzeń przydzielony przez Windows.", "The core assigned by Windows.").to_owned(),
+                            ),
+                            (_, _, None, Some(c)) => (
+                                crate::trf!("rdzeń {c} (prawdopodobnie)", "core {c} (probably)"),
+                                crate::trf!(
+                                    "Windows przydzielił zbiór rdzeni {:?} i zwykle używa pierwszego. Pewny wynik daje pomiar (wymaga administratora).",
+                                    "Windows assigned the core set {:?} and usually uses the first one. A measurement gives a sure result (needs administrator rights).",
+                                    d.cores
+                                ),
+                            ),
+                            _ => (tr("nieznany", "unknown").to_owned(), String::new()),
+                        };
+                        ui.label(RichText::new(text).strong()).on_hover_text(hover);
+                        ui.end_row();
+                    }
+                });
+                ui.add_space(4.0);
+
+                let audio = self.irq.devices.iter().filter(|d| d.role == Role::Audio).count();
+                let clash = shared(&self.irq.devices, gpu);
+                if audio == 0 {
+                    ui.label(RichText::new(tr("Nie znaleziono włączonego urządzenia dźwiękowego.", "No enabled audio device found.")).color(theme::muted()));
+                } else if let Some(first) = clash.first() {
+                    let core = gpu.unwrap_or(0);
+                    ui.label(
+                        RichText::new(crate::trf!(
+                            "Dźwięk ({}) dzieli rdzeń {core} z kartą graficzną.",
+                            "Audio ({}) shares core {core} with the graphics card.",
+                            first.name
+                        ))
+                        .color(theme::warn()),
+                    );
+                    let used: Vec<u16> = self.irq.devices.iter().filter_map(|d| d.pinned).collect();
+                    let cpus = std::thread::available_parallelism().map(|n| n.get() as u16).unwrap_or(1);
+                    if let Some(target) = pick_target(gpu, &used, cpus) {
+                        let label = crate::trf!("Przenieś dźwięk na rdzeń {target}", "Move audio to core {target}");
+                        if theme::primary_button(ui, Some(Icon::Swap), &label, elevated)
+                            .on_hover_text(tr(
+                                "Zapisuje przypisanie w rejestrze urządzenia i restartuje kontroler dźwięku. Jeśli to kontroler USB, podłączone do niego urządzenia (także mysz i klawiatura) rozłączą się na kilka sekund. Poprzedni stan jest zapamiętany - przycisk Cofnij go przywraca. Wymaga administratora.",
+                                "Writes the assignment to the device's registry key and restarts the audio controller. If it is a USB controller, devices plugged into it (mouse and keyboard included) disconnect for a few seconds. The previous state is remembered - the Undo button restores it. Needs administrator rights.",
+                            ))
+                            .clicked()
+                        {
+                            pin = Some((first.instance.clone(), target));
+                        }
+                    }
+                } else {
+                    let text = if self.irq.devices.iter().all(|d| d.role != Role::Gpu || measured.is_some() || d.exact()) {
+                        tr("Karta graficzna i dźwięk są na różnych rdzeniach.", "The graphics card and audio are on different cores.")
+                    } else {
+                        tr(
+                            "Karta graficzna i dźwięk są prawdopodobnie na różnych rdzeniach (pewność daje pomiar z uprawnieniami administratora).",
+                            "The graphics card and audio are probably on different cores (a measurement with administrator rights makes it certain).",
+                        )
+                    };
+                    ui.label(RichText::new(text).color(theme::ok()));
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr("Sprawdź ponownie", "Check again")).clicked() {
+                        rescan = true;
+                    }
+                    if !backups.is_empty()
+                        && ui
+                            .add_enabled(elevated, egui::Button::new(tr("Cofnij przypisanie dźwięku", "Undo the audio assignment")))
+                            .on_hover_text(tr(
+                                "Przywraca stan sprzed przeniesienia i restartuje kontroler dźwięku.",
+                                "Restores the state before the move and restarts the audio controller.",
+                            ))
+                            .clicked()
+                    {
+                        undo = true;
+                    }
+                    if let Some((msg, error)) = &self.irq.message {
+                        ui.label(RichText::new(msg).size(12.5).color(if *error { theme::warn() } else { theme::ok() }));
+                    }
+                });
+            });
+        });
+
+        if let Some((instance, target)) = pin {
+            match crate::irq::pin(&instance, target) {
+                Ok(backup) => {
+                    backups.push(backup);
+                    self.irq.message = Some((crate::trf!("Dźwięk przeniesiony na rdzeń {target}.", "Audio moved to core {target}."), false));
+                    changed = true;
+                }
+                Err((backup, e)) => {
+                    if let Some(b) = backup {
+                        backups.push(b);
+                        changed = true;
+                    }
+                    self.irq.message = Some((e, true));
+                }
+            }
+            rescan = true;
+        }
+        if undo {
+            let mut failed = None;
+            for b in backups.drain(..).rev() {
+                if let Err(e) = crate::irq::restore(&b) {
+                    failed = Some(e);
+                }
+            }
+            self.irq.message = Some(match failed {
+                Some(e) => (e, true),
+                None => (tr("Przywrócono poprzednie przypisanie.", "The previous assignment is restored.").to_owned(), false),
+            });
+            changed = true;
+            rescan = true;
+        }
+        if rescan {
+            let ctx = ui.ctx().clone();
+            self.irq.rescan(elevated, move || ctx.request_repaint());
+        }
+        changed
+    }
+
+    /// Strona DPC. Zwraca `true`, gdy zmieniły się `backups` (do zapisania).
+    pub fn ui(&mut self, ui: &mut egui::Ui, elevated: bool, backups: &mut Vec<crate::irq::Backup>) -> bool {
         let state = self.state();
         theme::heading(ui, Icon::Gauge, "DPC");
         theme::info(
@@ -187,6 +357,8 @@ impl Dpc {
             );
         }
         ui.add_space(6.0);
+        let changed = self.irq_card(ui, elevated, backups);
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             let running = state.running.is_some();
             if theme::primary_button(ui, Some(Icon::Gauge), tr("Zmierz", "Measure"), elevated && !running).clicked() {
@@ -228,5 +400,6 @@ impl Dpc {
             }
             None => {}
         }
+        changed
     }
 }

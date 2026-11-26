@@ -2672,7 +2672,8 @@ mod tests {
 // ------------------------------------------------------------ interfejs
 
 impl Tune {
-    pub fn ui(&mut self, ui: &mut eframe::egui::Ui, elevated: bool) {
+    /// `extra` rysuje dodatkowe opcje nad listą ustawień.
+    pub fn ui(&mut self, ui: &mut eframe::egui::Ui, elevated: bool, extra: &mut dyn FnMut(&mut eframe::egui::Ui)) {
         use crate::icons::Icon;
         use crate::theme;
         use eframe::egui::{self, RichText};
@@ -2730,6 +2731,7 @@ impl Tune {
             }
         });
         ui.add_space(8.0);
+        extra(ui);
 
         let width = ui.available_width() - 2.0 * 16.0 - 4.0;
         let mut change: Option<(String, bool)> = None;

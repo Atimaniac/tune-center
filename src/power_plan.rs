@@ -103,6 +103,8 @@ pub struct Settings {
     /// Plan na czas gry i plan po jej zamknięciu (GUID tekstem; "" - brak).
     pub game: String,
     pub idle: String,
+    /// W trakcie gry nie pozwalać zasnąć rdzeniowi obsługującemu kartę graficzną.
+    pub keep_awake: bool,
 }
 
 #[derive(Default)]
@@ -113,6 +115,9 @@ struct Shared {
     /// Czy to program włączył plan gry (do przywrócenia przy zamknięciu).
     switched: bool,
     error: Option<String>,
+    /// Rdzeń podtrzymywany w trakcie gry i błąd jego wykrycia.
+    awake_cpu: Option<u16>,
+    awake_error: Option<String>,
     quit: bool,
 }
 
@@ -137,6 +142,11 @@ impl PowerPlan {
         crate::spawn("power-plan", move || {
             let mut games: Vec<(String, String)> = Vec::new();
             let mut listed: Option<Instant> = None;
+            // Podtrzymywanie rdzenia karty: działający wątek i czy w tej sesji
+            // gry już szukano rdzenia (jedna próba na uruchomienie gry).
+            #[cfg(windows)]
+            let mut awake: Option<crate::dpc::KeepAwake> = None;
+            let mut tried = false;
             loop {
                 let (settings, was, quit) = match s.lock() {
                     Ok(g) => (g.settings.clone(), g.running.is_some(), g.quit),
@@ -145,7 +155,7 @@ impl PowerPlan {
                 if quit {
                     break;
                 }
-                if settings.enabled {
+                let now = if settings.enabled || settings.keep_awake {
                     // Lista gier odświeżana co 5 minut (nowo zainstalowane gry).
                     if listed.is_none_or(|t| t.elapsed() >= Duration::from_secs(300)) {
                         listed = Some(Instant::now());
@@ -154,30 +164,61 @@ impl PowerPlan {
                             .map(|g| (g.dir.to_string_lossy().to_lowercase(), g.name))
                             .collect();
                     }
-                    let now = running_game(&games);
-                    let action = decide(true, was, now.is_some(), &settings.game, &settings.idle);
-                    let result = action.as_deref().map(sys::set_active);
-                    if let Ok(mut g) = s.lock() {
-                        if was != now.is_some() || g.running != now {
-                            if let Some(r) = &result {
-                                g.error = r.as_ref().err().cloned();
-                                g.switched = now.is_some() && r.is_ok();
+                    running_game(&games)
+                } else {
+                    None
+                };
+                // Plan zasilania: tylko przy uruchomieniu i zamknięciu gry.
+                let action = decide(settings.enabled, was, now.is_some(), &settings.game, &settings.idle);
+                let result = action.as_deref().map(sys::set_active);
+                // Rdzeń karty: nie zasypia, dopóki działa gra.
+                let mut awake_error = None;
+                #[cfg(windows)]
+                let awake_cpu = {
+                    if settings.keep_awake && now.is_some() {
+                        if awake.is_none() && !tried {
+                            tried = true;
+                            match crate::dpc::detect_gpu_cpu() {
+                                Ok(cpu) => awake = Some(crate::dpc::KeepAwake::start(cpu)),
+                                Err(e) => awake_error = Some(e),
                             }
-                            g.running = now;
-                            drop(g);
-                            repaint();
                         }
+                    } else {
+                        awake = None;
+                        tried = false;
                     }
-                } else if was {
-                    // Funkcja wyłączona w trakcie gry: stan gry jest zapominany.
-                    if let Ok(mut g) = s.lock() {
-                        g.running = None;
+                    awake.as_ref().map(|a| a.cpu)
+                };
+                #[cfg(not(windows))]
+                let awake_cpu: Option<u16> = {
+                    let _ = &mut tried;
+                    None
+                };
+                if let Ok(mut g) = s.lock() {
+                    let changed = g.running != now || g.awake_cpu != awake_cpu || awake_error.is_some();
+                    if let Some(r) = &result {
+                        g.error = r.as_ref().err().cloned();
+                        g.switched = now.is_some() && r.is_ok();
+                    }
+                    if awake_error.is_some() || awake_cpu.is_some() || now.is_none() {
+                        g.awake_error = awake_error;
+                    }
+                    g.awake_cpu = awake_cpu;
+                    g.running = now;
+                    drop(g);
+                    if changed {
+                        repaint();
                     }
                 }
                 std::thread::sleep(Duration::from_secs(2));
             }
         });
         Self { shared, plans: Vec::new(), active: None, read: None }
+    }
+
+    /// Działająca gra, podtrzymywany rdzeń i błąd jego wykrycia.
+    pub fn awake(&self) -> (Option<String>, Option<u16>, Option<String>) {
+        self.shared.lock().map(|s| (s.running.clone(), s.awake_cpu, s.awake_error.clone())).unwrap_or_default()
     }
 
     pub fn set(&self, settings: Settings) {

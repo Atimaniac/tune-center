@@ -640,6 +640,20 @@ Do przetestowania na własnym sprzęcie (porównaj LatencyMon przed i po):
 Celowo pominięte: `bcdedit useplatformclock/disabledynamictick` (sprzeczne
 wyniki, problemy z myszą) i `NetworkThrottlingIndex` (więcej przerwań).
 Większość pozycji wymaga uprawnień administratora.
+### Podtrzymywanie rdzenia karty graficznej
+
+Opcja na stronie System: "W trakcie gry podtrzymuj rdzeń procesora obsługujący
+kartę graficzną". Sterownik karty wykonuje swoje procedury DPC na jednym
+rdzeniu procesora. Gdy ten rdzeń zasypia między przerwaniami, po wybudzeniu
+działa wolniej i te same procedury trwają kilka razy dłużej. Po uruchomieniu
+gry program sprawdza, który to rdzeń (śledzenie 2 s, administrator), i
+uruchamia na nim pustą pętlę o najniższym priorytecie, dopóki gra działa - gra
+i inne programy mają przed nią pierwszeństwo. Pomiar na i7-13850HX z RTX 5070:
+najdłuższe DPC sterownika pod obciążeniem spadło z 229-280 µs do 113-144 µs, a
+w spoczynku liczba DPC dłuższych niż 250 µs z kilkuset do kilku na 30 s. Koszt:
+ten jeden rdzeń pokazuje 100 % użycia i pobiera więcej energii. Przeniesienie
+przerwań karty na rdzeń E nie dało korzyści (bez podtrzymywania było gorzej).
+
 
 ## TUNE - DPC (analizator)
 
@@ -665,6 +679,26 @@ zmienia. Czas pomiaru: 15 s, 30 s, 1 min albo 5 min.
 Mierz w trakcie typowego obciążenia (gra, muzyka) i zmieniaj po jednym
 ustawieniu. `tunecenter.exe --dpc-measure` uruchamia 15-sekundowy pomiar od
 razu po starcie.
+
+### Rdzenie przerwań: karta graficzna i dźwięk
+
+Karta na stronie DPC pokazuje, który rdzeń procesora obsługuje kartę graficzną
+(zmierzony 2-sekundowym śledzeniem, z uprawnieniami administratora; bez nich
+odczyt z rejestru) i który obsługuje każde urządzenie dźwiękowe. Dla dźwięku
+przez USB liczy się kontroler USB, do którego podłączony jest DAC lub
+słuchawki - to on zgłasza przerwania.
+
+Gdy dźwięk dzieli rdzeń z kartą graficzną, przycisk "Przenieś dźwięk na rdzeń
+N" przypina kontroler dźwięku do innego rdzenia: wpis `Affinity Policy`
+urządzenia (`DevicePolicy` = 4 i maska rdzenia, udokumentowany przez
+Microsoft) i restart kontrolera. Przy kontrolerze USB podłączone urządzenia
+rozłączają się na kilka sekund. Stan sprzed zmiany jest zapisany w ustawieniach
+programu; "Cofnij przypisanie dźwięku" go przywraca. Karty graficznej program
+nie przenosi.
+
+Pomiar na i7-13850HX z RTX 5070: wątek o najwyższym priorytecie na rdzeniu
+karty graficznej był w spoczynku opóźniony o ponad 0,5 ms 135 razy w 30 s, na
+innych rdzeniach 0-1 raz.
 
 ## TUNE - Fast Load (32GB RAM+)
 

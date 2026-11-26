@@ -56,6 +56,7 @@ mod hw_names;
 mod i18n;
 mod icons;
 mod intel;
+mod irq;
 #[cfg(test)]
 mod logo_tool;
 mod lz4;
@@ -488,12 +489,8 @@ impl App {
             updates.start(move || ctx.request_repaint());
         }
 
+        let plan_settings = plan_settings(&fans.config, demo);
         let auto_load = fans.config.fast_load_auto.clone();
-        let plan_settings = power_plan::Settings {
-            enabled: fans.config.power_plan_enabled && !demo,
-            game: fans.config.power_plan_game.clone(),
-            idle: fans.config.power_plan_idle.clone(),
-        };
         let mut app = Self {
             tab: Tab::Nvidia,
             gpu: GpuTab::new(demo),
@@ -1720,7 +1717,12 @@ impl eframe::App for App {
                     });
                     ui.separator();
                     match self.tune_page {
-                        1 => self.dpc.ui(ui, self.elevated),
+                        1 => {
+                            let c = &mut self.fans.config;
+                            if self.dpc.ui(ui, self.elevated, &mut c.irq_backup) {
+                                c.save();
+                            }
+                        }
                         2 => {
                             let c = &mut self.fans.config;
                             if self.fast_load.ui(ui, &mut c.fast_load_auto, &mut c.fast_load_pin, self.elevated) {
@@ -1729,11 +1731,7 @@ impl eframe::App for App {
                         }
                         3 => {
                             let c = &mut self.fans.config;
-                            let mut s = power_plan::Settings {
-                                enabled: c.power_plan_enabled,
-                                game: c.power_plan_game.clone(),
-                                idle: c.power_plan_idle.clone(),
-                            };
+                            let mut s = plan_settings(c, false);
                             if self.power_plan.ui(ui, &mut s) {
                                 c.power_plan_enabled = s.enabled;
                                 c.power_plan_game = s.game;
@@ -1741,7 +1739,49 @@ impl eframe::App for App {
                                 c.save();
                             }
                         }
-                        _ => self.tune.ui(ui, self.elevated),
+                        _ => {
+                            let (elevated, c, plan) = (self.elevated, &mut self.fans.config, &self.power_plan);
+                            self.tune.ui(ui, elevated, &mut |ui| {
+                                // Rdzeń obsługujący kartę graficzną nie zasypia w trakcie gry.
+                                let (game, cpu, error) = plan.awake();
+                                ui.horizontal_wrapped(|ui| {
+                                    let label = crate::i18n::tr(
+                                        "W trakcie gry podtrzymuj rdzeń procesora obsługujący kartę graficzną",
+                                        "While a game runs, keep the processor core that serves the graphics card awake",
+                                    );
+                                    let hover = crate::i18n::tr(
+                                        "Sterownik karty graficznej wykonuje swoje procedury DPC na jednym rdzeniu procesora. Gdy ten rdzeń zasypia między przerwaniami, po wybudzeniu działa wolniej i te same procedury trwają kilka razy dłużej. Po uruchomieniu gry program sprawdza, który to rdzeń (2 s, wymaga administratora), i uruchamia na nim pustą pętlę o najniższym priorytecie, dopóki gra działa. Gra i inne programy mają przed nią pierwszeństwo. Koszt: ten jeden rdzeń pokazuje 100 % użycia i pobiera więcej energii. W pomiarach na i7-13850HX z RTX 5070 najdłuższe DPC sterownika pod obciążeniem spadło z 229-280 µs do 113-144 µs. Sprawdź u siebie na stronie DPC.",
+                                        "The graphics driver runs its DPC routines on one processor core. When that core sleeps between interrupts, it runs slower after waking and the same routines take several times longer. When a game starts, the program finds that core (2 s, needs administrator rights) and runs an empty loop on it at the lowest priority while the game runs. The game and other programs take precedence over it. Cost: that one core shows 100 % usage and draws more power. Measured on an i7-13850HX with an RTX 5070, the driver's longest DPC under load fell from 229-280 µs to 113-144 µs. Check on your PC on the DPC page.",
+                                    );
+                                    if ui.checkbox(&mut c.gpu_core_awake, label).on_hover_text(hover).changed() {
+                                        c.save();
+                                        plan.set(plan_settings(c, false));
+                                    }
+                                    if c.gpu_core_awake {
+                                        let (text, color) = match (&game, cpu, &error) {
+                                            (Some(g), Some(cpu), _) => (
+                                                crate::trf!("aktywne: {g}, rdzeń {cpu}", "active: {g}, core {cpu}"),
+                                                theme::ok(),
+                                            ),
+                                            (Some(_), None, Some(e)) => (e.clone(), theme::warn()),
+                                            (Some(g), None, None) => {
+                                                (crate::trf!("{g}: szukanie rdzenia...", "{g}: finding the core..."), muted())
+                                            }
+                                            (None, ..) if !elevated => (
+                                                crate::i18n::tr("wymaga administratora", "needs administrator rights").to_owned(),
+                                                theme::warn(),
+                                            ),
+                                            (None, ..) => (
+                                                crate::i18n::tr("czeka na grę", "waiting for a game").to_owned(),
+                                                muted(),
+                                            ),
+                                        };
+                                        ui.label(RichText::new(text).size(12.5).color(color));
+                                    }
+                                });
+                                ui.add_space(6.0);
+                            });
+                        }
                     }
                 }
                 Tab::Rgb => self.rgb.ui(ui, &mut self.fans.config, self.elevated),
@@ -1928,4 +1968,15 @@ where
         .name(name.into())
         .spawn(f)
         .expect("nie udało się uruchomić wątku")
+}
+
+/// Ustawienia planu zasilania i podtrzymywania rdzenia z pliku ustawień
+/// (`demo` - nic nie trafia do systemu).
+fn plan_settings(c: &config::Config, demo: bool) -> power_plan::Settings {
+    power_plan::Settings {
+        enabled: c.power_plan_enabled && !demo,
+        game: c.power_plan_game.clone(),
+        idle: c.power_plan_idle.clone(),
+        keep_awake: c.gpu_core_awake && !demo,
+    }
 }

@@ -59,6 +59,8 @@ pub struct Collector {
     pub hard_faults: u64,
     /// Procedury dłuższe niż 1 ms.
     pub over_1ms: u64,
+    /// Liczba wywołań procedury na danym procesorze logicznym.
+    cpus: HashMap<(u64, u16), u32>,
 }
 
 impl Collector {
@@ -72,6 +74,32 @@ impl Collector {
         }
         self.routines.entry((kind, routine)).or_default().add(us);
     }
+
+    pub fn add_cpu(&mut self, routine: u64, cpu: u16) {
+        *self.cpus.entry((routine, cpu)).or_default() += 1;
+    }
+}
+
+/// Sterowniki kart graficznych (małymi literami).
+const GPU_DRIVERS: [&str; 7] =
+    ["nvlddmkm.sys", "amdkmdag.sys", "atikmdag.sys", "atikmpag.sys", "igdkmd64.sys", "igdkmdn64.sys", "igdkmdnd64.sys"];
+
+/// Procesor logiczny, na którym wykonuje się najwięcej DPC sterownika karty
+/// graficznej (przy kilku kartach - tej z największą liczbą DPC).
+pub fn gpu_cpu(c: &Collector, modules: &[(u64, String)]) -> Option<u16> {
+    let mut by: HashMap<(String, u16), u64> = HashMap::new();
+    for ((routine, cpu), n) in &c.cpus {
+        let driver = driver_of(modules, *routine).to_lowercase();
+        if GPU_DRIVERS.contains(&driver.as_str()) {
+            *by.entry((driver, *cpu)).or_default() += *n as u64;
+        }
+    }
+    let mut totals: HashMap<&str, u64> = HashMap::new();
+    for ((driver, _), n) in &by {
+        *totals.entry(driver.as_str()).or_default() += n;
+    }
+    let top = totals.into_iter().max_by_key(|(d, n)| (*n, d.to_string()))?.0.to_owned();
+    by.into_iter().filter(|((d, _), _)| *d == top).max_by_key(|((_, cpu), n)| (*n, u16::MAX - *cpu)).map(|((_, cpu), _)| cpu)
 }
 
 /// Wiersz wyniku: sterownik z czasami DPC i ISR.
@@ -186,8 +214,17 @@ mod sys {
     const OP_DPC: u8 = 68;
     const OP_TIMER_DPC: u8 = 69;
     const OP_HARD_FAULT: u8 = 32;
-    const NAME: &str = "TuneCenterDpc";
-    const SESSION: GUID = GUID::from_u128(0x7D3C1B5A_41E2_4C8E_9A57_54756E654350);
+    /// Sesja śledzenia: nazwa i identyfikator. Osobna dla analizatora i dla
+    /// wykrywania rdzenia karty, żeby jedno nie przerywało drugiego.
+    #[derive(Clone, Copy)]
+    pub struct Session {
+        name: &'static str,
+        guid: GUID,
+    }
+    pub const ANALYZER: Session =
+        Session { name: "TuneCenterDpc", guid: GUID::from_u128(0x7D3C1B5A_41E2_4C8E_9A57_54756E654350) };
+    pub const CORE: Session =
+        Session { name: "TuneCenterDpcCore", guid: GUID::from_u128(0x7D3C1B5A_41E2_4C8E_9A57_54756E654352) };
     const ERROR_ALREADY_EXISTS: u32 = 183;
 
     #[link(name = "kernel32")]
@@ -201,6 +238,7 @@ mod sys {
         fn WaitForSingleObject(handle: isize, ms: u32) -> u32;
         fn GetCurrentThread() -> isize;
         fn SetThreadPriority(thread: isize, priority: i32) -> i32;
+        fn SetThreadAffinityMask(thread: isize, mask: usize) -> usize;
         fn CloseHandle(handle: isize) -> i32;
     }
 
@@ -245,11 +283,11 @@ mod sys {
         name: [u16; 128],
     }
 
-    fn props() -> Props {
+    fn props(s: Session) -> Props {
         let mut props = Props { p: EVENT_TRACE_PROPERTIES::default(), name: [0; 128] };
         props.p.Wnode.BufferSize = size_of::<Props>() as u32;
         props.p.Wnode.Flags = WNODE_FLAG_TRACED_GUID;
-        props.p.Wnode.Guid = SESSION;
+        props.p.Wnode.Guid = s.guid;
         // Znaczniki czasu z licznika wydajności - jak czas wejścia w zdarzeniach.
         props.p.Wnode.ClientContext = 1;
         // Własna sesja systemowa (Windows 8+), obok "NT Kernel Logger" innych programów.
@@ -297,36 +335,41 @@ mod sys {
         let initial = i64::from_le_bytes(data[..8].try_into().unwrap());
         let routine = u64::from_le_bytes(data[8..16].try_into().unwrap());
         let us = (r.EventHeader.TimeStamp - initial) as f64 * ctx.us_per_tick;
+        let cpu = unsafe { r.BufferContext.Anonymous.ProcessorIndex };
         if let Ok(mut c) = ctx.collector.lock() {
             c.add(kind, routine, us);
+            if kind == Kind::Dpc {
+                c.add_cpu(routine, cpu);
+            }
         }
     }
 
-    fn stop_session(handle: CONTROLTRACE_HANDLE) {
-        let mut p = props();
+    fn stop_session(handle: CONTROLTRACE_HANDLE, s: Session) {
+        let mut p = props(s);
         unsafe {
-            let _ = ControlTraceW(handle, &HSTRING::from(NAME), &mut p.p, EVENT_TRACE_CONTROL_STOP);
+            let _ = ControlTraceW(handle, &HSTRING::from(s.name), &mut p.p, EVENT_TRACE_CONTROL_STOP);
         }
     }
 
     /// Działający pomiar.
     pub struct Trace {
         handle: CONTROLTRACE_HANDLE,
+        session: Session,
         context: Arc<Context>,
         consumer: Option<std::thread::JoinHandle<()>>,
     }
 
     impl Trace {
-        pub fn start() -> Result<Self, String> {
+        pub fn start(session: Session) -> Result<Self, String> {
             let context = Arc::new(Context { collector: Mutex::new(Collector::default()), us_per_tick: 1e6 / qpc_freq() });
-            let name = HSTRING::from(NAME);
+            let name = HSTRING::from(session.name);
             let mut handle = CONTROLTRACE_HANDLE::default();
-            let mut p = props();
+            let mut p = props(session);
             let mut code = unsafe { StartTraceW(&mut handle, &name, &mut p.p) }.0;
             if code == ERROR_ALREADY_EXISTS {
                 // Sesja po poprzednim uruchomieniu programu (awaria) - zamykamy ją.
-                stop_session(CONTROLTRACE_HANDLE::default());
-                p = props();
+                stop_session(CONTROLTRACE_HANDLE::default(), session);
+                p = props(session);
                 code = unsafe { StartTraceW(&mut handle, &name, &mut p.p) }.0;
             }
             match code {
@@ -338,7 +381,7 @@ mod sys {
             let keep = context.clone();
             let consumer = crate::spawn("dpc-trace", move || {
                 let _keep = keep;
-                let mut name: Vec<u16> = NAME.encode_utf16().chain([0]).collect();
+                let mut name: Vec<u16> = session.name.encode_utf16().chain([0]).collect();
                 let mut log = EVENT_TRACE_LOGFILEW { LoggerName: PWSTR(name.as_mut_ptr()), ..Default::default() };
                 log.Anonymous1.ProcessTraceMode =
                     PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD | PROCESS_TRACE_MODE_RAW_TIMESTAMP;
@@ -352,7 +395,7 @@ mod sys {
                     }
                 }
             });
-            Ok(Self { handle, context, consumer: Some(consumer) })
+            Ok(Self { handle, session, context, consumer: Some(consumer) })
         }
 
         /// Kończy pomiar i oddaje zebrane liczniki.
@@ -363,7 +406,7 @@ mod sys {
 
         fn stop(&mut self) {
             if let Some(consumer) = self.consumer.take() {
-                stop_session(self.handle);
+                stop_session(self.handle, self.session);
                 let _ = consumer.join();
             }
         }
@@ -372,6 +415,26 @@ mod sys {
     impl Drop for Trace {
         fn drop(&mut self) {
             self.stop();
+        }
+    }
+
+    /// Pusta pętla na procesorze `cpu` (pierwsze 64 procesory logiczne), o
+    /// najniższym priorytecie, do ustawienia `stop`.
+    pub fn spin(cpu: u16, stop: &AtomicBool) {
+        const IDLE: i32 = -15;
+        if cpu >= 64 {
+            return;
+        }
+        unsafe {
+            if SetThreadAffinityMask(GetCurrentThread(), 1usize << cpu) == 0 {
+                return;
+            }
+            SetThreadPriority(GetCurrentThread(), IDLE);
+        }
+        while !stop.load(Ordering::Relaxed) {
+            for _ in 0..4096 {
+                std::hint::spin_loop();
+            }
         }
     }
 
@@ -415,6 +478,43 @@ mod sys {
     }
 }
 
+/// Procesor logiczny obsługujący DPC karty graficznej: krótkie śledzenie
+/// (2 s, administrator) we własnej sesji.
+#[cfg(windows)]
+pub fn detect_gpu_cpu() -> Result<u16, String> {
+    let modules = sys::modules();
+    let trace = sys::Trace::start(sys::CORE)?;
+    std::thread::sleep(Duration::from_secs(2));
+    let collector = trace.finish();
+    gpu_cpu(&collector, &modules).ok_or_else(|| "brak DPC sterownika karty / no GPU driver DPCs".to_owned())
+}
+
+/// Wątek, który nie pozwala zasnąć jednemu procesorowi logicznemu: pusta
+/// pętla o najniższym priorytecie, przypięta do tego procesora. Gra i każdy
+/// inny wątek mają przed nią pierwszeństwo, a DPC i tak ją przerywają.
+#[cfg(windows)]
+pub struct KeepAwake {
+    stop: Arc<AtomicBool>,
+    pub cpu: u16,
+}
+
+#[cfg(windows)]
+impl KeepAwake {
+    pub fn start(cpu: u16) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let s = stop.clone();
+        crate::spawn("core-awake", move || sys::spin(cpu, &s));
+        Self { stop, cpu }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for KeepAwake {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
 /// Stan analizatora dla interfejsu.
 #[derive(Clone, Default)]
 pub struct State {
@@ -431,11 +531,13 @@ pub struct Dpc {
     stop: Arc<AtomicBool>,
     /// Wybrany czas pomiaru (s).
     pub secs: u64,
+    /// Rdzenie przerwań karty graficznej i dźwięku.
+    pub irq: IrqPanel,
 }
 
 impl Dpc {
     pub fn new() -> Self {
-        Self { shared: Arc::default(), stop: Arc::default(), secs: 30 }
+        Self { shared: Arc::default(), stop: Arc::default(), secs: 30, irq: IrqPanel::default() }
     }
 
     pub fn state(&self) -> State {
@@ -480,11 +582,56 @@ impl Dpc {
     pub fn start(&self, _: impl Fn() + Send + 'static) {}
 }
 
+/// Karta "Rdzenie przerwań" na stronie DPC: urządzenia, zmierzony rdzeń karty
+/// graficznej i komunikat ostatniej operacji.
+#[derive(Default)]
+pub struct IrqPanel {
+    pub devices: Vec<crate::irq::Device>,
+    scanned: bool,
+    /// Rdzeń karty graficznej z pomiaru (pewniejszy niż wpis w rejestrze).
+    measured: Arc<Mutex<Option<u16>>>,
+    /// Komunikat i czy to błąd.
+    pub message: Option<(String, bool)>,
+}
+
+impl IrqPanel {
+    /// Odczyt urządzeń (z rejestru) i, z uprawnieniami administratora, pomiar
+    /// rdzenia karty graficznej w tle (2 s).
+    pub fn rescan(&mut self, elevated: bool, repaint: impl Fn() + Send + 'static) {
+        self.scanned = true;
+        self.devices = crate::irq::scan();
+        #[cfg(windows)]
+        if elevated {
+            let measured = self.measured.clone();
+            crate::spawn("irq-gpu-core", move || {
+                if let Ok(cpu) = detect_gpu_cpu() {
+                    if let Ok(mut m) = measured.lock() {
+                        *m = Some(cpu);
+                    }
+                    repaint();
+                }
+            });
+        }
+        #[cfg(not(windows))]
+        let _ = (elevated, repaint);
+    }
+
+    pub fn ensure_scanned(&mut self, elevated: bool, repaint: impl Fn() + Send + 'static) {
+        if !self.scanned {
+            self.rescan(elevated, repaint);
+        }
+    }
+
+    pub fn measured(&self) -> Option<u16> {
+        self.measured.lock().ok().and_then(|m| *m)
+    }
+}
+
 /// Jeden pomiar: śledzenie i test wybudzania przez `secs` sekund albo do Stop.
 #[cfg(windows)]
 pub fn measure(secs: u64, stop: &Arc<AtomicBool>, tick: &dyn Fn()) -> Result<Report, String> {
     let modules = sys::modules();
-    let trace = sys::Trace::start()?;
+    let trace = sys::Trace::start(sys::ANALYZER)?;
     let started = Instant::now();
     let wake_stop = Arc::new(AtomicBool::new(false));
     let ws = wake_stop.clone();
@@ -544,6 +691,23 @@ mod tests {
     }
 
     #[test]
+    fn gpu_cpu_is_where_its_driver_runs() {
+        let mut c = Collector::default();
+        for _ in 0..50 {
+            c.add_cpu(0x5100, 1);
+        }
+        for _ in 0..5 {
+            c.add_cpu(0x5200, 9);
+        }
+        // Inny sterownik, choć częstszy, nie jest brany pod uwagę.
+        for _ in 0..900 {
+            c.add_cpu(0x9100, 4);
+        }
+        assert_eq!(gpu_cpu(&c, &modules()), Some(1));
+        assert_eq!(gpu_cpu(&Collector::default(), &modules()), None);
+    }
+
+    #[test]
     fn verdict_thresholds() {
         let r = |dpc: f64, wake: f64| Report { dpc_max_us: dpc, wake_max_us: wake, ..Default::default() };
         assert_eq!(r(120.0, 300.0).verdict(), Verdict::Good);
@@ -571,5 +735,28 @@ mod tests {
         }
         assert!(r.rows.iter().map(|r| r.dpc.count).sum::<u64>() > 100, "no DPC events");
         assert!(r.rows.iter().any(|r| r.driver.to_lowercase().ends_with(".sys") || r.driver.to_lowercase().ends_with(".exe")));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod awake_tests {
+    use super::*;
+
+    /// Wykrycie rdzenia karty i wpływ podtrzymywania na DPC jej sterownika
+    /// (administrator): `cargo test core_awake_live -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn core_awake_live() {
+        let cpu = detect_gpu_cpu().expect("gpu cpu");
+        eprintln!("GPU DPC core: {cpu}");
+        let gpu = |r: &Report| r.rows.iter().find(|x| GPU_DRIVERS.contains(&x.driver.to_lowercase().as_str())).cloned().unwrap_or_default();
+        let before = gpu(&measure(15, &Arc::default(), &|| {}).unwrap());
+        let keep = KeepAwake::start(cpu);
+        std::thread::sleep(Duration::from_secs(1));
+        let during = gpu(&measure(15, &Arc::default(), &|| {}).unwrap());
+        drop(keep);
+        eprintln!("without: {} max {:.0} us avg {:.0} us ({} DPC)", before.driver, before.dpc.max_us, before.dpc.avg_us(), before.dpc.count);
+        eprintln!("with:    {} max {:.0} us avg {:.0} us ({} DPC)", during.driver, during.dpc.max_us, during.dpc.avg_us(), during.dpc.count);
+        assert!(during.dpc.count > 100);
     }
 }

@@ -89,6 +89,12 @@ pub struct Config {
     pub power_plan_game: String,
     #[serde(default)]
     pub power_plan_idle: String,
+    /// W trakcie gry nie pozwalać zasnąć rdzeniowi obsługującemu kartę graficzną.
+    #[serde(default)]
+    pub gpu_core_awake: bool,
+    /// Kopie przypisań przerwań sprzed przeniesienia dźwięku na inny rdzeń.
+    #[serde(default)]
+    pub irq_backup: Vec<crate::irq::Backup>,
     /// Sprawdzanie przy starcie, czy jest nowsza wersja programu.
     #[serde(default = "yes")]
     pub check_updates: bool,
@@ -168,6 +174,8 @@ impl Default for Config {
             power_plan_enabled: false,
             power_plan_game: String::new(),
             power_plan_idle: String::new(),
+            gpu_core_awake: false,
+            irq_backup: Vec::new(),
             check_updates: true,
             nv_driver_check: true,
             rgb: crate::rgb::Config::default(),
