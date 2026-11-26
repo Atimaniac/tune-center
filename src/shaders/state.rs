@@ -158,6 +158,7 @@ mod tests {
             scskiller_recorder: false,
             encrypted: false,
             ue_pso_cache: false,
+            ue_maps: false,
             reader: None,
             reader_exe: None,
         };

@@ -47,6 +47,8 @@ pub fn tr_dyn(pl: &'static str) -> &'static str {
     match pl {
         "Procesor" => "Processor",
         "Karta graficzna" => "Graphics card",
+        "Zasilacz" => "Power supply",
+        "Bateria" => "Battery",
         "Płyta główna" => "Motherboard",
         "Dysk" => "Drive",
         "Pamięć RAM" => "RAM",

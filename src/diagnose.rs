@@ -402,6 +402,16 @@ fn system(r: &mut Report, live: &Live, hw: &mut Vec<String>) {
     }
 }
 
+/// Błąd, który bez uprawnień administratora jest oczekiwany: wtedy ostrzeżenie
+/// z podpowiedzią, z uprawnieniami - błąd.
+fn no_admin(r: &mut Report, line: String) {
+    if crate::elevation::is_elevated() {
+        r.fail(line);
+    } else {
+        r.warn(format!("{line} - needs administrator rights (run Tune Center as administrator)"));
+    }
+}
+
 fn cpu(r: &mut Report, hw: &mut Vec<String>) {
     use crate::cpu::{amd, intel, pawnio};
     r.section("CPU");
@@ -427,7 +437,7 @@ fn cpu(r: &mut Report, hw: &mut Vec<String>) {
                 io
             }
             Err(e) => {
-                r.fail(format!("PawnIO IntelMSR: {e}"));
+                no_admin(r, format!("PawnIO IntelMSR: {e}"));
                 return;
             }
         };
@@ -457,11 +467,13 @@ fn cpu(r: &mut Report, hw: &mut Vec<String>) {
         let state = intel::read_state(&mut io, info.hybrid);
         r.result("power limits", &state.limits, |v| format!("{v:?}"));
         for (domain, v) in &state.voltages {
-            r.result(
-                &format!("voltage offset {}", domain.label_for(info.hybrid)),
-                v,
-                |v| format!("{v:?}"),
-            );
+            let what = format!("voltage offset {}", domain.label_for(info.hybrid));
+            match v {
+                Ok(v) => r.ok(format!("{what}: {v:?}")),
+                // Procesor zablokował strojenie napięcia (np. Core Ultra 200S albo
+                // blokada w BIOS-ie) - to nie błąd programu.
+                Err(e) => r.info(format!("{what}: not available - {e}")),
+            }
         }
         match &state.iccmax_a {
             Some(v) => r.result("Core IccMax", v, |a| format!("{a} A")),
@@ -488,7 +500,7 @@ fn cpu(r: &mut Report, hw: &mut Vec<String>) {
                     d
                 }
                 Err(e) => {
-                    r.fail(format!("PawnIO RyzenSMU: {e}"));
+                    no_admin(r, format!("PawnIO RyzenSMU: {e}"));
                     return;
                 }
             };
@@ -718,7 +730,21 @@ fn sensors(r: &mut Report, live: &Live) {
         r.info(format!("{k}: {t} temperatures, {f} controllable fans"));
     }
     if !s.temps.iter().any(|t| t.kind == "Cpu" && t.value.is_some()) {
-        r.warn("no CPU temperature");
+        if s.admin {
+            r.warn("no CPU temperature");
+        } else {
+            r.info("no CPU temperature - needs administrator rights");
+        }
+    }
+    // Temperatury płyty głównej z wartościami (puste = układ nie odczytany).
+    for t in s.temps.iter().filter(|t| t.kind == "SuperIO" || t.kind == "Motherboard") {
+        r.info(format!("board temperature {} / {}: {:?}", t.hw, t.name, t.value));
+    }
+    let board: Vec<&str> = s.temps.iter().filter(|t| t.kind == "SuperIO").map(|t| t.hw.as_str()).collect();
+    for hw in board.iter().copied().collect::<std::collections::BTreeSet<_>>() {
+        if !s.temps.iter().any(|t| t.hw == hw && t.value.is_some()) {
+            r.warn(format!("{hw}: the sensor library cannot read this chip (vendor firmware) - no motherboard temperatures from it"));
+        }
     }
     let mut read_only: Vec<&str> = s
         .fans
@@ -733,7 +759,11 @@ fn sensors(r: &mut Report, live: &Live) {
         ));
     }
     if !kinds.keys().any(|k| k.starts_with("SuperIO")) {
-        r.warn("no Super I/O chip detected - motherboard fans and temperatures unavailable");
+        if s.admin {
+            r.warn("no Super I/O chip detected - motherboard fans and temperatures unavailable");
+        } else {
+            r.info("no Super I/O chip - reading it needs administrator rights");
+        }
     }
     for f in &s.fans {
         let line = format!(
@@ -899,6 +929,9 @@ fn tune(r: &mut Report) {
             State::Optimized(v) => r.ok(format!("{}: ON - {v}", item.key)),
             State::Default(v) => r.ok(format!("{}: OFF - {v}", item.key)),
             State::Unsupported(v) => r.info(format!("{}: n/a - {v}", item.key)),
+            State::Unknown(v) if !crate::elevation::is_elevated() => {
+                r.info(format!("{}: not read - needs administrator rights ({v})", item.key))
+            }
             State::Unknown(v) => r.fail(format!("{}: read error - {v}", item.key)),
         }
     }

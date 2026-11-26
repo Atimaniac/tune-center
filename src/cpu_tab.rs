@@ -410,6 +410,21 @@ impl IntelTab {
             ui.set_width(width);
             ui.vertical(|ui| {
                 title(ui, Icon::Gauge, crate::i18n::tr("Offset napięcia (Core Voltage Offset)", "Core Voltage Offset"));
+                // Procesor odrzuca odczyt wszystkich domen: strojenie napięcia jest
+                // zablokowane (np. Core Ultra 200S albo blokada w BIOS-ie).
+                let locked = state.voltages.iter().all(|(_, v)| v.is_err());
+                if locked {
+                    let reason = state.voltages.iter().find_map(|(_, v)| v.as_ref().err()).cloned().unwrap_or_default();
+                    note(
+                        ui,
+                        crate::i18n::tr(
+                            "Ten procesor nie pozwala zmieniać offsetu napięcia - strojenie napięcia jest zablokowane przez procesor (np. Intel Core Ultra 200S) albo w BIOS-ie płyty głównej.",
+                            "This processor doesn't allow changing the voltage offset - voltage tuning is locked by the processor (e.g. Intel Core Ultra 200S) or in the motherboard BIOS.",
+                        ),
+                    );
+                    ui.label(RichText::new(reason).small().color(theme::muted()));
+                    return;
+                }
                 egui::Grid::new("cpu_voltage").num_columns(3).spacing([14.0, 8.0]).show(ui, |ui| {
                     header_row(ui);
                     for (i, (domain, voltage)) in state.voltages.iter().enumerate() {

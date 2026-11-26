@@ -67,17 +67,27 @@ pub struct Detected {
 }
 
 /// Czytniki w kolejności sprawdzania.
-pub const KINDS: [&str; 7] = ["rage", "forza", "santamonica", "northlight", "luminous", "gow1", "frostbite"];
+pub const KINDS: [&str; 15] = [
+    "rage", "forza", "santamonica", "northlight", "luminous", "gow1", "cryengine", "snowdrop", "nixxes", "stingray", "tank",
+    "zouna", "dawn", "frostbite", "unreal12",
+];
 
 /// Rozpoznanie gry przez czytniki: (rodzaj, wynik).
 pub fn detect(game: &Path) -> Option<(&'static str, Detected)> {
-    let tries: [(&'static str, fn(&Path) -> Option<Detected>); 7] = [
+    let tries: [(&'static str, fn(&Path) -> Option<Detected>); 14] = [
         ("rage", super::rage::detect),
         ("forza", super::forza::detect),
         ("santamonica", super::santamonica::detect),
         ("northlight", super::northlight::detect),
         ("luminous", super::luminous::detect),
         ("gow1", super::santamonica::detect_v1),
+        ("cryengine", super::cryengine::detect),
+        ("snowdrop", super::snowdrop::detect),
+        ("nixxes", super::nixxes::detect),
+        ("stingray", super::nixxes::detect_stingray),
+        ("tank", super::tank::detect),
+        ("zouna", super::zouna::detect),
+        ("dawn", super::dawn::detect),
         ("frostbite", super::frostbite::detect),
     ];
     tries.iter().find_map(|(k, f)| f(game).map(|d| (*k, d)))
@@ -85,7 +95,10 @@ pub fn detect(game: &Path) -> Option<(&'static str, Detected)> {
 
 /// Czy rodzaj to DirectX 12 (inaczej DirectX 11).
 pub fn is_dx12(kind: &str) -> bool {
-    matches!(kind, "rage" | "forza" | "santamonica" | "northlight")
+    matches!(
+        kind,
+        "rage" | "forza" | "santamonica" | "northlight" | "cryengine" | "snowdrop" | "nixxes" | "zouna" | "dawn" | "unreal12"
+    )
 }
 
 /// Shadery DirectX 12 rodzaju `kind`.
@@ -95,6 +108,12 @@ pub fn index12(kind: &str, game: &Path, say: &dyn Fn(String)) -> Result<Set12, S
         "forza" => super::forza::index(game, say),
         "santamonica" => super::santamonica::index(game, say),
         "northlight" => super::northlight::index(game, say),
+        "cryengine" => super::cryengine::index(game, say),
+        "snowdrop" => super::snowdrop::index(game, say),
+        "nixxes" => super::nixxes::index(game, say),
+        "zouna" => super::zouna::index(game, say),
+        "dawn" => super::dawn::index(game, say),
+        "unreal12" => super::ue_maps::index(game, say),
         other => Err(format!("nieznany rodzaj / unknown kind: {other}")),
     }
 }
@@ -109,6 +128,8 @@ pub fn for_each11(
     match kind {
         "luminous" => super::luminous::for_each_shader(game, progress, each),
         "gow1" => super::santamonica::for_each_shader_v1(game, progress, each),
+        "stingray" => super::nixxes::for_each_shader_stingray(game, progress, each),
+        "tank" => super::tank::for_each_shader(game, progress, each),
         "frostbite" => super::frostbite::for_each_shader(game, progress, each),
         other => Err(format!("nieznany rodzaj / unknown kind: {other}")),
     }

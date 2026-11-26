@@ -55,6 +55,11 @@ try
         IsControllerEnabled = true,
         IsStorageEnabled = true,
         IsMemoryEnabled = true,
+        // Zasilacze z USB (Corsair, NZXT, Seasonic...): temperatury i obroty
+        // wentylatora tylko do odczytu (sterowanie wyłączone niżej).
+        IsPsuEnabled = true,
+        // Bateria laptopa: tempo rozładowania = pobór całego komputera.
+        IsBatteryEnabled = true,
     };
     computer.Open();
 
@@ -120,6 +125,8 @@ void Emit(Computer computer, bool isAdmin)
     var fans = new List<object>();
     var speeds = new List<object>();
     var powers = new List<object>();
+    // Czy układ płyty głównej dał choć jedną temperaturę (patrz Acpi).
+    var boardTemp = false;
 
     var now = DateTime.UtcNow;
     foreach (var hw in AllHardware(computer))
@@ -139,6 +146,8 @@ void Emit(Computer computer, bool isAdmin)
         {
             if (s.SensorType == SensorType.Temperature)
             {
+                if ((hw.HardwareType is HardwareType.SuperIO or HardwareType.Motherboard) && Clean(s.Value) is not null)
+                    boardTemp = true;
                 temps.Add(new
                 {
                     id = s.Identifier.ToString(),
@@ -181,6 +190,8 @@ void Emit(Computer computer, bool isAdmin)
         foreach (var c in hw.Sensors)
         {
             if (c.SensorType != SensorType.Control || c.Control is null) continue;
+            // Wentylator zasilacza: tylko odczyt - jego chłodzeniem steruje zasilacz.
+            if (hw.HardwareType == HardwareType.Psu) continue;
 
             // Czujnik obrotów o tym samym indeksie na tym samym układzie.
             var fan = hw.Sensors.FirstOrDefault(
@@ -194,6 +205,24 @@ void Emit(Computer computer, bool isAdmin)
                 kind = hw.HardwareType.ToString(),
                 rpm = Clean(fan?.Value),
                 percent = Clean(c.Value),
+            });
+        }
+    }
+
+    // Układ czujników płyty, którego biblioteka nie odczytuje (np. NCT6683D z
+    // firmware producenta): temperatury stref termicznych ACPI z Windows, z
+    // wyraźnym źródłem "ACPI".
+    if (!boardTemp)
+    {
+        foreach (var (name, celsius) in Acpi.Zones(now))
+        {
+            temps.Add(new
+            {
+                id = "/acpi/" + name,
+                name = "ACPI " + name,
+                hw = "ACPI",
+                kind = "Motherboard",
+                value = (float?)celsius,
             });
         }
     }
@@ -220,7 +249,9 @@ static bool Handle(Computer computer, string line)
     if (parts[0] == "quit") return false;
     if (parts.Length < 2) return true;
 
+    // Wentylator zasilacza nie przyjmuje poleceń (tylko odczyt).
     var sensor = AllHardware(computer)
+        .Where(h => h.HardwareType != HardwareType.Psu)
         .SelectMany(h => h.Sensors)
         .FirstOrDefault(s => s.SensorType == SensorType.Control
                              && s.Identifier.ToString() == parts[1]);
@@ -238,6 +269,45 @@ static bool Handle(Computer computer, string line)
             break;
     }
     return true;
+}
+
+/// <summary>Strefy termiczne ACPI (licznik wydajności Windows, bez uprawnień
+/// administratora): nazwa i temperatura w °C, odczyt co 10 s. Odrzucane są
+/// wartości spoza 1..110 °C, a strefa pokazuje się dopiero, gdy jej wartość
+/// zmieni się o co najmniej 0,5 °C - wiele płyt podaje tu stałą atrapę z BIOS-u
+/// (np. 301 K = 27,9 °C), która nie jest pomiarem.</summary>
+static class Acpi
+{
+    static DateTime last = DateTime.MinValue;
+    static List<(string, float)> zones = new();
+    /// <summary>Pierwsza wartość strefy i czy już się zmieniła (żywy czujnik).</summary>
+    static readonly Dictionary<string, (float First, bool Live)> seen = new();
+
+    public static List<(string, float)> Zones(DateTime now)
+    {
+        if (now - last < TimeSpan.FromSeconds(10)) return zones;
+        last = now;
+        var list = new List<(string, float)>();
+        try
+        {
+            using var searcher = new System.Management.ManagementObjectSearcher(
+                @"root\CIMV2", "SELECT Name, Temperature FROM Win32_PerfFormattedData_Counters_ThermalZoneInformation");
+            foreach (var o in searcher.Get())
+            {
+                var kelvin = Convert.ToDouble(o["Temperature"], CultureInfo.InvariantCulture);
+                var celsius = (float)Math.Round(kelvin - 273.15, 1);
+                var name = (o["Name"] as string ?? "TZ").Split('.').Last();
+                if (celsius is <= 1f or >= 110f) continue;
+                var s = seen.TryGetValue(name, out var v) ? v : (celsius, false);
+                if (Math.Abs(celsius - s.Item1) >= 0.5f) s = (s.Item1, true);
+                seen[name] = s;
+                if (s.Item2) list.Add((name, celsius));
+            }
+        }
+        catch { /* brak licznika albo WMI - bez stref */ }
+        zones = list;
+        return zones;
+    }
 }
 
 static class NativeMethods

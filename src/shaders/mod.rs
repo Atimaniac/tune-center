@@ -34,6 +34,13 @@ pub mod santamonica;
 pub mod northlight;
 pub mod luminous;
 pub mod frostbite;
+pub mod cryengine;
+pub mod snowdrop;
+pub mod nixxes;
+pub mod tank;
+pub mod zouna;
+pub mod dawn;
+pub mod ue_maps;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -292,8 +299,8 @@ pub fn plan(info: &Info) -> (&'static str, bool) {
         ),
         Engine::Unreal if has_pak(info) => (
             tr(
-                "DirectX 11: shadery SM5 z paczki gry; DX12: potoki z pamięci potoków gry, jeśli ją ma",
-                "DirectX 11: SM5 shaders from the game package; DX12: pipelines from the game's pipeline cache, if it has one",
+                "DirectX 11: shadery SM5 z paczki gry; DX12: potoki z pamięci potoków gry albo z map shaderów SM6",
+                "DirectX 11: SM5 shaders from the game package; DX12: pipelines from the game's pipeline cache or its SM6 shader maps",
             ),
             true,
         ),
@@ -1062,7 +1069,7 @@ fn api_options(info: &Info) -> ApiOptions {
         ),
         Engine::Unreal if !info.encrypted && (has_pak(info) || has_utoc(info)) => (
             Ok(()),
-            if info.ue_pso_cache {
+            if info.ue_pso_cache || info.ue_maps {
                 Ok(())
             } else {
                 Err(tr(
@@ -1208,6 +1215,16 @@ fn job_for(e: &Entry, api: Api) -> Result<Option<(String, warm::Job, String)>, &
             "Tune Center reads the game's DirectX 12 pipeline cache (*.upipelinecache from the package or the Saved folder) and the SM6 shaders from its archives, builds root signatures as the engine does, and the graphics driver compiles the pipelines under the name {exe} - with the game's state (formats, input layout, blending), so on AMD and Intel too. The game must be closed."
         );
         (exe, warm::Job::UnrealDx12 { game: e.game.dir.clone() }, about)
+    } else if !d3d11 && e.info.engine == Engine::Unreal && e.info.ue_maps {
+        let exe = warm::unreal_game_exe(&e.game.dir).ok_or(tr(
+            "Nie znaleziono pliku *-Shipping.exe gry.",
+            "Game *-Shipping.exe not found.",
+        ))?;
+        let about = crate::trf!(
+            "Gra nie ma pamięci potoków DirectX 12, więc Tune Center składa potoki z map shaderów SM6 z jej archiwów: łączy shadery wierzchołków i pikseli tak jak potok D3D12, buduje root signature tak jak silnik tej wersji, a sterownik karty kompiluje je pod nazwą {exe}. Bez stanu gry (formaty, mieszanie) - pełny efekt na kartach NVIDIA. Gra musi być zamknięta.",
+            "The game has no DirectX 12 pipeline cache, so Tune Center builds pipelines from the SM6 shader maps in its archives: pairs vertex and pixel shaders as a D3D12 pipeline does, builds root signatures as this engine version does, and the graphics driver compiles them under the name {exe}. Without the game's state (formats, blending) - full effect on NVIDIA cards. The game must be closed."
+        );
+        (exe, warm::Job::Reader { kind: "unreal12".into(), game: e.game.dir.clone() }, about)
     } else if d3d11 && e.info.engine == Engine::Unreal && !has_pak(&e.info) {
         let exe = warm::unreal_game_exe(&e.game.dir).ok_or(tr(
             "Nie znaleziono pliku *-Shipping.exe gry.",

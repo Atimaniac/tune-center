@@ -20,7 +20,7 @@
 ; aktualizacji program jest uruchamiany ponownie.
 
 #define AppName "Tune Center"
-#define AppVersion "0.40.2"
+#define AppVersion "0.41.0"
 #define AppGuid "2F9C1B7A-4D3E-4E8B-B1C6-7A5D0E9F3C42"
 #define AppExe "tunecenter.exe"
 
@@ -64,6 +64,12 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 [CustomMessages]
 pl.TaskPawnIO=Zainstaluj sterownik PawnIO (opcjonalny: temperatura i moc procesora, wentylatory plyty glownej, zakladka CPU)
 en.TaskPawnIO=Install the PawnIO driver (optional: CPU temperature and power, motherboard fans, CPU tab)
+pl.TaskPawnIOUpdate=Zaktualizuj sterownik PawnIO (zainstalowana wersja jest starsza - nowsza obsluguje wiecej sprzetu)
+en.TaskPawnIOUpdate=Update the PawnIO driver (the installed version is older - the newer one supports more hardware)
+pl.GroupUpdate=Aktualizacje skladnikow (pobierane z internetu):
+en.GroupUpdate=Component updates (downloaded from the internet):
+pl.StatusPawnIOUpdate=Aktualizowanie sterownika PawnIO...
+en.StatusPawnIOUpdate=Updating the PawnIO driver...
 pl.GroupMissing=Brakujace skladniki (pobierane z internetu):
 en.GroupMissing=Missing components (downloaded from the internet):
 pl.TaskDesktop=Utworz skrot na pulpicie
@@ -103,6 +109,7 @@ en.MissingComponents=The components below were not detected. Without .NET 11, se
 
 [Tasks]
 Name: "pawnio"; Description: "{cm:TaskPawnIO}"; GroupDescription: "{cm:GroupMissing}"; Check: NeedsPawnIO
+Name: "pawnioupdate"; Description: "{cm:TaskPawnIOUpdate}"; GroupDescription: "{cm:GroupUpdate}"; Check: OldPawnIO
 Name: "desktopicon"; Description: "{cm:TaskDesktop}"; GroupDescription: "{cm:GroupShortcuts}"; Flags: unchecked
 
 [Files]
@@ -123,6 +130,7 @@ Root: HKLM; Subkey: "SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags
 ; przy aktualizacji Inno Setup pamieta wybor zadan z poprzedniej instalacji).
 Filename: "{cmd}"; Parameters: "/C winget install --id Microsoft.DotNet.Runtime.11 --exact --silent --accept-package-agreements --accept-source-agreements"; StatusMsg: "{cm:StatusDotNet}"; Check: NeedsDotNet; Flags: waituntilterminated runhidden
 Filename: "{cmd}"; Parameters: "/C winget install --id namazso.PawnIO --exact --silent --accept-package-agreements --accept-source-agreements"; StatusMsg: "{cm:StatusPawnIO}"; Tasks: pawnio; Flags: waituntilterminated
+Filename: "{cmd}"; Parameters: "/C winget upgrade --id namazso.PawnIO --exact --silent --accept-package-agreements --accept-source-agreements"; StatusMsg: "{cm:StatusPawnIOUpdate}"; Tasks: pawnioupdate; Flags: waituntilterminated
 Filename: "{app}\{#AppExe}"; Description: "{cm:RunApp}"; Flags: nowait postinstall skipifsilent
 ; Po cichej aktualizacji (przycisk "Zainstaluj" w programie) program wraca sam.
 Filename: "{app}\{#AppExe}"; Flags: nowait; Check: SilentUpgrade
@@ -269,6 +277,50 @@ function NeedsPawnIO: Boolean;
 begin
   Result := not (RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\PawnIO')
     or DirExists(ExpandConstant('{commonpf64}\PawnIO')));
+end;
+
+{ Liczba z wersji "a.b.c.d" na pozycji Index (0 = pierwsza); brak = 0. }
+function VersionPart(V: String; Index: Integer): Integer;
+var
+  I, P: Integer;
+begin
+  for I := 1 to Index do
+  begin
+    P := Pos('.', V);
+    if P = 0 then
+    begin
+      Result := 0;
+      Exit;
+    end;
+    Delete(V, 1, P);
+  end;
+  P := Pos('.', V);
+  if P > 0 then
+    V := Copy(V, 1, P - 1);
+  Result := StrToIntDef(V, 0);
+end;
+
+{ Zainstalowany PawnIO starszy niz 2.2.0 (wersja z wpisu deinstalacji). }
+function OldPawnIO: Boolean;
+var
+  V: String;
+  I, A, B: Integer;
+begin
+  Result := False;
+  if NeedsPawnIO then
+    Exit;
+  if not RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO', 'DisplayVersion', V) then
+    Exit;
+  for I := 0 to 2 do
+  begin
+    A := VersionPart(V, I);
+    B := VersionPart('2.2.0', I);
+    if A <> B then
+    begin
+      Result := A < B;
+      Exit;
+    end;
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

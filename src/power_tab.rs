@@ -108,21 +108,25 @@ pub fn ui(
         "Karta graficzna" => limits.gpu_w,
         _ => None,
     };
-    let mut tiles: Vec<Tile> = rows
-        .iter()
-        .map(|r| Tile {
-            title: crate::i18n::tr_dyn(r.title).to_uppercase(),
-            hw: r.hw.clone(),
-            watts: r.watts,
-            avg_w: r.avg_w,
-            max_w: r.max_w,
-            wh: r.wh,
-            key: row_key(r),
-            limit: limit_of(r.title),
-        })
-        .collect();
+    let tile = |r: &crate::power::Row| Tile {
+        title: crate::i18n::tr_dyn(r.title).to_uppercase(),
+        hw: if r.system {
+            crate::trf!("{} - cały komputer", "{} - whole computer", r.hw)
+        } else {
+            r.hw.clone()
+        },
+        watts: r.watts,
+        avg_w: r.avg_w,
+        max_w: r.max_w,
+        wh: r.wh,
+        key: row_key(r),
+        limit: limit_of(r.title),
+    };
+    // Podzespoły, ich suma, potem pomiary całego komputera (zasilacz, bateria).
+    let mut tiles: Vec<Tile> = rows.iter().filter(|r| !r.system).map(tile).collect();
+    let system: Vec<Tile> = rows.iter().filter(|r| r.system).map(tile).collect();
     // Limit sumy tylko wtedy, gdy znamy limity wszystkich podzespołów.
-    let total_limit = rows.iter().map(|r| limit_of(r.title)).sum::<Option<f32>>();
+    let total_limit = rows.iter().filter(|r| !r.system).map(|r| limit_of(r.title)).sum::<Option<f32>>();
     tiles.push(Tile {
         title: crate::i18n::tr("RAZEM", "TOTAL").to_owned(),
         hw: crate::i18n::tr("procesor + karta graficzna", "CPU + graphics card").to_owned(),
@@ -133,6 +137,7 @@ pub fn ui(
         key: TOTAL_KEY.to_owned(),
         limit: total_limit,
     });
+    tiles.extend(system);
 
     theme::heading(
         ui,
@@ -166,7 +171,7 @@ pub fn ui(
         ui.add_space(8.0);
         theme::info(
             ui,
-            crate::i18n::tr("Wartości obejmują tylko procesor i kartę graficzną, a nie cały komputer. Licznik działa od uruchomienia programu, także gdy okno jest schowane. Plakietka pokazuje udział mocy w limicie: procesor - PL2 (Intel) lub PPT (AMD), karta - domyślny limit sterownika.", "Values cover only the CPU and graphics card, not the whole computer. The counter runs from program start, including while the window is hidden. The badge shows the share of the power limit: CPU - PL2 (Intel) or PPT (AMD), card - the driver's default limit."),
+            crate::i18n::tr("RAZEM obejmuje tylko procesor i kartę graficzną. Cały komputer pokazuje zasilacz z USB (Corsair HXi/RMi, MSI Ai) albo bateria laptopa podczas rozładowania - jeśli są. Licznik działa od uruchomienia programu, także gdy okno jest schowane. Plakietka pokazuje udział mocy w limicie: procesor - PL2 (Intel) lub PPT (AMD), karta - domyślny limit sterownika.", "TOTAL covers only the CPU and graphics card. The whole computer is shown by a USB power supply (Corsair HXi/RMi, MSI Ai) or a laptop battery while discharging - if present. The counter runs from program start, including while the window is hidden. The badge shows the share of the power limit: CPU - PL2 (Intel) or PPT (AMD), card - the driver's default limit."),
         );
         ui.add_space(8.0);
     });

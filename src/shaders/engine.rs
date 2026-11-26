@@ -74,6 +74,9 @@ pub struct Info {
     pub encrypted: bool,
     /// Unreal 5: gra ma pamięć potoków DirectX 12 (`*.upipelinecache`).
     pub ue_pso_cache: bool,
+    /// Unreal DX12 bez pamięci potoków: biblioteki SM6 i znana wersja silnika
+    /// (`ue_maps`).
+    pub ue_maps: bool,
     /// Czytnik silnika (`readers::KINDS`), który rozpoznał grę.
     pub reader: Option<&'static str>,
     /// Plik .exe gry według czytnika.
@@ -124,6 +127,7 @@ pub fn inspect(dir: &Path) -> Info {
         scskiller_recorder: dir.join("scskiller.cfg").is_file(),
         encrypted: false,
         ue_pso_cache: false,
+        ue_maps: false,
         reader: None,
         reader_exe: None,
     };
@@ -298,6 +302,12 @@ pub fn inspect(dir: &Path) -> Info {
             info.api = super::unreal_pak::find_pak(dir)
                 .and_then(|p| super::unreal_pak::default_api(&p))
                 .map(str::to_owned);
+            // DX12 bez pamięci potoków: z map shaderów - sprawdzenie zapamiętane
+            // do zmiany paczek gry.
+            if !info.ue_pso_cache {
+                let files: Vec<(PathBuf, u64)> = paks.iter().map(|(p, _, len)| (p.clone(), *len)).collect();
+                info.ue_maps = super::readers::cached_detect("unreal12", dir, &files, || super::ue_maps::available(dir));
+            }
         }
         for (path, _, len) in paks {
             info.shaders.push(ShaderFile {

@@ -83,9 +83,11 @@ pub fn with_driver_gpu<'a>(
 /// Wiersz zakładki Power: jeden podzespół.
 #[derive(Clone, Debug)]
 pub struct Row {
-    /// "Procesor" albo "Karta graficzna".
+    /// "Procesor", "Karta graficzna", "Zasilacz" albo "Bateria".
     pub title: &'static str,
     pub hw: String,
+    /// Pomiar całego komputera (zasilacz, bateria) - poza sumą podzespołów.
+    pub system: bool,
     /// Aktualny pobór mocy w watach.
     pub watts: f32,
     /// Energia zużyta od początku sesji w watogodzinach.
@@ -128,10 +130,25 @@ fn is_gpu(kind: &str) -> bool {
     kind.starts_with("Gpu")
 }
 
-/// Po jednym czujniku mocy na procesor i na każdą kartę graficzną.
+/// Zasilacz z USB (Corsair HXi/RMi, MSI Ai): moc całego komputera.
+fn is_psu(kind: &str) -> bool {
+    kind == "Psu"
+}
+
+/// Bateria laptopa: tempo rozładowania to moc całego komputera.
+fn is_battery(kind: &str) -> bool {
+    kind == "Battery"
+}
+
+/// Po jednym czujniku mocy na procesor, każdą kartę graficzną, zasilacz z
+/// USB i baterię (tylko gdy się rozładowuje).
 pub fn main_rows(readings: &[Reading]) -> Vec<Row> {
-    let groups: [(&'static str, fn(&str) -> bool); 2] =
-        [("Procesor", is_cpu), ("Karta graficzna", is_gpu)];
+    let groups: [(&'static str, fn(&str) -> bool); 4] = [
+        ("Procesor", is_cpu),
+        ("Karta graficzna", is_gpu),
+        ("Zasilacz", is_psu),
+        ("Bateria", is_battery),
+    ];
 
     let mut rows = Vec::new();
     for (title, matches) in groups {
@@ -151,16 +168,24 @@ pub fn main_rows(readings: &[Reading]) -> Vec<Row> {
                     .copied()
                     .find(|r| r.name.to_lowercase().contains(*pref))
             });
-            // Bez czujnika "całości" bierzemy największy odczyt.
-            let pick = preferred.or_else(|| {
+            // Bez czujnika "całości" bierzemy największy odczyt. Bateria: tylko
+            // tempo rozładowania (przy ładowaniu nie mierzy poboru komputera).
+            let pick = if title == "Bateria" {
                 list.iter()
                     .copied()
-                    .max_by(|a, b| a.watts.unwrap_or(0.0).total_cmp(&b.watts.unwrap_or(0.0)))
-            });
+                    .find(|r| r.name.trim().eq_ignore_ascii_case("discharge rate") && r.watts.unwrap_or(0.0) > 0.5)
+            } else {
+                preferred.or_else(|| {
+                    list.iter()
+                        .copied()
+                        .max_by(|a, b| a.watts.unwrap_or(0.0).total_cmp(&b.watts.unwrap_or(0.0)))
+                })
+            };
             if let Some(r) = pick {
                 rows.push(Row {
                     title,
                     hw: hw.to_string(),
+                    system: title == "Zasilacz" || title == "Bateria",
                     watts: r.watts.unwrap_or(0.0).max(0.0),
                     wh: 0.0,
                     avg_w: 0.0,
@@ -216,8 +241,8 @@ impl Meter {
             row.max_w = stats.max_w;
             row.avg_w = average(stats.wh, self.measured_secs, row.watts);
         }
-        if !rows.is_empty() {
-            let sum: f32 = rows.iter().map(|r| r.watts).sum();
+        if rows.iter().any(|r| !r.system) {
+            let sum: f32 = rows.iter().filter(|r| !r.system).map(|r| r.watts).sum();
             self.total_max_w = self.total_max_w.max(sum);
         }
         self.rows = rows;
@@ -228,8 +253,9 @@ impl Meter {
     }
 
     pub fn total(&self) -> Total {
-        let watts: f32 = self.rows.iter().map(|r| r.watts).sum();
-        let wh: f64 = self.rows.iter().map(|r| r.wh).sum();
+        // Suma podzespołów: zasilacz i bateria mierzą cały komputer (już z nimi).
+        let watts: f32 = self.rows.iter().filter(|r| !r.system).map(|r| r.watts).sum();
+        let wh: f64 = self.rows.iter().filter(|r| !r.system).map(|r| r.wh).sum();
         Total {
             watts,
             wh,
@@ -329,6 +355,31 @@ mod tests {
         *slot.lock().unwrap() = Some((now, gpu.clone()));
         assert_eq!(fresh(&slot, now + Duration::from_secs(1)), Some(gpu));
         assert_eq!(fresh(&slot, now + Duration::from_secs(10)), None);
+    }
+
+    #[test]
+    fn psu_and_battery_are_whole_computer_outside_the_total() {
+        let readings = vec![
+            r("CPU Package", "i7", "Cpu", 60.0),
+            r("GPU Package", "RTX", "GpuNvidia", 150.0),
+            r("+12V", "Corsair HX1000i", "Psu", 200.0),
+            r("Total watts", "Corsair HX1000i", "Psu", 260.0),
+            r("Discharge Rate", "Battery", "Battery", 35.0),
+            r("Charge Rate", "Battery", "Battery", 0.0),
+        ];
+        let rows = main_rows(&readings);
+        let titles: Vec<(&str, f32, bool)> = rows.iter().map(|x| (x.title, x.watts, x.system)).collect();
+        assert_eq!(
+            titles,
+            vec![("Procesor", 60.0, false), ("Karta graficzna", 150.0, false), ("Zasilacz", 260.0, true), ("Bateria", 35.0, true)]
+        );
+        let start = Instant::now();
+        let mut m = Meter::new(start);
+        m.update(&readings, start);
+        assert_eq!(m.total().watts, 210.0);
+        // Ładowanie: bez poboru komputera, bez wiersza baterii.
+        let charging = vec![r("Discharge Rate", "Battery", "Battery", 0.0), r("Charge Rate", "Battery", "Battery", 45.0)];
+        assert!(main_rows(&charging).is_empty());
     }
 
     fn r<'a>(name: &'a str, hw: &'a str, kind: &'a str, w: f32) -> Reading<'a> {
