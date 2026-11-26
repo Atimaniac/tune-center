@@ -286,6 +286,12 @@ impl NvcpTab {
         {
             self.page = Page::Overclock;
         }
+        // Bez karty Nvidia i AMD (np. sama grafika Intel) nie ma czego podkręcać:
+        // podzakładka Overclock jest ukryta.
+        let overclock = gpu.present();
+        if !overclock && self.page == Page::Overclock {
+            self.page = Page::Settings3d;
+        }
 
         egui::Panel::top("nvcp_header")
             .frame(egui::Frame::NONE)
@@ -319,6 +325,7 @@ impl NvcpTab {
                             (Page::OledFix, "OLED fix"),
                         ]
                     };
+                    let pages = pages.into_iter().filter(|(p, _)| overclock || *p != Page::Overclock);
                     for (page, label) in pages {
                         let icon = Some(page_icon(page));
                         if crate::theme::sub_tab_icon(ui, icon, label, self.page == page).clicked() {

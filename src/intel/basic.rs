@@ -410,16 +410,8 @@ impl Basic {
         self.adapters.get_or_insert_with(Vec::new)
     }
 
-    /// Nagłówek: dlaczego panel jest podstawowy, karta, sterownik, pamięć.
-    pub fn header(&mut self, ui: &mut egui::Ui, reason: &str) {
-        ui.label(
-            RichText::new(tr(
-                "API Intela (IGCL) nie obsługuje tej karty - grafiki sprzed 11. generacji działają na starszym sterowniku Intela. Poniżej ustawienia Windows, które działają z każdą kartą.",
-                "The Intel API (IGCL) doesn't support this card - graphics older than 11th gen run on Intel's legacy driver. Below are Windows settings that work with any card.",
-            ))
-            .strong(),
-        );
-        ui.label(RichText::new(reason).small().color(muted()));
+    /// Nagłówek: karta, sterownik, pamięć.
+    pub fn header(&mut self, ui: &mut egui::Ui) {
         let adapters = self.adapters().to_vec();
         ui.horizontal_wrapped(|ui| {
             for a in &adapters {
@@ -547,16 +539,8 @@ impl Basic {
         }
     }
 
-    /// Strona Adaptive Sync: wyjaśnienie i VRR Windows.
+    /// Strona Adaptive Sync: VRR Windows.
     pub fn sync_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label(
-            RichText::new(tr(
-                "Adaptive Sync w grafice Intela wymaga procesora 11. generacji lub nowszego. Na tej karcie zostaje zmienne odświeżanie Windows - działa tylko z ekranem, który je obsługuje.",
-                "Adaptive Sync on Intel graphics needs an 11th-gen processor or newer. On this card Windows variable refresh remains - it works only with a display that supports it.",
-            ))
-            .color(muted()),
-        );
-        ui.add_space(6.0);
         self.switch(
             ui,
             "VRROptimizeEnable",

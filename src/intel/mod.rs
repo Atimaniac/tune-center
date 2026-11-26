@@ -767,17 +767,14 @@ impl Intel {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, page: Page) {
-        if let Some(reason) = self.basic_reason() {
-            self.basic.header(ui, &reason);
+        if self.basic_reason().is_some() {
+            self.basic.header(ui);
             match page {
                 Page::Settings3d => self.basic.graphics_ui(ui),
                 Page::ArcSync => self.basic.sync_ui(ui),
                 Page::Display => self.basic.display_ui(ui),
             }
             self.basic.status_ui(ui);
-            if ui.button(tr("Spróbuj API Intela ponownie", "Try the Intel API again")).clicked() {
-                self.igcl = None;
-            }
             return;
         }
         match page {

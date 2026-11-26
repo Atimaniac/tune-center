@@ -74,6 +74,9 @@ struct Profile {
 pub struct GpuTab {
     backend: Box<dyn Backend>,
     demo: bool,
+    /// Brak karty Nvidia i AMD (tryb demo bez `--demo`): zakładka Overclock
+    /// jest ukryta, a symulowane dane nie trafiają nigdzie dalej.
+    fallback: bool,
     gpus: Vec<String>,
     gpu: usize,
     tab: Tab,
@@ -249,6 +252,7 @@ impl GpuTab {
         let mut tab = Self {
             backend,
             demo,
+            fallback: demo && !demo_flag,
             gpus,
             gpu: 0,
             tab: Tab::Info,
@@ -852,8 +856,16 @@ impl GpuTab {
         &self.monitor
     }
 
+    /// Czy jest prawdziwa karta Nvidia albo AMD (albo wymuszony `--demo`).
+    pub fn present(&self) -> bool {
+        !self.fallback
+    }
+
     /// Najnowszy odczyt karty z wątku czujników.
     pub fn poll(&mut self) {
+        if self.fallback {
+            return;
+        }
         if let Some(m) = self.sampler.latest() {
             self.monitor = m;
         }
