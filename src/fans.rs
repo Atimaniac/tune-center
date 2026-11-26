@@ -246,8 +246,8 @@ impl FansTab {
                 let text = match &found {
                     None => crate::i18n::tr("szukanie gier...", "looking for games...").to_owned(),
                     Some(l) => crate::trf!(
-                        "wykryte gry: {} (Steam, Epic, GOG, Ubisoft, EA, Xbox), z własnym profilem: {}",
-                        "detected games: {} (Steam, Epic, GOG, Ubisoft, EA, Xbox), with their own profile: {}",
+                        "wykryte gry: {} (Steam, Epic, GOG, Ubisoft, EA, Xbox, Battle.net, Riot Games), z własnym profilem: {}",
+                        "detected games: {} (Steam, Epic, GOG, Ubisoft, EA, Xbox, Battle.net, Riot Games), with their own profile: {}",
                         l.len(),
                         assigned
                     ),

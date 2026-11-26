@@ -10,7 +10,12 @@ przełącza się przyciskami w nagłówku, obok logo:
     zegar rdzenia / napięcie dla kart Nvidia (dawny NVCurve, wcześniej
     zakładka GPU),
   - odpowiednik panelu sterowania Nvidia: ustawienia 3D (globalne i dla
-    programów), tryb ekranu, kolor i HDR, G-SYNC.
+    programów), tryb ekranu, kolor i HDR, G-SYNC,
+  - kompilacja shaderów gier z góry (Shader compilation),
+  - z kartą AMD zakładka nazywa się RADEON (ustawienia 3D, FSR, FreeSync),
+    z grafiką Intel - INTEL (ustawienia 3D, ARC SYNC, ekran; starsze grafiki
+    Intel dostają podstawowy panel z ustawieniami Windows). Bez karty Nvidia
+    i AMD podzakładka Overclock jest ukryta.
 - **CPU** - Intel: limity mocy, offsety napięcia i Core IccMax;
   AMD Ryzen: Curve Optimizer dla każdego rdzenia i limity PBO.
 - **FAN** - sterowanie wentylatorami płyty głównej: ręcznie lub krzywą
@@ -18,7 +23,9 @@ przełącza się przyciskami w nagłówku, obok logo:
   (dawny FanCtl).
 - **SENSORS** - najważniejsze temperatury z wykresami z ostatnich 2 minut.
 - **POWER** - aktualny pobór mocy procesora i karty graficznej, suma
-  oraz licznik energii zużytej w bieżącej sesji.
+  oraz licznik energii zużytej w bieżącej sesji; zasilacz z USB (Corsair
+  HXi/RMi, MSI Ai) i rozładowująca się bateria laptopa pokazują pobór
+  całego komputera.
 - **TUNE** - ustawienia Windows wpływające na opóźnienia i DPC, z kopią
   oryginalnych wartości i przywracaniem.
 - **RGB** - podświetlenie RAM, taśm Skydimo, urządzeń Logitech G, kart
@@ -49,7 +56,7 @@ a kartę graficzną - bezpośrednio biblioteki sterowników: `nvapi64.dll`
 - .NET SDK 8: https://dotnet.microsoft.com/download
 - Sterownik PawnIO (https://pawnio.eu) - potrzebny nowszym wersjom
   LibreHardwareMonitor do dostępu do układu Super I/O płyty głównej
-- Sterownik Nvidia lub AMD Adrenalin (dla zakładki "Karta graficzna")
+- Sterownik Nvidia, AMD Adrenalin albo Intel (dla zakładki karty graficznej)
 
 ## Budowanie i uruchamianie
 
@@ -284,8 +291,17 @@ udostępnia pobierania gotowych shaderów; Tune Center czyta je z plików gry.
   gry; God of War 2018, DX11), Northlight (Control, DX12 - rekordy potoków,
   dwie root signature silnika), Luminous Studio (Final Fantasy XV, DX11 -
   archiwa EARC), Frostbite (DX11 - bloki archiwów `cas_NN.cas`; bloki
-  zaciemnione i ze słownikiem gry są pomijane). Żadna z tych gier nie była
-  sprawdzona na prawdziwych plikach - tylko testy na danych syntetycznych.
+  zaciemnione i ze słownikiem gry są pomijane), CRYENGINE (Hunt: Showdown,
+  DX12 - root signature z układów zasobów gry), Snowdrop (Star Wars Outlaws,
+  DX12), Nixxes (Ghost of Tsushima, Ratchet & Clank, DX12 - root signature
+  znanej wersji gry), Stingray (Helldivers 2, DX11), Tank (Overwatch, DX11),
+  Zouna (A Plague Tale: Requiem, DX12) i Dawn (Guardians of the Galaxy, DX12
+  - potoki z plików potoków gry). Żadna z tych gier nie była sprawdzona na
+  prawdziwych plikach - tylko testy na danych syntetycznych.
+- **Unreal Engine DirectX 12 bez pamięci potoków**: potoki z map shaderów
+  SM6 z bibliotek gry (shadery wierzchołków i pikseli łączone po
+  semantykach), root signature budowane jak w silniku danej wersji (UE
+  4.20-5.8). Palworld: 62 948 shaderów, 96 211 potoków (na NVIDIA 65 628).
 - **Gry DirectX 12 dowolnego silnika**: kontenery DXIL/DXBC z wbudowaną
   root signature (część `RTS0`) wycinane z plików gry - pliki z „shader”,
   „pso” itp. w nazwie w całości, pozostałe najpierw próbkami. Shadery
@@ -500,7 +516,10 @@ wszystkie są widoczne bez przewijania; liczba kolumn i wielkość cyfr zależą
 rozmiaru okna. Każdy kafelek ma plakietkę stanu (NORMALNA poniżej 65 °C,
 WYSOKA od 65 °C, GORĄCO od 80 °C), zmianę z ostatnich 5 s, minimum i maksimum
 oraz wykres z ostatnich 120 s (odczyt co sekundę, także gdy okno jest
-schowane). Obroty wentylatorów są w zakładce FAN.
+schowane). Obroty wentylatorów są w zakładce FAN. Gdy układu czujników płyty
+nie da się odczytać (np. Nuvoton NCT6683D z firmware producenta płyty),
+temperatura płyty pochodzi ze stref termicznych ACPI Windows - tylko z takich,
+których wartość się zmienia, a nie ze stałych wartości wpisanych przez BIOS.
 
 ## Power
 
@@ -517,9 +536,14 @@ schowane). Obroty wentylatorów są w zakładce FAN.
   domyślnie 0,90 zł; 0 ukrywa koszt) i "Wyzeruj licznik".
 - Licznik działa od uruchomienia programu, także przy zminimalizowanym
   oknie. Przerwy dłuższe niż 5 s (uśpienie komputera) nie są doliczane.
-- To pobór samego procesora i karty graficznej według ich własnych
+- Razem to pobór samego procesora i karty graficznej według ich własnych
   czujników, a nie całego komputera; płyta, dyski, wentylatory i straty
   zasilacza nie są wliczone.
+- **Cały komputer**: zasilacz z USB (Corsair HXi/RMi, MSI Ai) albo
+  rozładowująca się bateria laptopa dostaje osobny kafelek z poborem całego
+  komputera, za kafelkiem Razem i poza jego sumą. Temperatury i obroty
+  wentylatora zasilacza są tylko do odczytu. Dysków, chipsetu i urządzeń
+  USB nie da się zmierzyć osobno - nie podają poboru mocy.
 - Moc procesora wymaga uprawnień administratora i sterownika PawnIO.
 
 ## RGB - oświetlenie

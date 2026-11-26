@@ -199,7 +199,16 @@ impl Config {
         let mut cfg: Config = Self::existing_path()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                // Pierwsze uruchomienie: domyślny profil powstaje dopiero w
+                // `repair` niżej, gdy język jest już znany (inaczej zawsze
+                // dostawał polską nazwę).
+                let mut fresh = Config::default();
+                fresh.profiles.clear();
+                fresh.active.clear();
+                fresh.global_profile.clear();
+                fresh
+            });
 
         // Język trzeba ustalić przed naprawą ustawień: nazwa domyślnego
         // profilu zależy od języka.

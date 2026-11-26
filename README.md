@@ -27,7 +27,8 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 
 - 🎮 **GPU** – core/memory clock offsets, a drag-and-drop **V/F curve editor** for undervolting, 5 profiles, apply on startup.
 - 🟢 **NVIDIA control panel** – 3D settings (global and per game), **DLSS overrides like the NVIDIA App** (presets, mode, Frame Generation), display, color/HDR, G-SYNC – using only the public NVAPI SDK.
-- ⚡ **Shader pre-compilation** – compile a game's shaders ahead of time (Unity, Unreal Engine, Dagor, Source 2, REDengine 3, RAGE, ForzaTech, Santa Monica, Northlight, Luminous, Frostbite, DirectX 12 games whose shaders carry their root signature and other DirectX 11 games) so the first match doesn't stutter, and clean the shader cache with one click.
+- 🔴🔵 **RADEON and INTEL** – AMD cards get 3D settings, FSR and FreeSync; Intel Xe and Arc get 3D settings, ARC SYNC and display; older Intel graphics get a basic panel with Windows display and graphics settings.
+- ⚡ **Shader pre-compilation** – compile a game's shaders ahead of time, from the game files alone (Unity, Unreal Engine DX11 and DX12, Dagor, Source 2, REDengine 3, RAGE, ForzaTech, Santa Monica, Northlight, Luminous, Frostbite, CRYENGINE, Snowdrop, Nixxes, Stingray, Tank, Zouna, Dawn, DirectX 12 games whose shaders carry their root signature and other DirectX 11 games) so the first match doesn't stutter, and clean the shader cache with one click.
 - 🧠 **CPU** – Intel PL1/PL2, voltage offsets, IccMax and turbo ratios with an XTU-style live monitor; AMD Ryzen Curve Optimizer per core and PBO limits.
 - 🌀 **Fans** – motherboard and GPU fans: auto, fixed or temperature curve, with profiles that switch automatically while a game runs.
 - 🌡️ **Sensors & power** – key temperatures and CPU/GPU power with 2-minute charts, session energy and its cost.
@@ -48,7 +49,15 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 <td><img src="docs/screenshots/sensors.png" alt="Sensors"><br><b>SENSORS</b> – key temperatures with status badges and charts</td>
 </tr>
 <tr>
-<td colspan="2" align="center"><img src="docs/screenshots/power.png" width="50%" alt="Power"><br><b>POWER</b> – CPU and GPU power draw, load against the power limit, session energy and cost</td>
+<td><img src="docs/screenshots/power.png" alt="Power"><br><b>POWER</b> – CPU and GPU power draw, load against the power limit, session energy and cost</td>
+<td><img src="docs/screenshots/shaders.png" alt="Shader compilation"><br><b>Shader compilation</b> – installed games, their engine and what can be compiled ahead of time</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/tune.png" alt="Tune"><br><b>TUNE</b> – Windows latency and DPC settings with a backup of the originals</td>
+<td><img src="docs/screenshots/rgb.png" alt="RGB"><br><b>RGB</b> – one tab for RAM, LED strips, peripherals and the graphics card</td>
+</tr>
+<tr>
+<td colspan="2" align="center"><img src="docs/screenshots/bench.png" width="50%" alt="Bench"><br><b>BENCH</b> – CPU score, stress test and graphics card stability test</td>
 </tr>
 </table>
 
@@ -59,11 +68,12 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 - **Info** – GPU-Z style rows: clocks, memory temperature, memory used, GPU / video engine / bus load, encoder, decoder, voltage; less important readings (PCIe TX/RX, power, % TDP) behind a *Hidden* button. Hover any chart for the exact value.
 - **3D settings** and **DLSS** – the NVIDIA Control Panel / NVIDIA App options, globally or per game, with a backup before the first change.
 - **Display, Color and HDR, G-SYNC** – resolution and refresh rate (with 15 s confirmation), color depth, HDR, VRR.
-- **Shader compilation** – detects games from Steam, Epic, GOG, Ubisoft, EA, Xbox, Battle.net and Riot Games; pre-compiles shaders for Unity (DX11), Unreal Engine (DX11 from unencrypted `.pak` or IoStore games such as Palworld; DX12 pipelines from the game's `.upipelinecache`), Dagor Engine (DX11; DX12 compute and graphics pipelines from the game's `cache\dx12.cache`), Source 2 (DX11, e.g. Counter-Strike 2), REDengine 3 (DX12, The Witcher 3: pipelines from the game's shader cache and techniques), RAGE gen9 (DX12, GTA V Enhanced), ForzaTech (DX12, Forza Horizon), Santa Monica (DX12 God of War Ragnarök, DX11 God of War), Northlight (DX12, Control), Luminous Studio (DX11, Final Fantasy XV), Frostbite (DX11), DX12 games of any engine whose shaders carry an embedded root signature (carved from the game files, vertex and pixel shaders paired by their signatures) and other DX11 games with loose shader files; on AMD and Intel DX11 shaders also get the input layout from their signature; `tunecenter.exe --shader-report [game]` writes a read-only report `tunecenter-shaders.txt` of what it finds in each game; a *Status* column shows when each game was compiled and marks it again when a new NVIDIA driver (which clears the shader cache) or a game update needs a recompile; *Compile all that need it* queues the games and compiles them one after another, optionally on its own in the background after a driver update; the game's cache size is measured after compiling; *Clean shaders* removes the game's NVIDIA and Windows (D3DSCache) shader caches.
+- **Shader compilation** – detects games from Steam, Epic, GOG, Ubisoft, EA, Xbox, Battle.net and Riot Games; pre-compiles shaders for Unity (DX11), Unreal Engine (DX11 from unencrypted `.pak` or IoStore games such as Palworld; DX12 pipelines from the game's `.upipelinecache` or, without one, from its SM6 shader maps with the root signatures of the engine version, UE 4.20–5.8), Dagor Engine (DX11; DX12 compute and graphics pipelines from the game's `cache\dx12.cache`), Source 2 (DX11, e.g. Counter-Strike 2), REDengine 3 (DX12, The Witcher 3: pipelines from the game's shader cache and techniques), RAGE gen9 (DX12, GTA V Enhanced), ForzaTech (DX12, Forza Horizon), Santa Monica (DX12 God of War Ragnarök, DX11 God of War), Northlight (DX12, Control), Luminous Studio (DX11, Final Fantasy XV), Frostbite (DX11), CRYENGINE (DX12, Hunt: Showdown), Snowdrop (DX12, Star Wars Outlaws), Nixxes (DX12, Ghost of Tsushima, Ratchet & Clank), Stingray (DX11, Helldivers 2), Tank (DX11, Overwatch), Zouna (DX12, A Plague Tale: Requiem), Dawn (DX12, Guardians of the Galaxy), DX12 games of any engine whose shaders carry an embedded root signature (carved from the game files, vertex and pixel shaders paired by their signatures) and other DX11 games with loose shader files; on AMD and Intel DX11 shaders also get the input layout from their signature; `tunecenter.exe --shader-report [game]` writes a read-only report `tunecenter-shaders.txt` of what it finds in each game; a *Status* column shows when each game was compiled and marks it again when a new NVIDIA driver (which clears the shader cache) or a game update needs a recompile; *Compile all that need it* queues the games and compiles them one after another, optionally on its own in the background after a driver update; the game's cache size is measured after compiling; *Clean shaders* removes the game's NVIDIA and Windows (D3DSCache) shader caches.
 - **OLED fix** – one-click `vrrFrameSplitBehavior` driver tweak: with G-SYNC the driver keeps a 1× frame multiplier down to 48 FPS instead of doubling (e.g. 60 FPS → 120 Hz), which removes VRR brightness flicker on OLED monitors; re-applied automatically after a clean driver install.
 - **System** – Hardware-accelerated GPU scheduling (HAGS) toggle and Resizable BAR status.
 - **Driver updates** – checks the NVIDIA server for the latest Game Ready driver for your card (at startup and every 6 hours) and installs just the driver (with HDMI audio and PhysX, without NVIDIA App and telemetry) silently with one click.
-- AMD Radeon cards: clock limits, sensors and fans.
+- AMD Radeon cards: clock limits, sensors and fans; the tab is called RADEON and has 3D settings, FSR and FreeSync (AMD ADLX).
+- Intel graphics: the tab is called INTEL – 3D settings (global or per game), ARC SYNC and display from the Intel driver (IGCL, Intel Xe and Arc). Graphics older than 11th-gen processors get a basic panel instead: display mode, scaling and HDR, HAGS, windowed game optimizations, Windows VRR and the GPU chosen for a game. Without an NVIDIA or AMD card the Overclock page is hidden.
 
 ### CPU
 - **Intel** (12th–14th gen): PL1, PL2 and Tau, voltage offset per domain, Core IccMax, active-core turbo ratios (like XTU), live monitor (package/core temperatures, RAPL power, VID, clocks, throttling reasons).
@@ -72,9 +82,10 @@ Most PC tuning means juggling MSI Afterburner, NVIDIA App, Intel XTU or Ryzen Ma
 
 ### FAN, SENSORS, POWER
 - Motherboard fans (via LibreHardwareMonitor) and GPU fans (directly through the NVIDIA/AMD driver): auto, manual or curve from any temperature sensor; GPU fans return to auto above 88 °C.
-- **Game profiles** – assign a fan profile to any game detected in Steam, Epic, GOG, Ubisoft, EA or Xbox (or any .exe); it switches on while the game runs and the global profile returns when it closes.
-- Key temperatures (CPU, GPU, motherboard, disks, RAM) with NORMAL/HIGH/HOT badges, min/max and charts.
+- **Game profiles** – assign a fan profile to any game detected in Steam, Epic, GOG, Ubisoft, EA, Xbox, Battle.net or Riot Games (or any .exe); it switches on while the game runs and the global profile returns when it closes.
+- Key temperatures (CPU, GPU, motherboard, disks, RAM) with NORMAL/HIGH/HOT badges, min/max and charts. When the motherboard's sensor chip can't be read, the board temperature comes from Windows ACPI thermal zones (only zones that actually change, not fixed BIOS values).
 - CPU and GPU power with LOW/MEDIUM/HIGH load against the power limit, session energy and cost (price per kWh in OPTIONS).
+- **Whole computer** – a USB power supply (Corsair HXi/RMi, MSI Ai) or a discharging laptop battery shows the power draw of the whole PC, next to the CPU + GPU total. Power supply temperatures and fan speed are shown read-only.
 
 ### TUNE – latency and DPC
 Windows and driver settings recommended by Microsoft, NVIDIA and hardware vendors (Memory Integrity, Virtual Machine Platform, NIC interrupt moderation, EEE and vendor power saving (Green Ethernet, Gigabit Lite, Selective Suspend and more), USB selective suspend, PCIe link power management, CPU core parking off, Ultimate Performance plan, mouse acceleration off, SysMain off on SSD-only PCs, NVIDIA V-Sync + frame cap below the refresh rate for G-SYNC, Low Latency Mode) plus settings to test on your own hardware (NVIDIA maximum performance power mode, MSI interrupt mode per device, memory compression off, Fault Tolerant Heap off, fast startup off, Win32PrioritySeparation, SystemResponsiveness, Multi-Plane Overlay off). Every option shows its current value; the original values are backed up before the first change.
@@ -97,7 +108,7 @@ Running as administrator is optional – the GPU, NVIDIA settings, shader compil
 
 ### Requirements
 - Windows 10 or 11, 64-bit
-- NVIDIA (GTX/RTX) or AMD Radeon graphics card with a current driver
+- NVIDIA (GTX/RTX), AMD Radeon or Intel graphics with a current driver
 - [.NET 11 Runtime](https://dotnet.microsoft.com/download/dotnet/11.0) – for the sensor process (installed by the setup)
 - [PawnIO](https://pawnio.eu) – optional; needed for CPU tuning, CPU sensors and RAM lighting (installed by the setup)
 
