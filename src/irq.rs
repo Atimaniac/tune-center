@@ -92,14 +92,72 @@ pub fn shared<'a>(devices: &'a [Device], gpu: Option<u16>) -> Vec<&'a Device> {
     devices.iter().filter(|d| d.role == Role::Audio && d.core() == Some(gpu)).collect()
 }
 
-/// Rdzeń, na który przenieść dźwięk: środek zakresu procesorów logicznych,
-/// parzysty, różny od rdzenia karty i jego sąsiada (druga nitka tego samego
-/// rdzenia), od rdzenia 0 i od rdzeni już zajętych przez przypięte urządzenia.
-pub fn pick_target(gpu: Option<u16>, used: &[u16], cpus: u16) -> Option<u16> {
-    let cpus = cpus.min(64);
-    let busy = |c: u16| c < 2 || used.contains(&c) || gpu.is_some_and(|g| c / 2 == g / 2);
-    let mid = cpus / 2 / 2 * 2;
-    (0..cpus).map(|i| (mid + i) % cpus).filter(|c| c % 2 == 0).find(|c| !busy(*c)).or_else(|| (0..cpus).find(|c| !busy(*c)))
+/// Rodzaj rdzenia w procesorze hybrydowym: 'P' (wydajny) albo 'E'
+/// (energooszczędny). `classes` - klasa wydajności każdego procesora
+/// logicznego (wyższa = wydajniejszy); `None`, gdy wszystkie rdzenie są
+/// jednakowe albo procesora nie ma na liście.
+pub fn core_kind(classes: &[u8], cpu: u16) -> Option<char> {
+    let top = classes.iter().copied().max()?;
+    if classes.iter().all(|c| *c == top) {
+        return None;
+    }
+    classes.get(cpu as usize).map(|c| if *c == top { 'P' } else { 'E' })
+}
+
+/// Opis rdzenia do interfejsu: "1 (P)" albo samo "1".
+pub fn core_label(classes: &[u8], cpu: u16) -> String {
+    match core_kind(classes, cpu) {
+        Some(kind) => format!("{cpu} ({kind})"),
+        None => cpu.to_string(),
+    }
+}
+
+/// Rdzeń, na który przenieść urządzenie: rdzeń P (w procesorze bez rdzeni E -
+/// dowolny) ze środka ich listy, parzysty, różny od rdzenia `other` i jego
+/// sąsiada (druga nitka tego samego rdzenia), od rdzeni 0 i 1 oraz od rdzeni
+/// już zajętych przez przypięte urządzenia. Rdzeń E dopiero, gdy brak wolnego P.
+pub fn pick_target(other: Option<u16>, used: &[u16], classes: &[u8]) -> Option<u16> {
+    let cpus = classes.len().min(64) as u16;
+    let top = classes.iter().copied().max().unwrap_or(0);
+    let free = |c: &u16| *c >= 2 && !used.contains(c) && !other.is_some_and(|g| *c / 2 == g / 2);
+    let p: Vec<u16> = (0..cpus).filter(|c| classes[*c as usize] == top).collect();
+    let mid = p.len() / 2 / 2 * 2;
+    (0..p.len())
+        .map(|i| p[(mid + i) % p.len()])
+        .filter(|c| c % 2 == 0)
+        .find(free)
+        .or_else(|| p.iter().copied().find(free))
+        .or_else(|| (0..cpus).find(free))
+}
+
+/// Klasy wydajności z listy struktur SYSTEM_CPU_SET_INFORMATION: rozmiar
+/// (u32), typ (u32), a dla typu 0: grupa (u16 pod 12), numer procesora
+/// logicznego (u8 pod 14) i klasa wydajności (u8 pod 18). Tylko grupa 0.
+pub fn parse_cpu_sets(mut data: &[u8]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    while data.len() >= 20 {
+        let size = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        if size < 20 || size > data.len() {
+            break;
+        }
+        let kind = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let group = u16::from_le_bytes([data[12], data[13]]);
+        if kind == 0 && group == 0 {
+            let index = data[14] as usize;
+            if out.len() <= index {
+                out.resize(index + 1, 0);
+            }
+            out[index] = data[18];
+        }
+        data = &data[size..];
+    }
+    out
+}
+
+/// Klasy wydajności procesorów logicznych tego komputera (odczyt raz).
+pub fn classes() -> &'static [u8] {
+    static CLASSES: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    CLASSES.get_or_init(sys::topology)
 }
 
 #[cfg(windows)]
@@ -247,6 +305,26 @@ mod sys {
         (pinned, cores)
     }
 
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetSystemCpuSetInformation(info: *mut u8, len: u32, returned: *mut u32, process: isize, flags: u32) -> i32;
+    }
+
+    /// Klasa wydajności każdego procesora logicznego (grupa 0): w procesorze
+    /// hybrydowym rdzenie P mają wyższą klasę niż E. Pusta lista przy błędzie.
+    pub fn topology() -> Vec<u8> {
+        let mut need = 0u32;
+        unsafe { GetSystemCpuSetInformation(std::ptr::null_mut(), 0, &mut need, 0, 0) };
+        if need == 0 {
+            return Vec::new();
+        }
+        let mut buf = vec![0u8; need as usize];
+        if unsafe { GetSystemCpuSetInformation(buf.as_mut_ptr(), need, &mut need, 0, 0) } == 0 {
+            return Vec::new();
+        }
+        super::parse_cpu_sets(&buf[..need as usize])
+    }
+
     pub fn scan() -> Vec<Device> {
         let mut out: Vec<Device> = Vec::new();
         for (id, _) in class_devices(CLASS_DISPLAY) {
@@ -347,6 +425,9 @@ mod sys {
     pub fn scan() -> Vec<Device> {
         Vec::new()
     }
+    pub fn topology() -> Vec<u8> {
+        Vec::new()
+    }
     pub fn pin(_: &str, _: u16) -> Result<Backup, (Option<Backup>, String)> {
         Err((None, "Windows".into()))
     }
@@ -401,19 +482,64 @@ mod tests {
         assert!(shared(&all, None).is_empty());
     }
 
+    /// Procesor hybrydowy: `p` procesorów logicznych P, potem `e` rdzeni E.
+    fn hybrid(p: usize, e: usize) -> Vec<u8> {
+        let mut c = vec![1u8; p];
+        c.extend(vec![0u8; e]);
+        c
+    }
+
     #[test]
-    fn target_core() {
-        // 28 procesorów, karta na 1: środek zakresu.
-        assert_eq!(pick_target(Some(1), &[], 28), Some(14));
-        // Zajęty środek - następny parzysty.
-        assert_eq!(pick_target(Some(1), &[14], 28), Some(16));
-        // Karta na środku: omijamy ją i jej sąsiada.
-        assert_eq!(pick_target(Some(8), &[], 16), Some(10));
-        assert_eq!(pick_target(Some(9), &[], 16), Some(10));
-        // Mały procesor: nie rdzeń 0/1 i nie rdzeń karty.
-        assert_eq!(pick_target(Some(2), &[], 4), None);
-        assert_eq!(pick_target(Some(1), &[], 4), Some(2));
-        assert_eq!(pick_target(None, &[], 8), Some(4));
+    fn target_core_prefers_p() {
+        // i7-13850HX: 16 procesorów P i 12 E, karta na 1 - środek rdzeni P.
+        assert_eq!(pick_target(Some(1), &[], &hybrid(16, 12)), Some(8));
+        // i9-13900K: 16 P i 16 E - nadal rdzeń P, nie środek całej listy.
+        assert_eq!(pick_target(Some(1), &[], &hybrid(16, 16)), Some(8));
+        // Zajęty środek - następny parzysty P.
+        assert_eq!(pick_target(Some(1), &[8], &hybrid(16, 12)), Some(10));
+        // Drugie urządzenie na środku: omijamy je i jego sąsiada.
+        assert_eq!(pick_target(Some(8), &[], &hybrid(16, 12)), Some(10));
+        assert_eq!(pick_target(Some(9), &[], &hybrid(16, 12)), Some(10));
+        // Wszystkie P zajęte: dopiero wtedy rdzeń E.
+        let used: Vec<u16> = (2..16).collect();
+        assert_eq!(pick_target(Some(1), &used, &hybrid(16, 12)), Some(16));
+        // Procesor bez rdzeni E.
+        assert_eq!(pick_target(Some(1), &[], &[0; 16]), Some(8));
+        assert_eq!(pick_target(Some(2), &[], &[0; 4]), None);
+        assert_eq!(pick_target(Some(1), &[], &[0; 4]), Some(2));
+        assert_eq!(pick_target(None, &[], &[]), None);
+    }
+
+    #[test]
+    fn core_kinds() {
+        let c = hybrid(16, 12);
+        assert_eq!(core_kind(&c, 1), Some('P'));
+        assert_eq!(core_kind(&c, 20), Some('E'));
+        assert_eq!(core_kind(&c, 99), None);
+        assert_eq!(core_label(&c, 14), "14 (P)");
+        assert_eq!(core_label(&c, 20), "20 (E)");
+        // Jednakowe rdzenie - bez oznaczenia.
+        assert_eq!(core_kind(&[0; 8], 3), None);
+        assert_eq!(core_label(&[0; 8], 3), "3");
+    }
+
+    #[test]
+    fn cpu_set_parsing() {
+        let entry = |index: u8, class: u8, group: u16| {
+            let mut e = vec![0u8; 32];
+            e[0] = 32;
+            e[12..14].copy_from_slice(&group.to_le_bytes());
+            e[14] = index;
+            e[18] = class;
+            e
+        };
+        let mut data = entry(0, 1, 0);
+        data.extend(entry(1, 1, 0));
+        data.extend(entry(2, 0, 0));
+        // Druga grupa procesorów jest pomijana.
+        data.extend(entry(0, 0, 1));
+        assert_eq!(parse_cpu_sets(&data), vec![1, 1, 0]);
+        assert!(parse_cpu_sets(&[1, 2, 3]).is_empty());
     }
 
     /// Urządzenia tego komputera: `cargo test irq_live -- --ignored --nocapture`.
@@ -425,6 +551,14 @@ mod tests {
         for x in &d {
             eprintln!("{:?} | {} | via {} | pinned {:?} cores {:?} | {}", x.role, x.name, x.controller, x.pinned, x.cores, x.instance);
         }
+        let c = classes();
+        eprintln!("classes: {c:?}");
+        for x in &d {
+            if let Some(core) = x.core() {
+                eprintln!("{:?} core {}", x.role, core_label(c, core));
+            }
+        }
+        eprintln!("target next to a GPU on 1: {:?}", pick_target(Some(1), &[], c));
         assert!(d.iter().any(|x| x.role == Role::Gpu));
     }
 }

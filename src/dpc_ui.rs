@@ -171,14 +171,17 @@ impl Dpc {
     /// przeniesieniem dźwięku na inny rdzeń. `backups` - kopie stanu sprzed
     /// zmian (z ustawień programu); zwraca `true`, gdy lista się zmieniła.
     fn irq_card(&mut self, ui: &mut egui::Ui, elevated: bool, backups: &mut Vec<crate::irq::Backup>) -> bool {
-        use crate::irq::{gpu_core, pick_target, shared, Role};
+        use crate::irq::{core_kind, core_label, gpu_core, pick_target, shared, Role};
+        // Rodzaj rdzenia (P / E) w procesorze hybrydowym.
+        let classes = crate::irq::classes();
         let ctx = ui.ctx().clone();
         self.irq.ensure_scanned(elevated, move || ctx.request_repaint());
         let measured = self.irq.measured();
         let gpu = gpu_core(&self.irq.devices, measured);
         let mut changed = false;
         let mut rescan = false;
-        let mut pin: Option<(String, u16)> = None;
+        // Urządzenie do przypięcia, rdzeń i czy to dźwięk (inaczej karta graficzna).
+        let mut pin: Option<(String, u16, bool)> = None;
         let mut undo = false;
 
         theme::card(8, 10).show(ui, |ui| {
@@ -207,21 +210,22 @@ impl Dpc {
                         };
                         ui.label(via);
                         // Rdzeń: zmierzony (karta), przypięty albo z przydziału Windows.
+                        let label = |c: u16| core_label(classes, c);
                         let (text, hover) = match (d.role, measured, d.pinned, d.core()) {
                             (Role::Gpu, Some(m), ..) => (
-                                crate::trf!("rdzeń {m} (zmierzony)", "core {m} (measured)"),
+                                crate::trf!("rdzeń {}, zmierzony", "core {}, measured", label(m)),
                                 tr("Rdzeń, na którym przez 2 s wykonywały się DPC sterownika karty.", "The core on which the driver's DPCs ran during a 2 s trace.").to_owned(),
                             ),
                             (_, _, Some(p), _) => (
-                                crate::trf!("rdzeń {p} (przypięty)", "core {p} (pinned)"),
+                                crate::trf!("rdzeń {}, przypięty", "core {}, pinned", label(p)),
                                 tr("Rdzeń ustawiony wpisem w rejestrze urządzenia.", "The core set by an entry in the device's registry key.").to_owned(),
                             ),
                             (_, _, None, Some(c)) if d.exact() => (
-                                crate::trf!("rdzeń {c}", "core {c}"),
+                                crate::trf!("rdzeń {}", "core {}", label(c)),
                                 tr("Rdzeń przydzielony przez Windows.", "The core assigned by Windows.").to_owned(),
                             ),
                             (_, _, None, Some(c)) => (
-                                crate::trf!("rdzeń {c} (prawdopodobnie)", "core {c} (probably)"),
+                                crate::trf!("rdzeń {}, prawdopodobnie", "core {}, probably", label(c)),
                                 crate::trf!(
                                     "Windows przydzielił zbiór rdzeni {:?} i zwykle używa pierwszego. Pewny wynik daje pomiar (wymaga administratora).",
                                     "Windows assigned the core set {:?} and usually uses the first one. A measurement gives a sure result (needs administrator rights).",
@@ -230,11 +234,58 @@ impl Dpc {
                             ),
                             _ => (tr("nieznany", "unknown").to_owned(), String::new()),
                         };
-                        ui.label(RichText::new(text).strong()).on_hover_text(hover);
+                        let hover = format!(
+                            "{hover} {}",
+                            tr(
+                                "P = rdzeń wydajny, E = rdzeń energooszczędny (tylko w procesorach hybrydowych).",
+                                "P = performance core, E = efficient core (hybrid processors only).",
+                            )
+                        );
+                        ui.label(RichText::new(text).strong()).on_hover_text(hover.trim().to_owned());
                         ui.end_row();
                     }
                 });
                 ui.add_space(4.0);
+
+                // Karta graficzna na rdzeniu E: wolniejsze DPC - propozycja przeniesienia na P.
+                if let (Some(g), Some(d)) = (gpu, self.irq.devices.iter().find(|d| d.role == Role::Gpu)) {
+                    if core_kind(classes, g) == Some('E') {
+                        ui.label(
+                            RichText::new(crate::trf!(
+                                "Karta graficzna jest obsługiwana przez rdzeń energooszczędny ({}). Na rdzeniu P jej sterownik działa szybciej.",
+                                "The graphics card is served by an efficient core ({}). Its driver runs faster on a P core.",
+                                core_label(classes, g)
+                            ))
+                            .color(theme::warn()),
+                        );
+                        let used: Vec<u16> = self.irq.devices.iter().filter(|x| x.role == Role::Audio).filter_map(|x| x.core()).collect();
+                        if let Some(target) = pick_target(None, &used, classes) {
+                            let label = crate::trf!(
+                                "Przenieś kartę graficzną na rdzeń {}",
+                                "Move the graphics card to core {}",
+                                core_label(classes, target)
+                            );
+                            if theme::primary_button(ui, Some(Icon::Swap), &label, elevated)
+                                .on_hover_text(tr(
+                                    "Zapisuje przypisanie w rejestrze i restartuje kartę graficzną: ekran zgaśnie na kilka sekund, a otwarte gry i programy korzystające z karty mogą się zamknąć. Poprzedni stan jest zapamiętany - przycisk Cofnij go przywraca. Wymaga administratora.",
+                                    "Writes the assignment to the registry and restarts the graphics card: the screen goes black for a few seconds, and open games and programs using the card may close. The previous state is remembered - the Undo button restores it. Needs administrator rights.",
+                                ))
+                                .clicked()
+                            {
+                                pin = Some((d.instance.clone(), target, false));
+                            }
+                        }
+                    } else if core_kind(classes, g) == Some('P') {
+                        ui.label(
+                            RichText::new(crate::trf!(
+                                "Karta graficzna jest obsługiwana przez rdzeń wydajny ({}).",
+                                "The graphics card is served by a performance core ({}).",
+                                core_label(classes, g)
+                            ))
+                            .color(theme::ok()),
+                        );
+                    }
+                }
 
                 let audio = self.irq.devices.iter().filter(|d| d.role == Role::Audio).count();
                 let clash = shared(&self.irq.devices, gpu);
@@ -251,9 +302,12 @@ impl Dpc {
                         .color(theme::warn()),
                     );
                     let used: Vec<u16> = self.irq.devices.iter().filter_map(|d| d.pinned).collect();
-                    let cpus = std::thread::available_parallelism().map(|n| n.get() as u16).unwrap_or(1);
-                    if let Some(target) = pick_target(gpu, &used, cpus) {
-                        let label = crate::trf!("Przenieś dźwięk na rdzeń {target}", "Move audio to core {target}");
+                    if let Some(target) = pick_target(gpu, &used, classes) {
+                        let label = crate::trf!(
+                            "Przenieś dźwięk na rdzeń {}",
+                            "Move audio to core {}",
+                            core_label(classes, target)
+                        );
                         if theme::primary_button(ui, Some(Icon::Swap), &label, elevated)
                             .on_hover_text(tr(
                                 "Zapisuje przypisanie w rejestrze urządzenia i restartuje kontroler dźwięku. Jeśli to kontroler USB, podłączone do niego urządzenia (także mysz i klawiatura) rozłączą się na kilka sekund. Poprzedni stan jest zapamiętany - przycisk Cofnij go przywraca. Wymaga administratora.",
@@ -261,7 +315,7 @@ impl Dpc {
                             ))
                             .clicked()
                         {
-                            pin = Some((first.instance.clone(), target));
+                            pin = Some((first.instance.clone(), target, true));
                         }
                     }
                 } else {
@@ -282,10 +336,10 @@ impl Dpc {
                     }
                     if !backups.is_empty()
                         && ui
-                            .add_enabled(elevated, egui::Button::new(tr("Cofnij przypisanie dźwięku", "Undo the audio assignment")))
+                            .add_enabled(elevated, egui::Button::new(tr("Cofnij przypisania rdzeni", "Undo the core assignments")))
                             .on_hover_text(tr(
-                                "Przywraca stan sprzed przeniesienia i restartuje kontroler dźwięku.",
-                                "Restores the state before the move and restarts the audio controller.",
+                                "Przywraca stan sprzed przeniesień i restartuje zmienione urządzenia (przy karcie graficznej ekran zgaśnie na kilka sekund).",
+                                "Restores the state before the moves and restarts the changed devices (with the graphics card the screen goes black for a few seconds).",
                             ))
                             .clicked()
                     {
@@ -298,11 +352,17 @@ impl Dpc {
             });
         });
 
-        if let Some((instance, target)) = pin {
+        if let Some((instance, target, audio)) = pin {
             match crate::irq::pin(&instance, target) {
                 Ok(backup) => {
                     backups.push(backup);
-                    self.irq.message = Some((crate::trf!("Dźwięk przeniesiony na rdzeń {target}.", "Audio moved to core {target}."), false));
+                    let core = core_label(classes, target);
+                    let text = if audio {
+                        crate::trf!("Dźwięk przeniesiony na rdzeń {core}.", "Audio moved to core {core}.")
+                    } else {
+                        crate::trf!("Karta graficzna przeniesiona na rdzeń {core}.", "Graphics card moved to core {core}.")
+                    };
+                    self.irq.message = Some((text, false));
                     changed = true;
                 }
                 Err((backup, e)) => {

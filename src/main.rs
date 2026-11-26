@@ -1741,9 +1741,13 @@ impl eframe::App for App {
                         }
                         _ => {
                             let (elevated, c, plan) = (self.elevated, &mut self.fans.config, &self.power_plan);
+                            let irq_panel = &mut self.dpc.irq;
                             self.tune.ui(ui, elevated, &mut |ui| {
                                 // Rdzeń obsługujący kartę graficzną nie zasypia w trakcie gry.
                                 let (game, cpu, error) = plan.awake();
+                                // Rdzeń karty (i jego rodzaj P / E) także przed uruchomieniem gry.
+                                let ctx = ui.ctx().clone();
+                                irq_panel.ensure_scanned(elevated, move || ctx.request_repaint());
                                 ui.horizontal_wrapped(|ui| {
                                     let label = crate::i18n::tr(
                                         "W trakcie gry podtrzymuj rdzeń procesora obsługujący kartę graficzną",
@@ -1760,7 +1764,14 @@ impl eframe::App for App {
                                     if c.gpu_core_awake {
                                         let (text, color) = match (&game, cpu, &error) {
                                             (Some(g), Some(cpu), _) => (
-                                                crate::trf!("aktywne: {g}, rdzeń {cpu}", "active: {g}, core {cpu}"),
+                                                {
+                                                    let core = irq::core_label(irq::classes(), cpu);
+                                                    if irq::core_kind(irq::classes(), cpu) == Some('E') {
+                                                        crate::trf!("aktywne: {g}, rdzeń {core} - przenieś kartę na rdzeń P na stronie DPC", "active: {g}, core {core} - move the card to a P core on the DPC page")
+                                                    } else {
+                                                        crate::trf!("aktywne: {g}, rdzeń {core}", "active: {g}, core {core}")
+                                                    }
+                                                },
                                                 theme::ok(),
                                             ),
                                             (Some(_), None, Some(e)) => (e.clone(), theme::warn()),
@@ -1772,11 +1783,29 @@ impl eframe::App for App {
                                                 theme::warn(),
                                             ),
                                             (None, ..) => (
-                                                crate::i18n::tr("czeka na grę", "waiting for a game").to_owned(),
+                                                match irq::gpu_core(&irq_panel.devices, irq_panel.measured()) {
+                                                    Some(core) => crate::trf!(
+                                                        "czeka na grę; karta graficzna: rdzeń {}",
+                                                        "waiting for a game; graphics card: core {}",
+                                                        irq::core_label(irq::classes(), core)
+                                                    ),
+                                                    None => crate::i18n::tr("czeka na grę", "waiting for a game").to_owned(),
+                                                },
                                                 muted(),
                                             ),
                                         };
                                         ui.label(RichText::new(text).size(12.5).color(color));
+                                    } else if let Some(core) = irq::gpu_core(&irq_panel.devices, irq_panel.measured()) {
+                                        // Opcja wyłączona: sama informacja o rdzeniu karty.
+                                        ui.label(
+                                            RichText::new(crate::trf!(
+                                                "karta graficzna: rdzeń {}",
+                                                "graphics card: core {}",
+                                                irq::core_label(irq::classes(), core)
+                                            ))
+                                            .size(12.5)
+                                            .color(muted()),
+                                        );
                                     }
                                 });
                                 ui.add_space(6.0);

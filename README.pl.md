@@ -693,8 +693,15 @@ N" przypina kontroler dźwięku do innego rdzenia: wpis `Affinity Policy`
 urządzenia (`DevicePolicy` = 4 i maska rdzenia, udokumentowany przez
 Microsoft) i restart kontrolera. Przy kontrolerze USB podłączone urządzenia
 rozłączają się na kilka sekund. Stan sprzed zmiany jest zapisany w ustawieniach
-programu; "Cofnij przypisanie dźwięku" go przywraca. Karty graficznej program
-nie przenosi.
+programu; "Cofnij przypisania rdzeni" go przywraca. Kartę graficzną program
+przenosi tylko z rdzenia E na P, na Twoje polecenie.
+W procesorach hybrydowych przy każdym rdzeniu jest oznaczenie P (wydajny) albo
+E (energooszczędny). Dźwięk jest przenoszony na rdzeń P. Gdy samą kartę
+graficzną obsługuje rdzeń E, karta pokazuje ostrzeżenie i przycisk "Przenieś
+kartę graficzną na rdzeń P" - restartuje on kartę graficzną, więc ekran gaśnie
+na kilka sekund, a otwarte gry mogą się zamknąć. Rdzeń karty i jego rodzaj
+widać też obok opcji podtrzymywania rdzenia na stronie System.
+
 
 Pomiar na i7-13850HX z RTX 5070: wątek o najwyższym priorytecie na rdzeniu
 karty graficznej był w spoczynku opóźniony o ponad 0,5 ms 135 razy w 30 s, na
