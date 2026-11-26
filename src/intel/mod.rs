@@ -13,6 +13,7 @@
 //! IGCL obsługuje grafiki Intel Xe (11. generacja procesorów i nowsze) oraz
 //! karty Arc; starsze (np. HD 530) zgłaszają "platforma nieobsługiwana".
 
+pub mod basic;
 pub mod igcl;
 
 use std::collections::HashMap;
@@ -256,6 +257,8 @@ pub struct Intel {
     status: Option<(String, bool)>,
     /// Edytowany własny profil Arc Sync, po wyjściu.
     custom: HashMap<usize, igcl::ArcSyncProfile>,
+    /// Panel podstawowy (ustawienia Windows), gdy IGCL nie obsługuje karty.
+    basic: basic::Basic,
 }
 
 impl Default for Intel {
@@ -276,6 +279,20 @@ impl Intel {
             outputs: None,
             status: None,
             custom: HashMap::new(),
+            basic: basic::Basic::new(),
+        }
+    }
+
+    /// Powód przejścia na panel podstawowy: IGCL się nie wczytał albo nie widzi
+    /// karty (`TC_INTEL_BASIC=1` wymusza panel - do sprawdzania na nowszej karcie).
+    fn basic_reason(&mut self) -> Option<String> {
+        if std::env::var_os("TC_INTEL_BASIC").is_some_and(|v| v == "1") {
+            return Some("TC_INTEL_BASIC=1".into());
+        }
+        match self.igcl() {
+            Err(e) => Some(e),
+            Ok(i) if i.devices.is_empty() => Some(tr("API Intela nie widzi karty Intel.", "The Intel API sees no Intel card.").to_owned()),
+            Ok(_) => None,
         }
     }
 
@@ -750,6 +767,19 @@ impl Intel {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, page: Page) {
+        if let Some(reason) = self.basic_reason() {
+            self.basic.header(ui, &reason);
+            match page {
+                Page::Settings3d => self.basic.graphics_ui(ui),
+                Page::ArcSync => self.basic.sync_ui(ui),
+                Page::Display => self.basic.display_ui(ui),
+            }
+            self.basic.status_ui(ui);
+            if ui.button(tr("Spróbuj API Intela ponownie", "Try the Intel API again")).clicked() {
+                self.igcl = None;
+            }
+            return;
+        }
         match page {
             Page::Settings3d => {
                 if self.header(
