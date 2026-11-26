@@ -10,6 +10,7 @@ gpu-profile.json
 gpu-profiles.json
 gpu-settings.json
 gpu-autoapply.pending
+tunecenter-fastload.json
 
 # Notatki robocze (tylko lokalnie)
 /CLAUDE.md

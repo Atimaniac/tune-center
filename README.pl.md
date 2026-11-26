@@ -25,8 +25,9 @@ przełącza się przyciskami w nagłówku, obok logo:
 - **POWER** - aktualny pobór mocy procesora i karty graficznej, suma
   oraz licznik energii zużytej w bieżącej sesji; rozładowująca się bateria
   laptopa pokazuje pobór całego komputera.
-- **TUNE** - ustawienia Windows wpływające na opóźnienia i DPC, z kopią
-  oryginalnych wartości i przywracaniem.
+- **TUNE** - ustawienia Windows wpływające na opóźnienia i DPC (z kopią
+  oryginalnych wartości i przywracaniem), Fast Load (gry w pamięci RAM,
+  gotowość do DirectStorage) i plan zasilania przełączany dla gier.
 - **RGB** - podświetlenie RAM, taśm Skydimo, urządzeń Logitech G, kart
   NVIDIA i (nietestowane) ASUS Aura, Gigabyte RGB Fusion 2, Corsair i MSI
   Mystic Light: jeden kolor, wyłączenie albo efekt urządzenia.
@@ -597,7 +598,7 @@ nadpisywać ustawienia - najlepiej, żeby nie działały jednocześnie.
   karty nie są obsługiwane - zapis w złe miejsce tej magistrali mógłby
   uszkodzić kartę.
 
-## TUNE - opóźnienia i DPC
+## TUNE - System (opóźnienia i DPC)
 
 Ustawienia Windows, które wpływają na opóźnienie wejścia i czasy DPC. Każda
 pozycja ma przełącznik pokazujący stan odczytany z systemu: ON (zielony) -
@@ -639,6 +640,77 @@ Do przetestowania na własnym sprzęcie (porównaj LatencyMon przed i po):
 Celowo pominięte: `bcdedit useplatformclock/disabledynamictick` (sprzeczne
 wyniki, problemy z myszą) i `NetworkThrottlingIndex` (więcej przerwań).
 Większość pozycji wymaga uprawnień administratora.
+
+## TUNE - DPC (analizator)
+
+Druga strona zakładki TUNE: prosty odpowiednik LatencyMon bez własnego
+sterownika. Mierzy, jak długo sterowniki blokują procesor w procedurach DPC
+i obsłudze przerwań (ISR) - to one powodują trzaski dźwięku i przycięcia mimo
+wysokiego FPS. Pomiar wymaga administratora i tylko obserwuje system
+(systemowe śledzenie ETW: DPC, przerwania, twarde błędy stron); niczego nie
+zmienia. Czas pomiaru: 15 s, 30 s, 1 min albo 5 min.
+
+- **Tabela sterowników** od najgorszego: najdłuższe i średnie DPC, liczba
+  DPC, najdłuższe ISR, liczba ISR i łączny czas. Zielony do 0,5 ms, żółty do
+  1 ms, czerwony powyżej.
+- **Kafelki**: najdłuższe DPC, najdłuższe ISR, opóźnienie wybudzenia, twarde
+  błędy stron i udział czasu rdzeni w DPC i ISR - każdy z wynikiem
+  poprzedniego pomiaru, do porównania po zmianie ustawienia na stronie System.
+- **Opóźnienie wybudzenia**: jeden wątek co 1 ms ustawia zdarzenie, drugi (o
+  najwyższym priorytecie) mierzy, po jakim czasie dostał procesor. To
+  przybliżenie wskaźnika "interrupt to process latency" z LatencyMon, który
+  mierzy go własnym sterownikiem jądra - liczby nie będą identyczne.
+- Ocena: dobrze poniżej 0,5 ms, uwaga do 1 ms, źle powyżej.
+
+Mierz w trakcie typowego obciążenia (gra, muzyka) i zmieniaj po jednym
+ustawieniu. `tunecenter.exe --dpc-measure` uruchamia 15-sekundowy pomiar od
+razu po starcie.
+
+## TUNE - Fast Load (32GB RAM+)
+
+Trzecia strona zakładki TUNE. Wczytuje pliki gry do wolnej pamięci RAM, zanim
+ją uruchomisz - gra dostaje je potem z pamięci zamiast z dysku. To zwykły
+odczyt plików: Windows zostawia przeczytane dane w pamięci podręcznej. Pliki
+gry nie są zmieniane i nic nie jest do niej wstrzykiwane.
+
+- Lista wszystkich wykrytych gier: rozmiar danych (bez filmów i
+  instalatorów), dysk (NVMe / SATA SSD / HDD) i gotowość do DirectStorage.
+- **DirectStorage**: program sprawdza, czy gra ma `dstorage.dll` (i w jakiej
+  wersji), czy leży na dysku NVMe i czy Windows pozwala tam na BypassIO
+  (pytanie `FSCTL_MANAGE_BYPASS_IO`, tylko odczyt). GOTOWA = pełna szybkość;
+  BEZ BYPASSIO i WOLNY DYSK mają w podpowiedzi przyczynę. DirectStorage nie
+  da się dodać do gry z zewnątrz - musi go używać sama gra.
+- **Wczytaj do RAM**: z paskiem postępu i przyciskiem zatrzymania. Program
+  zostawia zapas pamięci dla systemu (1/8 RAM, co najmniej 4 GB); gra większa
+  niż limit wczytuje się częściowo.
+- **Ucz** (wymaga administratora): zapisuje, które fragmenty plików gra
+  faktycznie czyta - systemowym śledzeniem ETW (dostawca
+  Microsoft-Windows-Kernel-File), sama obserwacja. Kliknij, uruchom grę,
+  wczytaj poziom, zagraj chwilę i zamknij grę. Od tej pory wczytywane są
+  tylko te dane (z dokładnością do 1 MB); kolejne sesje uzupełniają profil.
+  Gdy profil nie mieści się w limicie, zostają fragmenty czytane w
+  największej liczbie sesji. Profile są w pliku `tunecenter-fastload.json`.
+- **Trzymaj w pamięci**: po wczytaniu program trzyma dane gry we własnej
+  pamięci (zmapowane pliki), więc Windows nie usuwa ich przy zwykłej pracy.
+  Zwalnia je przycisk Zwolnij, zamknięcie gry, zamknięcie programu albo
+  spadek dostępnej pamięci poniżej 2 GB. Trzymana gra nie zaktualizuje się
+  do czasu zwolnienia.
+- **Po starcie**: zaznaczone gry wczytują się same 2 minuty po uruchomieniu
+  programu (tylko od 32 GB RAM, bez trzymania w pamięci).
+
+Ograniczenia: przyspiesza się tylko odczyt z dysku - rozpakowywanie danych
+na procesorze trwa tyle samo, więc na szybkim NVMe zysk jest mały, a
+największy na SATA i HDD. Gry z DirectStorage albo odczytem niebuforowanym
+omijają pamięć podręczną Windows i nie zyskują.
+
+## TUNE - Power plan
+
+Czwarta strona zakładki TUNE. Gdy działa gra (proces uruchomiony z folderu
+gry wykrytej w sklepach), program włącza wybrany plan zasilania Windows, np.
+Najwyższa wydajność (Ultimate Performance) z wyłączonym parkowaniem rdzeni;
+po zamknięciu gry wraca na drugi wybrany plan. Plan jest zmieniany tylko przy
+uruchomieniu i zamknięciu gry - ręczna zmiana planu w Windows między grami
+nie jest cofana. Przy zamykaniu programu w trakcie gry wraca plan "po grze".
 
 ## BENCH - test wydajności i stress test
 

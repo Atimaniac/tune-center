@@ -35,6 +35,8 @@ mod cpu_tab;
 mod crash;
 mod curve;
 mod diagnose;
+mod dpc;
+mod dpc_ui;
 mod disks;
 mod dll;
 mod elevation;
@@ -46,6 +48,9 @@ mod gpu_bench;
 mod gpu_fans;
 mod hags;
 mod history;
+mod fastload;
+mod fastload_trace;
+mod fastload_ui;
 mod hw;
 mod hw_names;
 mod i18n;
@@ -58,6 +63,7 @@ mod nvcp;
 mod nvdriver;
 mod oled_fix;
 mod power;
+mod power_plan;
 mod power_tab;
 mod radeon;
 mod rebar;
@@ -347,8 +353,16 @@ struct App {
     rgb: rgb_tab::RgbTab,
     /// Diagnostyka zgodności (OPTIONS).
     diagnose: diagnose::Panel,
-    /// Zakładka TUNE (opóźnienia i DPC).
+    /// Zakładka TUNE: strona System (ustawienia wpływające na opóźnienia i DPC).
     tune: tune::Tune,
+    /// Zakładka TUNE: strona Fast Load (gry w pamięci RAM, DirectStorage).
+    fast_load: fastload::FastLoad,
+    /// Otwarta strona zakładki TUNE: 0 = System, 1 = DPC, 2 = Fast Load, 3 = Power plan.
+    tune_page: u8,
+    /// Zakładka TUNE: plan zasilania przełączany dla gier.
+    power_plan: power_plan::PowerPlan,
+    /// Zakładka TUNE: analizator DPC.
+    dpc: dpc::Dpc,
     /// Zakładka BENCH (test wydajności i stress test).
     bench: bench_tab::BenchTab,
     /// Temperatura procesora z kafelków SENSORS (co sekundę).
@@ -474,6 +488,12 @@ impl App {
             updates.start(move || ctx.request_repaint());
         }
 
+        let auto_load = fans.config.fast_load_auto.clone();
+        let plan_settings = power_plan::Settings {
+            enabled: fans.config.power_plan_enabled && !demo,
+            game: fans.config.power_plan_game.clone(),
+            idle: fans.config.power_plan_idle.clone(),
+        };
         let mut app = Self {
             tab: Tab::Nvidia,
             gpu: GpuTab::new(demo),
@@ -502,6 +522,20 @@ impl App {
                 tune::Tune::new(cpu::cpu_info().name.contains("X3D"), move || {
                     ctx.request_repaint()
                 })
+            },
+            fast_load: {
+                let ctx = cc.egui_ctx.clone();
+                let mut f = fastload::FastLoad::new(move || ctx.request_repaint());
+                if !demo {
+                    f.auto(auto_load, std::time::Duration::from_secs(120));
+                }
+                f
+            },
+            tune_page: 0,
+            dpc: dpc::Dpc::new(),
+            power_plan: {
+                let ctx = cc.egui_ctx.clone();
+                power_plan::PowerPlan::start(plan_settings, move || ctx.request_repaint())
             },
             bench: bench_tab::BenchTab::new(),
             cpu_temp: None,
@@ -614,7 +648,20 @@ impl App {
         }
         if let Some(page) = value("--page") {
             self.nvcp.open_page(&page);
+            self.tune_page = match page.as_str() {
+                "dpc" => 1,
+                "fastload" => 2,
+                "powerplan" => 3,
+                _ => 0,
+            };
             self.gpu.open_page(&page);
+        }
+        // Weryfikacja bez klikania: pomiar DPC (15 s) od razu po starcie.
+        if args.iter().any(|a| a == "--dpc-measure") {
+            self.tab = Tab::Tune;
+            self.tune_page = 1;
+            self.dpc.secs = 15;
+            self.dpc.start(|| {});
         }
     }
 
@@ -1032,7 +1079,7 @@ impl App {
                     crate::i18n::tr("CPU - Intel: limity mocy, offsety napięcia, IccMax, mnożniki turbo. AMD Ryzen: Curve Optimizer i limity PBO.", "CPU - Intel: power limits, voltage offsets, IccMax, turbo ratios. AMD Ryzen: Curve Optimizer and PBO limits."),
                     crate::i18n::tr("FAN - wentylatory płyty i karty: ręcznie albo krzywą zależną od temperatury, profile, także osobne dla gier.", "FAN - motherboard and card fans: manual or a temperature-based curve, profiles, also per game."),
                     crate::i18n::tr("SENSORS i POWER - najważniejsze temperatury oraz pobór mocy procesora i karty z licznikiem energii i kosztem; zasilacz z USB (Corsair HXi/RMi, MSI Ai) i bateria laptopa pokazują pobór całego komputera.", "SENSORS and POWER - key temperatures and CPU and card power draw with an energy counter and cost; a USB power supply (Corsair HXi/RMi, MSI Ai) and a laptop battery show the whole computer's power draw."),
-                    crate::i18n::tr("TUNE - ustawienia Windows wpływające na opóźnienia (przełączniki ON/OFF z kopią oryginałów).", "TUNE - Windows settings that affect latency (ON/OFF switches with a backup of the originals)."),
+                    crate::i18n::tr("TUNE - ustawienia Windows wpływające na opóźnienia i DPC (przełączniki ON/OFF z kopią oryginałów), analizator DPC (czasy DPC i ISR sterowników), Fast Load (wczytanie gry do pamięci RAM, profil odczytów gry, gotowość do DirectStorage) i plan zasilania przełączany na czas gry.", "TUNE - Windows settings that affect latency and DPC (ON/OFF switches with a backup of the originals), a DPC analyzer (DPC and ISR times per driver), Fast Load (loading a game into RAM, per-game read profile, DirectStorage readiness) and a power plan switched while a game runs."),
                     crate::i18n::tr("RGB - podświetlenie RAM, taśm Skydimo, urządzeń Logitech G, kart NVIDIA, płyt ASUS, Gigabyte i MSI oraz kontrolerów Corsair: kolor z jasnością, efekty (oddychanie, miganie, cykl kolorów, tęcza - tyle, ile ma dane urządzenie) z szybkością albo wyłączenie.", "RGB - lighting of RAM, Skydimo strips, Logitech G devices, NVIDIA cards, ASUS, Gigabyte and MSI boards and Corsair controllers: color with brightness, effects (breathing, flashing, color cycle, rainbow - as many as the device has) with speed, or off."),
                     crate::i18n::tr("BENCH - test wydajności procesora, stress test i test stabilności karty graficznej.", "BENCH - CPU performance test, stress test and graphics card stability test."),
                     crate::i18n::tr("OPTIONS - język, autostart, zasobnik, motywy (Tune, Neon Green, Neon City, Crimson) i diagnostyka zgodności ze zgłaszaniem na GitHubie.", "OPTIONS - language, autostart, tray, themes (Tune, Neon Green, Neon City, Crimson) and a compatibility check with GitHub reporting."),
@@ -1658,7 +1705,45 @@ impl eframe::App for App {
                     &self.disks.list(),
                     &self.sensor_hist,
                 ),
-                Tab::Tune => self.tune.ui(ui, self.elevated),
+                Tab::Tune => {
+                    ui.horizontal(|ui| {
+                        for (page, icon, label) in [
+                            (0u8, Icon::Options, "System"),
+                            (1, Icon::Gauge, "DPC"),
+                            (2, Icon::Memory, "Fast Load (32GB RAM+)"),
+                            (3, Icon::Power, "Power plan"),
+                        ] {
+                            if theme::sub_tab_icon(ui, Some(icon), label, self.tune_page == page).clicked() {
+                                self.tune_page = page;
+                            }
+                        }
+                    });
+                    ui.separator();
+                    match self.tune_page {
+                        1 => self.dpc.ui(ui, self.elevated),
+                        2 => {
+                            let c = &mut self.fans.config;
+                            if self.fast_load.ui(ui, &mut c.fast_load_auto, &mut c.fast_load_pin, self.elevated) {
+                                self.fans.config.save();
+                            }
+                        }
+                        3 => {
+                            let c = &mut self.fans.config;
+                            let mut s = power_plan::Settings {
+                                enabled: c.power_plan_enabled,
+                                game: c.power_plan_game.clone(),
+                                idle: c.power_plan_idle.clone(),
+                            };
+                            if self.power_plan.ui(ui, &mut s) {
+                                c.power_plan_enabled = s.enabled;
+                                c.power_plan_game = s.game;
+                                c.power_plan_idle = s.idle;
+                                c.save();
+                            }
+                        }
+                        _ => self.tune.ui(ui, self.elevated),
+                    }
+                }
                 Tab::Rgb => self.rgb.ui(ui, &mut self.fans.config, self.elevated),
                 Tab::Bench => {
                     if self.bench.ui(

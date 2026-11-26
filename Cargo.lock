@@ -3103,7 +3103,7 @@ dependencies = [
 
 [[package]]
 name = "tunecenter"
-version = "0.42.0"
+version = "0.43.0"
 dependencies = [
  "eframe",
  "image",

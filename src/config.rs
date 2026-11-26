@@ -74,6 +74,21 @@ pub struct Config {
     /// Minimalizowanie do zasobnika systemowego zamiast do paska zadań.
     #[serde(default = "yes")]
     pub tray: bool,
+    /// Fast Load: gry (identyfikatory sklepu) wczytywane do pamięci RAM po
+    /// starcie programu.
+    #[serde(default)]
+    pub fast_load_auto: Vec<String>,
+    /// Fast Load: po wczytaniu trzymać dane gry w pamięci programu.
+    #[serde(default)]
+    pub fast_load_pin: bool,
+    /// Plan zasilania dla gier: włączone, plan na czas gry i plan po grze
+    /// (GUID planu tekstem).
+    #[serde(default)]
+    pub power_plan_enabled: bool,
+    #[serde(default)]
+    pub power_plan_game: String,
+    #[serde(default)]
+    pub power_plan_idle: String,
     /// Sprawdzanie przy starcie, czy jest nowsza wersja programu.
     #[serde(default = "yes")]
     pub check_updates: bool,
@@ -148,6 +163,11 @@ impl Default for Config {
             theme_style: crate::theme::Style::Tune,
             language: None,
             tray: true,
+            fast_load_auto: Vec::new(),
+            fast_load_pin: false,
+            power_plan_enabled: false,
+            power_plan_game: String::new(),
+            power_plan_idle: String::new(),
             check_updates: true,
             nv_driver_check: true,
             rgb: crate::rgb::Config::default(),

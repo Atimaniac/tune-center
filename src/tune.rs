@@ -280,7 +280,7 @@ pub(crate) mod reg {
 // ------------------------------------------------------- plan zasilania
 
 #[cfg(windows)]
-mod power {
+pub mod power {
     #[repr(C)]
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
     pub struct Guid {
@@ -2684,13 +2684,13 @@ impl Tune {
         theme::heading(
             ui,
             Icon::Gauge,
-            crate::i18n::tr("Opóźnienia i DPC", "Latency and DPC"),
+            "System",
         );
         theme::info(
             ui,
             crate::i18n::tr(
-                "Ustawienia Windows wpływające na opóźnienia wejścia i DPC. Przełącznik pokazuje stan odczytany z systemu: ON (zielony) = ustawiona wartość zalecana, OFF (czerwony) = wartość Windows; kliknięcie przełącza. Przed pierwszą zmianą program zapisuje oryginalne wartości (tune-backup.json) i sprawdza każdy zapis odczytem. Zmieniaj po jednej pozycji i porównuj LatencyMon przed i po.",
-                "Windows settings that affect input latency and DPC. The switch shows the state read from the system: ON (green) = recommended value set, OFF (red) = Windows value; click to toggle. Before the first change the program saves the original values (tune-backup.json) and verifies every write by reading back. Change one item at a time and compare LatencyMon before and after.",
+                "Ustawienia Windows wpływające na opóźnienia wejścia i DPC. Przełącznik pokazuje stan odczytany z systemu: ON (zielony) = ustawiona wartość zalecana, OFF (czerwony) = wartość Windows; kliknięcie przełącza. Przed pierwszą zmianą program zapisuje oryginalne wartości (tune-backup.json) i sprawdza każdy zapis odczytem. Zmieniaj po jednej pozycji i porównuj pomiar na stronie DPC przed i po.",
+                "Windows settings that affect input latency and DPC. The switch shows the state read from the system: ON (green) = recommended value set, OFF (red) = Windows value; click to toggle. Before the first change the program saves the original values (tune-backup.json) and verifies every write by reading back. Change one item at a time and compare a measurement on the DPC page before and after.",
             ),
         );
         if !elevated {
