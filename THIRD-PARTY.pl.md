@@ -50,18 +50,14 @@ Tune Center korzysta z poniższych składników. Są dołączane bez zmian.
   Logitech HID++, układ pakietów i numery poleceń ASUS Aura USB, Gigabyte RGB
   Fusion 2, Corsair Lighting Node i MSI Mystic Light. Użyte jako odniesienie;
   kod nie został skopiowany.
-- LibreHardwareMonitor (MPL-2.0): układ struktur NVAPI do odczytu i
-  sterowania wentylatorami karty (ClientFanCoolers) oraz czujnika hotspot.
-- AMD Display Library SDK (https://github.com/GPUOpen-LibrariesAndSDKs/display-library):
-  struktury i wywołania Overdrive 8 dla kart Radeon.
 - NVIDIA NVAPI SDK (https://github.com/NVIDIA/nvapi, MIT): identyfikatory
   funkcji, struktury i wartości ustawień sterownika (`nvapi.h`,
   `nvapi_interface.h`, `NvApiDriverSettings.h`) oraz przykłady
-  DisplayConfiguration, DisplayColorControl i CustomTiming - podstawa
+  DisplayConfiguration i DisplayColorControl - podstawa
   zakładki NVIDIA. Kod SDK nie jest dołączany; program woła sterownik przez
   `nvapi64.dll`.
 - AMD ADLX SDK (https://github.com/GPUOpen-LibrariesAndSDKs/ADLX): układ
-  interfejsów C (`SDK/Include`) dla zakładki RADEON. Program woła sterownik
+  interfejsów C (`SDK/Include`) dla zakładki RADEON oraz zegarów, wentylatorów i czujników kart Radeon. Program woła sterownik
   przez `amdadlx64.dll`.
 - Intel Graphics Control Library (https://github.com/intel/drivers.gpu.control-library,
   licencja Intel Software License Agreement, Copyright (C) Intel Corporation):

@@ -211,6 +211,48 @@ const RPM_INVALID: f32 = 65_000.0;
 /// Układy Super I/O, którymi nie sterujemy - tylko odczyt. NCT6683D ma na
 /// płytach (np. ASRock) własny firmware producenta; zapisy z systemu są
 /// uznawane za ryzykowne (sterownik Linuksa też je blokuje).
+/// Ostatnie temperatury hotspot i pamięci (memory junction) kart graficznych z
+/// biblioteki czujników: (nazwa karty, nazwa czujnika małymi literami, °C).
+/// Sterownik Nvidii udostępnia je tylko nieudokumentowaną funkcją NVAPI, więc
+/// program bierze je stąd.
+static GPU_TEMPS: std::sync::Mutex<Vec<(String, String, f32)>> = std::sync::Mutex::new(Vec::new());
+
+fn publish_gpu_hotspots(snap: &Snapshot) {
+    let list: Vec<(String, String, f32)> = snap
+        .temps
+        .iter()
+        .filter(|t| t.kind.starts_with("Gpu"))
+        .filter_map(|t| Some((t.hw.clone(), t.name.trim().to_lowercase(), t.value?)))
+        .filter(|(_, n, _)| n == "gpu hot spot" || n == "gpu memory junction")
+        .collect();
+    if let Ok(mut g) = GPU_TEMPS.lock() {
+        *g = list;
+    }
+}
+
+/// Temperatura czujnika `sensor` ("gpu hot spot", "gpu memory junction")
+/// karty o nazwie `name`, jeśli proces czujników ją podaje.
+fn gpu_temp(name: &str, sensor: &str) -> Option<f32> {
+    let name = name.to_lowercase();
+    let g = GPU_TEMPS.lock().ok()?;
+    g.iter()
+        .find(|(hw, s, _)| {
+            let hw = hw.to_lowercase();
+            s == sensor && !hw.is_empty() && (hw.contains(&name) || name.contains(&hw))
+        })
+        .map(|(_, _, v)| *v)
+}
+
+/// Hotspot karty o nazwie `name`.
+pub fn gpu_hotspot(name: &str) -> Option<f32> {
+    gpu_temp(name, "gpu hot spot")
+}
+
+/// Temperatura pamięci (memory junction) karty o nazwie `name`.
+pub fn gpu_memory_temp(name: &str) -> Option<f32> {
+    gpu_temp(name, "gpu memory junction")
+}
+
 pub fn read_only_chip(hw: &str) -> bool {
     hw.to_ascii_uppercase().contains("NCT6683")
 }
@@ -415,6 +457,7 @@ impl Backend {
                     }
                     if let Ok(mut snap) = serde_json::from_str::<Snapshot>(&line) {
                         snap.sanitize();
+                        publish_gpu_hotspots(&snap);
                         let mut s = thread_inner.lock().unwrap();
                         if let Some(err) = &snap.error {
                             s.status = Status::Error(err.clone());
@@ -589,5 +632,25 @@ mod invalid_rpm_tests {
         assert!(read_only_chip("Nuvoton NCT6683D"));
         assert!(!read_only_chip("Nuvoton NCT6796D-R"));
         assert!(!read_only_chip("Nuvoton NCT6701D"));
+    }
+}
+
+#[cfg(test)]
+mod gpu_temps_tests {
+    use super::*;
+
+    #[test]
+    fn picks_exact_sensor_of_the_named_card() {
+        *GPU_TEMPS.lock().unwrap() = vec![
+            ("NVIDIA GeForce RTX 5070".into(), "gpu hot spot".into(), 37.9),
+            ("NVIDIA GeForce RTX 5070".into(), "gpu memory junction".into(), 38.0),
+            ("AMD Radeon RX 6600".into(), "gpu hot spot".into(), 51.0),
+        ];
+        assert_eq!(gpu_hotspot("NVIDIA GeForce RTX 5070"), Some(37.9));
+        assert_eq!(gpu_memory_temp("NVIDIA GeForce RTX 5070"), Some(38.0));
+        assert_eq!(gpu_hotspot("AMD Radeon RX 6600"), Some(51.0));
+        assert_eq!(gpu_memory_temp("AMD Radeon RX 6600"), None);
+        assert_eq!(gpu_hotspot("NVIDIA GeForce RTX 4090"), None);
+        GPU_TEMPS.lock().unwrap().clear();
     }
 }

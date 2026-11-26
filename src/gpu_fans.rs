@@ -1,5 +1,5 @@
 //! Wentylatory kart graficznych sterowane wprost przez sterownik karty
-//! (NVAPI dla Nvidii, ADL dla AMD), bez procesu czujników.
+//! (NVAPI dla Nvidii, ADLX dla AMD), bez procesu czujników.
 //!
 //! Osobny wątek co sekundę czyta obroty i temperaturę karty, liczy
 //! wysterowanie z ustawień (ręczne albo krzywa) i wysyła je do sterownika.

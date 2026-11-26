@@ -24,10 +24,6 @@ const ID_UNLOAD: u32 = 0xD22B_DD7E;
 const ID_ENUM_PHYSICAL_GPUS: u32 = 0xE5AC_921F;
 const ID_GET_FULL_NAME: u32 = 0xCEEE_8E9F;
 const ID_GET_THERMAL_SETTINGS: u32 = 0xE364_0A56;
-const ID_THERMAL_GET_SENSORS: u32 = 0x65FE_3AAD;
-const ID_FAN_COOLERS_GET_STATUS: u32 = 0x35AE_D5E8;
-const ID_FAN_COOLERS_GET_CONTROL: u32 = 0x814B_209F;
-const ID_FAN_COOLERS_SET_CONTROL: u32 = 0xA589_71A5;
 const ID_GET_ALL_CLOCK_FREQUENCIES: u32 = 0xDCB6_16C3;
 const ID_GET_DYNAMIC_PSTATES_INFO_EX: u32 = 0x60DE_D2ED;
 const ID_GET_CURRENT_VOLTAGE: u32 = 0x465F_9BCF;
@@ -37,7 +33,6 @@ const ID_GET_CLOCK_BOOST_MASK: u32 = 0x507B_4B59;
 const ID_GET_CLOCK_BOOST_TABLE: u32 = 0x23F1_B133;
 const ID_SET_CLOCK_BOOST_TABLE: u32 = 0x0733_E009;
 const ID_GET_VFP_CURVE: u32 = 0x2153_7AD4;
-const ID_POWER_TOPOLOGY_GET_STATUS: u32 = 0xEDCF_624E;
 
 const CLOCK_DOMAIN_GRAPHICS: u32 = 0;
 const CLOCK_DOMAIN_MEMORY: u32 = 4;
@@ -58,92 +53,6 @@ struct ThermalSensor {
     current: i32,
     target: i32,
 }
-
-/// Rozszerzone czujniki temperatury (NvAPI_GPU_ThermalGetSensors).
-/// Temperatury są w 1/256 °C; indeks 1 to hotspot.
-#[repr(C)]
-struct ThermalSensors {
-    version: u32,
-    mask: u32,
-    reserved: [i32; 8],
-    temperatures: [i32; 32],
-}
-
-/// Stan jednego wentylatora (NvAPI_GPU_ClientFanCoolersGetStatus).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct FanStatusItem {
-    cooler_id: u32,
-    rpm: u32,
-    min_level: u32,
-    max_level: u32,
-    level: u32,
-    reserved: [u32; 8],
-}
-
-#[repr(C)]
-struct FanCoolersStatus {
-    version: u32,
-    count: u32,
-    reserved: [u64; 4],
-    items: [FanStatusItem; 32],
-}
-
-/// Sterowanie jednym wentylatorem (NvAPI_GPU_ClientFanCoolersGet/SetControl).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct FanControlItem {
-    cooler_id: u32,
-    /// Wysterowanie w procentach (tryb ręczny).
-    level: u32,
-    mode: u32,
-    reserved: [u32; 8],
-}
-
-#[repr(C)]
-struct FanCoolerControl {
-    version: u32,
-    reserved: u32,
-    count: u32,
-    reserved2: [u32; 8],
-    items: [FanControlItem; 32],
-}
-
-const FAN_MODE_AUTO: u32 = 0;
-const FAN_MODE_MANUAL: u32 = 1;
-
-// Rozmiar struktury jest częścią numeru wersji, który sprawdza sterownik.
-const _: () = assert!(size_of::<FanCoolersStatus>() == 1704);
-const _: () = assert!(size_of::<FanCoolerControl>() == 1452);
-const _: () = assert!(size_of::<ThermalSensors>() == 168);
-
-/// Bit maski i indeks czujnika hotspot.
-const SENSOR_HOTSPOT: usize = 1;
-/// Indeks czujnika temperatury pamięci (memory junction), jak w LibreHardwareMonitor.
-const SENSOR_MEMORY: usize = 9;
-/// Temperatura pamięci na kartach RTX 50 (indeks 0 pusty).
-const SENSOR_MEMORY_BLACKWELL: usize = 2;
-
-/// Jeden kanał topologii mocy (NvAPI_GPU_ClientPowerTopologyGetStatus,
-/// nieudokumentowane - układ z LibreHardwareMonitor). `power` to udział w
-/// limicie mocy w tysięcznych procenta; domena 0 = układ GPU, 1 = cała karta.
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct PowerTopologyEntry {
-    domain: u32,
-    reserved: u32,
-    power: u32,
-    reserved2: u32,
-}
-
-#[repr(C)]
-struct PowerTopology {
-    version: u32,
-    count: u32,
-    entries: [PowerTopologyEntry; 4],
-}
-
-const _: () = assert!(size_of::<PowerTopology>() == 72);
 
 #[repr(C)]
 struct Thermal {
@@ -299,13 +208,10 @@ pub struct NvApi {
     pstates_version: u32,
     unload: Option<FnVoid>,
     get_thermal: Option<FnThermal>,
-    get_sensors: Option<FnStruct<ThermalSensors>>,
-    fan_status: Option<FnStruct<FanCoolersStatus>>,
-    fan_get_control: Option<FnStruct<FanCoolerControl>>,
-    fan_set_control: Option<FnStruct<FanCoolerControl>>,
-    /// Oficjalna biblioteka monitorowania Nvidii: pobór mocy i wentylator.
+    /// Oficjalna biblioteka monitorowania Nvidii: pobór mocy, wentylatory
+    /// (odczyt i sterowanie) i temperatura pamięci.
     nvml: Option<super::nvml::Nvml>,
-    /// Szczegółowe odczyty (PCIe TX/RX z NVML, topologia mocy) - patrz `set_detail`.
+    /// Szczegółowe odczyty (PCIe TX/RX i moc układu z NVML) - patrz `set_detail`.
     detail: bool,
     get_clocks: Option<FnStruct<ClockFreqs>>,
     get_usages: Option<FnStruct<Usages>>,
@@ -316,9 +222,6 @@ pub struct NvApi {
     get_table: Option<FnStruct<ClockTable>>,
     set_table: Option<FnStruct<ClockTable>>,
     get_vfp: Option<FnStruct<VfpCurve>>,
-    get_topology: Option<FnStruct<PowerTopology>>,
-    /// Maska czujników ThermalGetSensors obsługiwanych przez kartę (ustalana raz).
-    sensor_mask: Option<u32>,
 }
 
 unsafe fn q<T: Copy>(query: QueryFn, id: u32) -> Option<T> {
@@ -444,10 +347,6 @@ impl NvApi {
                 pstates_version: 0,
                 unload: q(query, ID_UNLOAD),
                 get_thermal: q(query, ID_GET_THERMAL_SETTINGS),
-                get_sensors: q(query, ID_THERMAL_GET_SENSORS),
-                fan_status: q(query, ID_FAN_COOLERS_GET_STATUS),
-                fan_get_control: q(query, ID_FAN_COOLERS_GET_CONTROL),
-                fan_set_control: q(query, ID_FAN_COOLERS_SET_CONTROL),
                 nvml: super::nvml::Nvml::load(),
                 detail: true,
                 get_clocks: q(query, ID_GET_ALL_CLOCK_FREQUENCIES),
@@ -459,8 +358,6 @@ impl NvApi {
                 get_table: q(query, ID_GET_CLOCK_BOOST_TABLE),
                 set_table: q(query, ID_SET_CLOCK_BOOST_TABLE),
                 get_vfp: q(query, ID_GET_VFP_CURVE),
-                get_topology: q(query, ID_POWER_TOPOLOGY_GET_STATUS),
-                sensor_mask: None,
                 _lib: lib,
             })
         }
@@ -470,31 +367,6 @@ impl NvApi {
         self.handles.get(gpu).copied().ok_or_else(|| {
             crate::i18n::tr("Nieprawidłowy indeks karty", "Invalid card index").to_string()
         })
-    }
-
-    fn read_fan_status(&self, h: Handle) -> Option<Box<FanCoolersStatus>> {
-        let mut s: Box<FanCoolersStatus> = Box::new(unsafe { zeroed() });
-        s.version = ver::<FanCoolersStatus>(1);
-        call(
-            "NvAPI_GPU_ClientFanCoolersGetStatus",
-            self.fan_status,
-            h,
-            &mut *s,
-        )
-        .ok()?;
-        Some(s)
-    }
-
-    fn read_fan_control(&self, h: Handle) -> Result<Box<FanCoolerControl>> {
-        let mut c: Box<FanCoolerControl> = Box::new(unsafe { zeroed() });
-        c.version = ver::<FanCoolerControl>(1);
-        call(
-            "NvAPI_GPU_ClientFanCoolersGetControl",
-            self.fan_get_control,
-            h,
-            &mut *c,
-        )?;
-        Ok(c)
     }
 
     fn read_pstates(&mut self, h: Handle) -> Result<Box<Pstates20>> {
@@ -575,51 +447,10 @@ impl Backend for NvApi {
             }
         }
 
-        // Hotspot: karta bez tego czujnika (np. seria RTX 50) odrzuca zapytanie
-        // albo zwraca zero - wtedy wartości po prostu nie ma.
-        if let Some(f) = self.get_sensors {
-            let read = |mask: u32| {
-                let mut s: ThermalSensors = unsafe { zeroed() };
-                s.version = ver::<ThermalSensors>(2);
-                s.mask = mask;
-                (unsafe { f(h, &mut s) } == 0).then_some(s)
-            };
-            // Maska obsługiwanych czujników: najdłuższa ciągła, którą karta
-            // przyjmuje (tak samo robi LibreHardwareMonitor).
-            let mask = *self.sensor_mask.get_or_insert_with(|| {
-                let mut best = 1 << SENSOR_HOTSPOT;
-                for bits in 2..32 {
-                    let mask = (1u32 << bits) - 1;
-                    if read(mask).is_none() {
-                        break;
-                    }
-                    best = mask;
-                }
-                best
-            });
-            if let Some(s) = read(mask) {
-                // 255 °C (0xFF00) oznacza czujnik bez odczytu.
-                let temp = |i: usize| {
-                    let raw = s.temperatures[i];
-                    (mask >> i & 1 == 1 && raw > 0 && raw < 255 * 256).then(|| raw as f32 / 256.0)
-                };
-                if temp(0).is_some() {
-                    // Ampere/Ada: 0 = rdzeń, 1 = hotspot, 9 = pamięć.
-                    m.hotspot_c = temp(SENSOR_HOTSPOT);
-                    m.details.mem_temp_c = temp(SENSOR_MEMORY);
-                } else {
-                    // Blackwell (RTX 50, zmierzone na RTX 5070 pod obciążeniem):
-                    // 0 i 9 puste, 1 = dokładna temperatura rdzenia (podąża za
-                    // rdzeniem także pod obciążeniem - to nie hotspot), 2 = pamięć
-                    // (całe stopnie, rośnie z opóźnieniem). Hotspotu sterownik RTX 50
-                    // nie udostępnia ani w NVAPI, ani w NVML.
-                    m.details.core_precise_c = temp(SENSOR_HOTSPOT);
-                    m.details.mem_temp_c = temp(SENSOR_MEMORY_BLACKWELL);
-                    m.details.hotspot_hidden = true;
-                }
-            }
-        }
-
+        // Hotspot podaje biblioteka czujników (proces czujników); temperaturę
+        // pamięci - NVML.
+        m.hotspot_c = self.names.get(gpu).and_then(|n| crate::bridge::gpu_hotspot(n));
+        m.details.mem_temp_c = self.names.get(gpu).and_then(|n| crate::bridge::gpu_memory_temp(n));
         if let Some(nvml) = &self.nvml {
             let name = self.names.get(gpu).map(String::as_str).unwrap_or("");
             let r = nvml.read(gpu, name, self.detail);
@@ -645,19 +476,10 @@ impl Backend for NvApi {
             }
         }
 
-        // Moc samego układu GPU: udział domeny GPU względem całej karty z
-        // topologii mocy, przeliczony na waty poboru całej karty.
-        // Topologia mocy kosztuje ok. 11 ms CPU - tylko w widoku Informacje.
-        if let (Some(f), Some(board_w), true) = (self.get_topology, m.power_w, self.detail) {
-            let mut t: PowerTopology = unsafe { zeroed() };
-            t.version = ver::<PowerTopology>(1);
-            if unsafe { f(h, &mut t) } == 0 {
-                let entries = &t.entries[..(t.count as usize).min(4)];
-                let share = |d: u32| entries.iter().find(|e| e.domain == d).map(|e| e.power);
-                if let (Some(chip), Some(board)) = (share(0), share(1).filter(|&b| b > 0)) {
-                    m.details.chip_power_w = Some(board_w * chip as f32 / board as f32);
-                }
-            }
+        // Moc samego układu GPU (NVML, zakres GPU) - tylko w widoku Informacje.
+        if let (Some(nvml), true) = (&self.nvml, self.detail) {
+            let name = self.names.get(gpu).map(String::as_str).unwrap_or("");
+            m.details.chip_power_w = nvml.chip_power(gpu, name);
         }
         if let Some(fan) = self.fan(gpu) {
             m.fan_rpm = fan.rpm;
@@ -698,59 +520,28 @@ impl Backend for NvApi {
         m
     }
 
+    // Wentylatory przez oficjalne NVML (odczyt, ustawianie, tryb automatyczny).
     fn fan(&mut self, gpu: usize) -> Option<FanStatus> {
-        let h = self.handle(gpu).ok()?;
-        let s = self.read_fan_status(h)?;
-        let items = &s.items[..(s.count as usize).min(s.items.len())];
-        let first = items.first()?;
-        Some(FanStatus {
-            // Karta ma zwykle kilka wentylatorów na tym samym wysterowaniu;
-            // pokazujemy najszybszy.
-            rpm: items.iter().map(|i| i.rpm).max(),
-            pct: Some(first.level),
-        })
+        let name = self.names.get(gpu)?;
+        let (rpm, pct) = self.nvml.as_ref()?.fan_status(gpu, name)?;
+        Some(FanStatus { rpm, pct })
     }
 
     fn fan_controllable(&mut self, gpu: usize) -> bool {
-        let Ok(h) = self.handle(gpu) else {
-            return false;
-        };
-        self.fan_set_control.is_some()
-            && self.read_fan_status(h).is_some_and(|s| s.count > 0)
-            && self.read_fan_control(h).is_ok_and(|c| c.count > 0)
+        let name = self.names.get(gpu).map(String::as_str).unwrap_or("");
+        self.nvml.as_ref().is_some_and(|n| n.fan_controllable(gpu, name))
     }
 
     fn set_fan(&mut self, gpu: usize, pct: Option<u32>) -> Result<()> {
-        let h = self.handle(gpu)?;
-        // Odczyt-zmiana-zapis: zmieniamy tylko tryb i wysterowanie, reszta
-        // struktury wraca do sterownika taka, jaką podał.
-        let mut c = self.read_fan_control(h)?;
-        let count = (c.count as usize).min(c.items.len());
-        if count == 0 {
-            return Err(crate::i18n::tr(
-                "sterownik nie zgłosił żadnego wentylatora",
-                "the driver reported no fans",
+        let name = self.names.get(gpu).cloned().unwrap_or_default();
+        match &self.nvml {
+            Some(n) => n.set_fans(gpu, &name, pct),
+            None => Err(crate::i18n::tr(
+                "brak biblioteki NVML (nvml.dll) - sterowanie wentylatorami niedostępne",
+                "NVML (nvml.dll) not available - fan control unavailable",
             )
-            .to_string());
+            .to_string()),
         }
-        for item in &mut c.items[..count] {
-            match pct {
-                Some(p) => {
-                    item.mode = FAN_MODE_MANUAL;
-                    item.level = p.min(100);
-                }
-                None => {
-                    item.mode = FAN_MODE_AUTO;
-                    item.level = 0;
-                }
-            }
-        }
-        call(
-            "NvAPI_GPU_ClientFanCoolersSetControl",
-            self.fan_set_control,
-            h,
-            &mut *c,
-        )
     }
 
     fn offsets(&mut self, gpu: usize) -> Result<Offsets> {
@@ -902,17 +693,6 @@ mod hardware {
     #[ignore]
     fn nvapi_monitor() {
         let mut api = NvApi::load().expect("NVAPI");
-        if let (Some(f), Ok(h)) = (api.get_sensors, api.handle(0)) {
-            let mut s: ThermalSensors = unsafe { zeroed() };
-            s.version = ver::<ThermalSensors>(2);
-            s.mask = 0x1ffff;
-            let st = unsafe { f(h, &mut s) };
-            let t: Vec<String> = s.temperatures[..17]
-                .iter()
-                .map(|r| format!("{:.1}", *r as f32 / 256.0))
-                .collect();
-            println!("sensors {st}: {}", t.join(" "));
-        }
         for _ in 0..2 {
             let t = std::time::Instant::now();
             let m = api.monitor(0);
@@ -939,164 +719,10 @@ mod hardware {
                 d.pcie_gen, d.pcie_width
             );
             println!(
-                "load GPU {:?} MC {:?} VE {:?} BUS {:?} ENC {:?} DEC {:?} | power {:?} W chip {:?} W {:?} % TDP {:?} W | P{:?} limit {:?} | maska {:#x}",
+                "load GPU {:?} MC {:?} VE {:?} BUS {:?} ENC {:?} DEC {:?} | power {:?} W chip {:?} W {:?} % TDP {:?} W | P{:?} limit {:?}",
                 m.usage_pct, d.mem_ctrl_pct, d.video_pct, d.bus_pct, d.encoder_pct, d.decoder_pct,
-                m.power_w, d.chip_power_w, d.power_pct_tdp, d.tdp_w, d.pstate, d.limit,
-                api.sensor_mask.unwrap_or(0)
+                m.power_w, d.chip_power_w, d.power_pct_tdp, d.tdp_w, d.pstate, d.limit
             );
-        }
-    }
-}
-
-#[cfg(test)]
-mod hotspot_load {
-    //! Który czujnik ThermalGetSensors to hotspot, a który pamięć - pomiar
-    //! pod obciążeniem obliczeniowym (hotspot rośnie razem z rdzeniem):
-    //! `TC_BURN_CSO=<burn.cso> cargo test nvapi_hotspot_load -- --ignored --nocapture`.
-    use super::*;
-    use windows::Win32::Foundation::HMODULE;
-    use windows::Win32::Graphics::Direct3D::*;
-    use windows::Win32::Graphics::Direct3D11::*;
-
-    #[test]
-    #[ignore]
-    fn nvapi_hotspot_load() {
-        let cso = std::fs::read(std::env::var("TC_BURN_CSO").expect("TC_BURN_CSO")).unwrap();
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let s2 = stop.clone();
-        let burner = std::thread::spawn(move || unsafe {
-            let mut dev = None;
-            let mut ctx = None;
-            D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_FLAG(0),
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut dev),
-                None,
-                Some(&mut ctx),
-            )
-            .unwrap();
-            let (dev, ctx) = (dev.unwrap(), ctx.unwrap());
-            let mut cs = None;
-            dev.CreateComputeShader(&cso, None, Some(&mut cs)).unwrap();
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: 4096,
-                Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: D3D11_BIND_UNORDERED_ACCESS.0 as u32,
-                MiscFlags: D3D11_RESOURCE_MISC_BUFFER_STRUCTURED.0 as u32,
-                StructureByteStride: 4,
-                ..Default::default()
-            };
-            let mut buf = None;
-            dev.CreateBuffer(&desc, None, Some(&mut buf)).unwrap();
-            let mut uav = None;
-            dev.CreateUnorderedAccessView(&buf.unwrap(), None, Some(&mut uav))
-                .unwrap();
-            ctx.CSSetShader(cs.as_ref(), None);
-            ctx.CSSetUnorderedAccessViews(0, 1, Some(&Some(uav.unwrap())), None);
-            let qd = D3D11_QUERY_DESC {
-                Query: D3D11_QUERY_EVENT,
-                MiscFlags: 0,
-            };
-            let mut q = None;
-            dev.CreateQuery(&qd, Some(&mut q)).unwrap();
-            let q = q.unwrap();
-            while !s2.load(std::sync::atomic::Ordering::Relaxed) {
-                ctx.Dispatch(2048, 1, 1);
-                ctx.End(&q);
-                let mut done = 0u32;
-                while ctx
-                    .GetData(&q, Some(&mut done as *mut u32 as *mut _), 4, 0)
-                    .is_err()
-                    || done == 0
-                {
-                    std::thread::yield_now();
-                }
-            }
-        });
-        let mut api = NvApi::load().unwrap();
-        let h = api.handle(0).unwrap();
-        for step in 0..30 {
-            let mut s: ThermalSensors = unsafe { zeroed() };
-            s.version = ver::<ThermalSensors>(2);
-            s.mask = 0x1ffff;
-            unsafe { api.get_sensors.unwrap()(h, &mut s) };
-            let m = api.monitor(0);
-            println!(
-                "{:>3} s  core {:?}  [1] {:.2}  [2] {:.2}  f308 {:.2}  moc {:?} W  load {:?} %",
-                step * 2,
-                m.temp_c,
-                s.temperatures[1] as f32 / 256.0,
-                s.temperatures[2] as f32 / 256.0,
-                api.nvml
-                    .as_ref()
-                    .and_then(|n| n.field_f64(0, "", 308))
-                    .unwrap_or(-1.0),
-                m.power_w.map(|w| w.round()),
-                m.usage_pct
-            );
-            std::thread::sleep(std::time::Duration::from_secs(2));
-        }
-        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        burner.join().unwrap();
-        for step in 0..5 {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            let mut s: ThermalSensors = unsafe { zeroed() };
-            s.version = ver::<ThermalSensors>(2);
-            s.mask = 0x1ffff;
-            unsafe { api.get_sensors.unwrap()(h, &mut s) };
-            let m = api.monitor(0);
-            println!(
-                "po {:>2} s  core {:?}  [1] {:.2}  [2] {:.2}",
-                (step + 1) * 2,
-                m.temp_c,
-                s.temperatures[1] as f32 / 256.0,
-                s.temperatures[2] as f32 / 256.0
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-mod thermal_probe {
-    //! Sprawdza, jakie wersje/rozmiary ThermalGetSensors przyjmuje karta
-    //! (tylko odczyt, bufor większy niż deklarowany rozmiar):
-    //! `cargo test nvapi_thermal_probe -- --ignored --nocapture`.
-    use super::*;
-
-    #[test]
-    #[ignore]
-    fn nvapi_thermal_probe() {
-        let api = NvApi::load().unwrap();
-        let h = api.handle(0).unwrap();
-        let f: unsafe extern "C" fn(Handle, *mut u32) -> Status =
-            unsafe { std::mem::transmute(api.get_sensors.unwrap()) };
-        for v in 1..=4u32 {
-            for temps in [32usize, 64, 128] {
-                let size = 8 + 32 + temps * 4;
-                let mut buf = vec![0u32; 2048];
-                buf[0] = size as u32 | (v << 16);
-                buf[1] = u32::MAX;
-                let st = unsafe { f(h, buf.as_mut_ptr()) };
-                if st == 0 {
-                    let vals: Vec<String> = buf[10..10 + temps]
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, &r)| r != 0 && r != 0xFF00)
-                        .map(|(i, &r)| format!("[{i}] {:.2}", r as i32 as f32 / 256.0))
-                        .collect();
-                    println!(
-                        "v{v} rozmiar {size}: maska {:#x} {}",
-                        buf[1],
-                        vals.join(" ")
-                    );
-                } else {
-                    println!("v{v} rozmiar {size}: status {st}");
-                }
-            }
         }
     }
 }
@@ -1216,21 +842,12 @@ mod interplay {
 }
 
 impl NvApi {
-    /// Diagnostyka zgodności: funkcje NVAPI, których sterownik nie ma, wersja
-    /// struktury P-stanów i maska czujników (tylko odczyt).
+    /// Diagnostyka zgodności: funkcje NVAPI, których sterownik nie ma, i wersja
+    /// struktury P-stanów (tylko odczyt).
     pub fn diagnostics(&self) -> Vec<String> {
-        let mut out = vec![format!(
-            "pstates20 struct version 0x{:08X}, thermal sensor mask {}",
-            self.pstates_version,
-            self.sensor_mask
-                .map_or("not read yet".to_owned(), |m| format!("0x{m:X}"))
-        )];
-        let fns: [(&str, bool); 16] = [
+        let mut out = vec![format!("pstates20 struct version 0x{:08X}", self.pstates_version)];
+        let fns: [(&str, bool); 11] = [
             ("GetThermalSettings", self.get_thermal.is_some()),
-            ("ThermalGetSensors", self.get_sensors.is_some()),
-            ("ClientFanCoolersGetStatus", self.fan_status.is_some()),
-            ("ClientFanCoolersGetControl", self.fan_get_control.is_some()),
-            ("ClientFanCoolersSetControl", self.fan_set_control.is_some()),
             ("GetAllClockFrequencies", self.get_clocks.is_some()),
             ("GetDynamicPstatesInfoEx", self.get_usages.is_some()),
             ("GetCurrentVoltage", self.get_voltage.is_some()),
@@ -1243,7 +860,6 @@ impl NvApi {
             ("ClockClientClkVfPointsGetControl", self.get_table.is_some()),
             ("ClockClientClkVfPointsSetControl", self.set_table.is_some()),
             ("ClockClientClkVfPointsGetStatus", self.get_vfp.is_some()),
-            ("ClientPowerTopologyGetStatus", self.get_topology.is_some()),
             ("NVML (nvml.dll)", self.nvml.is_some()),
         ];
         let missing: Vec<&str> = fns.iter().filter(|f| !f.1).map(|f| f.0).collect();

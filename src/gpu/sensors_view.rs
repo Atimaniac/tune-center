@@ -85,10 +85,10 @@ fn rows() -> Vec<Row> {
             None,
             |m| m.details.video_mhz.map(|v| v as f32)
         ),
-        row!("Hot Spot", "NVAPI", "°C", 1, None, |m| m.hotspot_c),
+        row!("Hot Spot", "LHM", "°C", 1, None, |m| m.hotspot_c),
         row!(
             tr("Temperatura pamięci", "Memory Temperature"),
-            "NVAPI / NVML",
+            "NVML / LHM",
             "°C",
             1,
             None,

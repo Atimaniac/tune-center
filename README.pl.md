@@ -47,7 +47,7 @@ samym dole okna. W dalszej części opisu sekcje noszą polskie nazwy:
 Interfejs i logika są w Rust (egui). Czujniki płyty głównej obsługuje mały
 proces pomocniczy `sensor-bridge` oparty na bibliotece LibreHardwareMonitor,
 a kartę graficzną - bezpośrednio biblioteki sterowników: `nvapi64.dll`
-(Nvidia) i `atiadlxx.dll` (AMD).
+(Nvidia) i `amdadlx64.dll` (AMD, ADLX).
 
 ## Wymagania
 
@@ -789,10 +789,10 @@ wszystkich motywach takie same. Wybór jest zapamiętywany.
 | --- | --- | --- |
 | Karta Nvidia: temperatura, hotspot, zegary, napięcie, użycie | NVAPI (sterownik Nvidii) | nie |
 | Karta Nvidia: pobór mocy, wysterowanie wentylatora | NVML (sterownik Nvidii) | nie |
-| Karta AMD: temperatura, hotspot, wentylator, moc, zegary | ADL (sterownik AMD) | nie |
+| Karta AMD: temperatura, hotspot, wentylator, moc, zegary | ADLX (sterownik AMD) | nie |
 | Temperatura karty w SENSORS | wprost ze sterownika karty | nie |
 | Moc karty w POWER | wprost ze sterownika karty; czujniki są zapasem | nie |
-| Wentylatory karty w FAN (odczyt i sterowanie) | wprost ze sterownika karty (NVAPI / ADL) | nie |
+| Wentylatory karty w FAN (odczyt i sterowanie) | wprost ze sterownika karty (NVAPI / ADLX) | nie |
 | Dyski | API dysków Windows; czujniki są zapasem | nie |
 | Temperatura i moc procesora | LibreHardwareMonitor | tak |
 | Wentylatory i temperatury płyty głównej | LibreHardwareMonitor | tak |
@@ -811,7 +811,7 @@ przechodzi na czujniki.
 
 Program steruje wentylatorami karty sam, w osobnym wątku (działa też przy
 oknie schowanym w zasobniku): Nvidia przez NVAPI (ClientFanCoolers), AMD
-przez ADL (Overdrive 5). Wszystkie wentylatory jednej karty dostają to samo
+przez ADLX (krzywa wentylatora). Wszystkie wentylatory jednej karty dostają to samo
 wysterowanie i są w zakładce FAN jedną kartą "GPU Fan".
 
 Zabezpieczenia:
@@ -858,7 +858,7 @@ tego samego rodzaju, a nie jego brak.
 W zakładce NVIDIA > Overclock > Informacje:
 
 - **Temperatura hotspot** - najcieplejszy punkt karty, odczytywany wprost ze
-  sterownika (NVAPI / ADL). Karty GeForce RTX serii 50 nie udostępniają go w
+  sterownika (NVAPI / ADLX). Karty GeForce RTX serii 50 nie udostępniają go w
   API sterownika (sprawdzone pod obciążeniem na RTX 5070: wszystkie czujniki
   NVAPI i NVML to rdzeń albo pamięć) - wiersz Hot Spot pokazuje wtedy
   "niedostępny". GPU-Z odczytuje go własnym sterownikiem jądra. "Temperatura
@@ -888,7 +888,7 @@ FAIL i surowe dane:
 - procesor: identyfikator CPUID, surowe odczyty MSR (Intel) albo generacja,
   wersja tabeli PM i odczyty SMU (AMD), wszystko, co pokazuje zakładka CPU,
 - karta: identyfikatory PCI, okna pamięci (ReBAR), brakujące funkcje NVAPI /
-  NVML, ADL, odczyty czujników, wentylator, offsety, krzywa V/F,
+  NVML, ADLX, odczyty czujników, wentylator, offsety, krzywa V/F,
 - czujniki (LibreHardwareMonitor): układ Super I/O, temperatury, wentylatory,
 - dyski, RGB (wykryte urządzenia i lista wszystkich urządzeń USB HID), TUNE,
   gry i silniki do kompilacji shaderów, raporty awarii.
@@ -981,9 +981,9 @@ w zakładce ABOUT. Składniki innych autorów zachowują swoje licencje - zobacz
 - Projekt nie był kompilowany w całości ani uruchamiany na prawdziwym
   sprzęcie; możliwe drobne błędy kompilacji do poprawienia. Sprawdzona jest
   składnia wszystkich plików Rust i obliczanie krzywej wentylatorów.
-- Obsługa kart AMD (`src/gpu/amd.rs`) opiera się na oficjalnym ADL SDK
-  (struktury, identyfikatory i kolejność wywołań z przykładu Overdrive8).
-  Typy i rozmiary struktur są sprawdzone kompilatorem, ale kod nie był
+- Obsługa kart AMD (`src/gpu/amd.rs`) opiera się na oficjalnym ADLX SDK
+  (układy interfejsów z nagłówków C i kolejność wywołań z przykładów GPUTuning).
+  Kod jest sprawdzony kompilatorem, ale nie był
   uruchomiony na karcie Radeon.
 - Funkcje krzywej V/F i zapisu offsetów są nieudokumentowane przez Nvidię.
   Jeśli sterownik odrzuci strukturę, program pokaże błąd w pasku stanu

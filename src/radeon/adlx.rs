@@ -32,8 +32,9 @@ pub struct Obj {
     release: bool,
 }
 
-// Obiekty ADLX są używane tylko z wątku interfejsu; przeniesienie wskaźnika
-// między wątkami nie zmienia obiektu.
+// Obiekty zakładki RADEON są używane tylko z wątku interfejsu, obiekty karty
+// graficznej (src/gpu/amd.rs) z kilku wątków, ale zawsze pod blokadą `lock`.
+// Przeniesienie wskaźnika między wątkami nie zmienia obiektu.
 unsafe impl Send for Obj {}
 
 impl Drop for Obj {
@@ -197,6 +198,79 @@ impl Obj {
         check(r)
     }
 
+    /// Metoda `(this, arg*, adlx_bool*)`, np. `IsSupportedManualGFXTuning`.
+    pub fn flag_for(&self, slot: usize, arg: &Obj) -> Result<bool, i32> {
+        let mut v = 0u8;
+        // SAFETY: metoda o sygnaturze (this, IADLX*, adlx_bool*) -> ADLX_RESULT.
+        let r = unsafe {
+            let f: extern "system" fn(*mut Vtbl, *mut c_void, *mut u8) -> i32 =
+                std::mem::transmute(self.slot(slot));
+            f(self.ptr, arg.raw(), &mut v)
+        };
+        check(r).map(|_| v != 0)
+    }
+
+    /// Metoda `(this, arg*)`, np. `SetFanTuningStates(lista)`.
+    pub fn call_with(&self, slot: usize, arg: &Obj) -> Result<(), i32> {
+        // SAFETY: metoda o sygnaturze (this, IADLX*) -> ADLX_RESULT.
+        let r = unsafe {
+            let f: extern "system" fn(*mut Vtbl, *mut c_void) -> i32 =
+                std::mem::transmute(self.slot(slot));
+            f(self.ptr, arg.raw())
+        };
+        check(r)
+    }
+
+    /// Metoda `(this, arg*, adlx_int*)`, np. `IsValidFanTuningStates(lista,
+    /// &indeks)`. Błąd: (kod, indeks złego elementu listy).
+    pub fn validate(&self, slot: usize, arg: &Obj) -> Result<(), (i32, i32)> {
+        let mut index = -1i32;
+        // SAFETY: metoda o sygnaturze (this, IADLX*, adlx_int*) -> ADLX_RESULT.
+        let r = unsafe {
+            let f: extern "system" fn(*mut Vtbl, *mut c_void, *mut i32) -> i32 =
+                std::mem::transmute(self.slot(slot));
+            f(self.ptr, arg.raw(), &mut index)
+        };
+        check(r).map_err(|e| (e, index))
+    }
+
+    /// Metoda `(this, adlx_double*)`, np. odczyty `IADLXGPUMetrics`.
+    pub fn double(&self, slot: usize) -> Result<f64, i32> {
+        let mut v = 0f64;
+        // SAFETY: metoda o sygnaturze (this, adlx_double*) -> ADLX_RESULT.
+        let r = unsafe {
+            let f: extern "system" fn(*mut Vtbl, *mut f64) -> i32 =
+                std::mem::transmute(self.slot(slot));
+            f(self.ptr, &mut v)
+        };
+        check(r).map(|_| v)
+    }
+
+    /// Metoda `(this, adlx_int*, adlx_int*)`, np. `GetGPUFanSpeedRange`.
+    pub fn int_pair(&self, slot: usize) -> Result<(i32, i32), i32> {
+        let (mut a, mut b) = (0i32, 0i32);
+        // SAFETY: metoda o sygnaturze (this, adlx_int*, adlx_int*) -> ADLX_RESULT.
+        let r = unsafe {
+            let f: extern "system" fn(*mut Vtbl, *mut i32, *mut i32) -> i32 =
+                std::mem::transmute(self.slot(slot));
+            f(self.ptr, &mut a, &mut b)
+        };
+        check(r).map(|_| (a, b))
+    }
+
+    /// Metoda `(this, ADLX_IntRange*, ADLX_IntRange*)`, np. zakresy
+    /// częstotliwości i napięcia w `GetGPUTuningRanges`.
+    pub fn ranges(&self, slot: usize) -> Result<(IntRange, IntRange), i32> {
+        let (mut a, mut b) = (IntRange::default(), IntRange::default());
+        // SAFETY: metoda o sygnaturze (this, ADLX_IntRange*, ADLX_IntRange*) -> ADLX_RESULT.
+        let r = unsafe {
+            let f: extern "system" fn(*mut Vtbl, *mut IntRange, *mut IntRange) -> i32 =
+                std::mem::transmute(self.slot(slot));
+            f(self.ptr, &mut a, &mut b)
+        };
+        check(r).map(|_| (a, b))
+    }
+
     /// Metoda `(this, const char**)`, np. nazwa karty albo wersja sterownika.
     pub fn text(&self, slot: usize) -> Result<String, i32> {
         let mut p: *const c_char = std::ptr::null();
@@ -272,6 +346,8 @@ pub mod system {
     pub const GET_GPUS: usize = 1;
     pub const GET_DISPLAYS_SERVICES: usize = 3;
     pub const GET_3D_SETTINGS_SERVICES: usize = 7;
+    pub const GET_GPU_TUNING_SERVICES: usize = 8;
+    pub const GET_PERFORMANCE_MONITORING_SERVICES: usize = 9;
 }
 
 /// IADLXGPUList / IADLXDisplayList (IADLXList + `At_*List`).
@@ -288,8 +364,128 @@ pub mod gpu {
     /// IADLXGPU2
     pub const AMD_SOFTWARE_VERSION: usize = 31;
     pub const DRIVER_VERSION: usize = 32;
+    /// `(this, adlx_int*)`
+    pub const UNIQUE_ID: usize = 18;
     /// ADLX_GPU_TYPE
+    pub const TYPE_INTEGRATED: i32 = 1;
     pub const TYPE_DISCRETE: i32 = 2;
+}
+
+/// IADLXGPUTuningServices (IGPUTuning.h). Metody z argumentem karty
+/// (`IADLXGPU*`); `GetManual*` zwracają IADLXInterface - właściwy interfejs
+/// przez `QueryInterface`.
+pub mod tuning {
+    pub const IS_SUPPORTED_MANUAL_GFX: usize = 8;
+    pub const IS_SUPPORTED_MANUAL_VRAM: usize = 9;
+    pub const IS_SUPPORTED_MANUAL_FAN: usize = 10;
+    pub const GET_MANUAL_GFX: usize = 14;
+    pub const GET_MANUAL_VRAM: usize = 15;
+    pub const GET_MANUAL_FAN: usize = 16;
+}
+
+/// IADLXManualTuningStateList / IADLXManualFanTuningStateList: jak `list`
+/// (`Size` 3, `At_*` 11).
+/// IADLXManualTuningState: częstotliwość (MHz) i napięcie (mV).
+pub mod state {
+    pub const GET_FREQUENCY: usize = 3;
+    pub const SET_FREQUENCY: usize = 4;
+    pub const GET_VOLTAGE: usize = 5;
+    pub const SET_VOLTAGE: usize = 6;
+}
+
+/// IADLXManualFanTuningState: wysterowanie (%) i temperatura (°C).
+pub mod fan_state {
+    pub const GET_FAN_SPEED: usize = 3;
+    pub const SET_FAN_SPEED: usize = 4;
+    pub const GET_TEMPERATURE: usize = 5;
+    pub const SET_TEMPERATURE: usize = 6;
+}
+
+/// IADLXManualGraphicsTuning1 (stany częstotliwość/napięcie, RX 5000 i
+/// starsze) i IADLXManualGraphicsTuning2 (min/max, RX 6000 i nowsze),
+/// IADLXManualGraphicsTuning2_1 (+ wartości domyślne).
+pub mod gfx {
+    pub const IID1: &str = "IADLXManualGraphicsTuning1";
+    pub const IID2: &str = "IADLXManualGraphicsTuning2";
+    pub const IID2_1: &str = "IADLXManualGraphicsTuning2_1";
+    /// Tuning1: (zakres częstotliwości, zakres napięcia).
+    pub const V1_GET_RANGES: usize = 3;
+    pub const V1_GET_STATES: usize = 4;
+    pub const V1_GET_EMPTY_STATES: usize = 5;
+    pub const V1_IS_VALID_STATES: usize = 6;
+    pub const V1_SET_STATES: usize = 7;
+    /// Tuning2
+    pub const V2_GET_MAX_FREQUENCY_RANGE: usize = 6;
+    pub const V2_GET_MAX_FREQUENCY: usize = 7;
+    pub const V2_SET_MAX_FREQUENCY: usize = 8;
+    /// Tuning2_1
+    pub const V2_1_GET_MAX_FREQUENCY_DEFAULT: usize = 13;
+}
+
+/// IADLXManualVRAMTuning1 (stany) i IADLXManualVRAMTuning2 (maksimum),
+/// IADLXManualVRAMTuning2_1 (+ wartość domyślna).
+pub mod vram {
+    pub const IID1: &str = "IADLXManualVRAMTuning1";
+    pub const IID2: &str = "IADLXManualVRAMTuning2";
+    pub const IID2_1: &str = "IADLXManualVRAMTuning2_1";
+    /// Tuning1: (zakres częstotliwości, zakres napięcia).
+    pub const V1_GET_RANGES: usize = 7;
+    pub const V1_GET_STATES: usize = 8;
+    pub const V1_GET_EMPTY_STATES: usize = 9;
+    pub const V1_IS_VALID_STATES: usize = 10;
+    pub const V1_SET_STATES: usize = 11;
+    /// Tuning2
+    pub const V2_GET_MAX_FREQUENCY_RANGE: usize = 7;
+    pub const V2_GET_MAX_FREQUENCY: usize = 8;
+    pub const V2_SET_MAX_FREQUENCY: usize = 9;
+    /// Tuning2_1
+    pub const V2_1_GET_MAX_FREQUENCY_DEFAULT: usize = 10;
+}
+
+/// IADLXManualFanTuning (IGPUManualFanTuning.h).
+pub mod fan {
+    pub const IID: &str = "IADLXManualFanTuning";
+    /// (zakres wysterowania %, zakres temperatury °C)
+    pub const GET_RANGES: usize = 3;
+    pub const GET_STATES: usize = 4;
+    pub const GET_EMPTY_STATES: usize = 5;
+    pub const IS_VALID_STATES: usize = 6;
+    pub const SET_STATES: usize = 7;
+    pub const IS_SUPPORTED_ZERO_RPM: usize = 8;
+    pub const GET_ZERO_RPM: usize = 9;
+    pub const SET_ZERO_RPM: usize = 10;
+    pub const IS_SUPPORTED_TARGET_FAN_SPEED: usize = 19;
+    /// Zakres docelowych obrotów (RPM).
+    pub const GET_TARGET_FAN_SPEED_RANGE: usize = 20;
+    pub const GET_TARGET_FAN_SPEED: usize = 21;
+    pub const SET_TARGET_FAN_SPEED: usize = 22;
+}
+
+/// IADLXPerformanceMonitoringServices (IPerformanceMonitoring.h).
+pub mod perf {
+    /// `(this, IADLXGPU*, IADLXGPUMetrics**)`
+    pub const GET_CURRENT_GPU_METRICS: usize = 18;
+    /// `(this, IADLXGPU*, IADLXGPUMetricsSupport**)`
+    pub const GET_SUPPORTED_GPU_METRICS: usize = 21;
+}
+
+/// IADLXGPUMetricsSupport: zakresy `(this, adlx_int* min, adlx_int* max)`.
+pub mod metrics_support {
+    pub const IS_SUPPORTED_GPU_FAN_SPEED: usize = 10;
+    pub const GET_GPU_FAN_SPEED_RANGE: usize = 19;
+}
+
+/// IADLXGPUMetrics: `adlx_double*` (°C, %, W) albo `adlx_int*` (MHz, RPM, mV).
+pub mod metrics {
+    pub const GPU_USAGE: usize = 4;
+    pub const GPU_CLOCK_SPEED: usize = 5;
+    pub const GPU_VRAM_CLOCK_SPEED: usize = 6;
+    pub const GPU_TEMPERATURE: usize = 7;
+    pub const GPU_HOTSPOT_TEMPERATURE: usize = 8;
+    pub const GPU_POWER: usize = 9;
+    pub const GPU_TOTAL_BOARD_POWER: usize = 10;
+    pub const GPU_FAN_SPEED: usize = 11;
+    pub const GPU_VOLTAGE: usize = 13;
 }
 
 /// IADLX3DSettingsServices (0-16), ...1 (17), ...2 (18), ...3 (19, 20).
@@ -450,6 +646,20 @@ impl Adlx {
                 software_version,
             })
         }
+    }
+
+    /// Obiekt IADLXSystem (karty, usługi strojenia i pomiarów).
+    pub fn system(&self) -> &Obj {
+        &self._system
+    }
+
+    /// Blokada wywołań ADLX z wielu wątków. Nagłówki ADLX nie opisują
+    /// bezpieczeństwa wątków poza licznikiem odwołań, dlatego karta graficzna
+    /// (interfejs, odczyt czujników, sterowanie wentylatorem - każdy w swoim
+    /// wątku) wywołuje ADLX wyłącznie pod tą blokadą.
+    pub fn lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Ekrany podłączone do kart AMD: (nazwa, obiekt IADLXDisplay).

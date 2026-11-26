@@ -1,4 +1,4 @@
-//! Ładowanie bibliotek DLL sterowników (NVAPI, NVML, ADL, ADLX, IGCL, PawnIO,
+//! Ładowanie bibliotek DLL sterowników (NVAPI, NVML, ADLX, IGCL, PawnIO,
 //! Oodle) i odczyt ich funkcji przez Windows API (`LoadLibraryExW`,
 //! `GetProcAddress`, `FreeLibrary`).
 

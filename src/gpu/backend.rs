@@ -1,4 +1,4 @@
-//! Wspólny interfejs dla kart Nvidia (NVAPI), AMD (ADL) i trybu demo.
+//! Wspólny interfejs dla kart Nvidia (NVAPI), AMD (ADLX) i trybu demo.
 
 pub type Result<T> = std::result::Result<T, String>;
 

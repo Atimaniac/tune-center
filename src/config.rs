@@ -75,7 +75,7 @@ pub struct Config {
     #[serde(default = "yes")]
     pub tray: bool,
     /// Wentylatory karty graficznej sterowane wprost przez sterownik karty
-    /// (NVAPI / ADL) zamiast przez proces czujników.
+    /// (NVAPI / ADLX) zamiast przez proces czujników.
     #[serde(default = "yes")]
     pub gpu_fans_direct: bool,
     /// Sprawdzanie przy starcie, czy jest nowsza wersja programu.

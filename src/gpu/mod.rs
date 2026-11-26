@@ -225,7 +225,7 @@ impl GpuTab {
             match amd::Amd::load() {
                 Ok(api) => {
                     parts.push(Box::new(api));
-                    found.push("AMD (ADL)");
+                    found.push("AMD (ADLX)");
                 }
                 Err(e) => errors.push(e),
             }
@@ -810,7 +810,7 @@ impl GpuTab {
     }
 
     /// Nazwa i temperatura wybranej karty odczytane wprost ze sterownika
-    /// (NVAPI / ADL); `None` w trybie demo albo gdy sterownik nie podał wartości.
+    /// (NVAPI / ADLX); `None` w trybie demo albo gdy sterownik nie podał wartości.
     pub fn reading(&self) -> Option<(&str, f32)> {
         if self.demo {
             return None;
@@ -1351,8 +1351,8 @@ pub fn driver_diagnostics() -> Vec<(bool, String)> {
         Err(e) => out.push((false, format!("NVAPI: {e}"))),
     }
     match amd::Amd::load() {
-        Ok(_) => out.push((true, "ADL (AMD) loaded".to_owned())),
-        Err(e) => out.push((false, format!("ADL: {e}"))),
+        Ok(_) => out.push((true, "ADLX (AMD) loaded".to_owned())),
+        Err(e) => out.push((false, format!("ADLX: {e}"))),
     }
     out
 }

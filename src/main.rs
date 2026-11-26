@@ -1092,7 +1092,7 @@ impl App {
                 &[
                     crate::i18n::tr("PawnIO i PawnIO.Modules (namazso) - dostęp do sprzętu.", "PawnIO and PawnIO.Modules (namazso) - hardware access."),
                     crate::i18n::tr("LibreHardwareMonitor - odczyt czujników i sterowanie wentylatorami.", "LibreHardwareMonitor - sensor readings and fan control."),
-                    crate::i18n::tr("NVIDIA NVAPI i NVML, AMD Display Library i ADLX, Intel Graphics Control Library - karty graficzne.", "NVIDIA NVAPI and NVML, AMD Display Library and ADLX, Intel Graphics Control Library - graphics cards."),
+                    crate::i18n::tr("NVIDIA NVAPI i NVML, AMD ADLX, Intel Graphics Control Library - karty graficzne.", "NVIDIA NVAPI and NVML, AMD ADLX, Intel Graphics Control Library - graphics cards."),
                     crate::i18n::tr("egui / eframe - interfejs.", "egui / eframe - user interface."),
                     crate::i18n::tr("Pełna lista i licencje: plik THIRD-PARTY.md obok programu.", "Full list and licenses: the THIRD-PARTY.md file next to the program."),
                 ],
@@ -1199,7 +1199,7 @@ impl eframe::App for App {
             self.minimize = false;
         }
 
-        // Odczyty karty graficznej idą wprost ze sterownika (NVAPI / ADL),
+        // Odczyty karty graficznej idą wprost ze sterownika (NVAPI / ADLX),
         // więc odświeżamy je niezależnie od otwartej zakładki.
         self.gpu.poll();
         let now = Instant::now();

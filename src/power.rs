@@ -14,7 +14,7 @@ pub struct Reading<'a> {
 }
 
 /// Pobór mocy karty graficznej odczytany wprost ze sterownika karty
-/// (NVML dla Nvidii, ADL dla AMD).
+/// (NVML dla Nvidii, ADLX dla AMD).
 #[derive(Clone, Debug, PartialEq)]
 pub struct GpuPower {
     pub name: String,

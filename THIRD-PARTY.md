@@ -47,17 +47,13 @@ No code was copied from these projects; they were used as documentation.
   Adalight frame), ENE RAM registers, Logitech HID++ RGB features,
   ASUS Aura USB, Gigabyte RGB Fusion 2, Corsair Lighting Node and MSI Mystic
   Light packet layouts and command numbers.
-- LibreHardwareMonitor (MPL-2.0): NVAPI structure layouts for reading and
-  controlling graphics card fans (ClientFanCoolers) and the hotspot sensor.
-- AMD Display Library SDK (https://github.com/GPUOpen-LibrariesAndSDKs/display-library):
-  Overdrive 8 structures and calls for Radeon cards.
 - NVIDIA NVAPI SDK (https://github.com/NVIDIA/nvapi, MIT): function IDs,
   structures and driver setting values (`nvapi.h`, `nvapi_interface.h`,
-  `NvApiDriverSettings.h`) and the DisplayConfiguration, DisplayColorControl
-  and CustomTiming samples – the basis of the NVIDIA tab. The SDK code is not
+  `NvApiDriverSettings.h`) and the DisplayConfiguration and DisplayColorControl
+  samples – the basis of the NVIDIA tab. The SDK code is not
   bundled; the program calls the driver through `nvapi64.dll`.
 - AMD ADLX SDK (https://github.com/GPUOpen-LibrariesAndSDKs/ADLX): C interface
-  layouts (`SDK/Include`) for the RADEON tab. The program calls the driver
+  layouts (`SDK/Include`) for the RADEON tab and the Radeon clocks, fans and sensors. The program calls the driver
   through `amdadlx64.dll`.
 - Intel Graphics Control Library (https://github.com/intel/drivers.gpu.control-library,
   Intel Software License Agreement, Copyright (C) Intel Corporation):

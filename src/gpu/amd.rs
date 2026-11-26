@@ -1,517 +1,585 @@
-//! Karty AMD Radeon przez ADL (atiadlxx.dll), interfejs Overdrive 8
-//! (seria RX 5000 i nowsze).
-//!
-//! Układy struktur, identyfikatory ustawień i kolejność wywołań pochodzą
-//! z oficjalnego ADL SDK (GPUOpen-LibrariesAndSDKs/display-library:
-//! include/adl_defines.h, include/adl_structures.h, Sample/Overdrive8).
+//! Karty AMD Radeon przez ADLX (`amdadlx64.dll`) - oficjalne API sterownika
+//! Radeon, to samo, z którego korzysta AMD Software: Adrenalin Edition.
+//! Wiązanie i numery pozycji metod: `crate::radeon::adlx` (nagłówki C ADLX
+//! SDK: IGPUTuning.h, IGPUManualGFXTuning.h, IGPUManualVRAMTuning.h,
+//! IGPUManualFanTuning.h, IPerformanceMonitoring.h).
 //!
 //! Różnica względem Nvidii: sterownik AMD nie przyjmuje offsetów, tylko
 //! bezwzględne wartości maksymalnego zegara rdzenia i pamięci (w MHz).
 //! Krzywa V/F nie jest dostępna.
+//!
+//! Wątki: interfejs, odczyt czujników (sampler) i sterowanie wentylatorem
+//! mają po własnym `Amd`, ale wszystkie korzystają z jednej sesji ADLX
+//! procesu (`Adlx::shared`) i każde wywołanie ADLX robią pod `Adlx::lock`.
 
 use super::backend::*;
-use std::alloc::Layout;
-use std::ffi::{c_char, c_void};
-use std::mem::{size_of, zeroed};
+use crate::radeon::adlx::{
+    describe, fan, fan_state, gfx, gpu, list, metrics, metrics_support, perf, state, system,
+    tuning, vram, Adlx, Obj,
+};
+use std::sync::{Arc, Mutex};
 
-type Ctx = *mut c_void;
-type AllocCb = unsafe extern "system" fn(i32) -> *mut c_void;
-type FnCreate = unsafe extern "C" fn(AllocCb, i32, *mut Ctx) -> i32;
-type FnDestroy = unsafe extern "C" fn(Ctx) -> i32;
-type FnNumAdapters = unsafe extern "C" fn(Ctx, *mut i32) -> i32;
-type FnAdapterInfo = unsafe extern "C" fn(Ctx, *mut AdapterInfo, i32) -> i32;
-type FnCaps = unsafe extern "C" fn(Ctx, i32, *mut i32, *mut i32, *mut i32) -> i32;
-type FnInit = unsafe extern "C" fn(Ctx, i32, *mut InitSetting) -> i32;
-type FnInitX2 = unsafe extern "C" fn(Ctx, i32, *mut i32, *mut i32, *mut *mut SingleInit) -> i32;
-type FnCurrent = unsafe extern "C" fn(Ctx, i32, *mut CurrentSetting) -> i32;
-type FnCurrentX2 = unsafe extern "C" fn(Ctx, i32, *mut i32, *mut *mut i32) -> i32;
-type FnSet = unsafe extern "C" fn(Ctx, i32, *mut SetSetting, *mut CurrentSetting) -> i32;
-type FnPmLog = unsafe extern "C" fn(Ctx, i32, *mut PmLogOutput) -> i32;
-/// ADL2_Overdrive5_FanSpeed_Get / _Set: (kontekst, adapter, kontroler termiczny, wartość).
-type FnFanSpeed = unsafe extern "C" fn(Ctx, i32, i32, *mut FanSpeedValue) -> i32;
-/// ADL2_Overdrive5_FanSpeedToDefault_Set: (kontekst, adapter, kontroler termiczny).
-type FnFanDefault = unsafe extern "C" fn(Ctx, i32, i32) -> i32;
+const AMD_VENDOR_ID: &str = "1002";
 
-/// ADLFanSpeedValue.
-#[repr(C)]
-struct FanSpeedValue {
-    size: i32,
-    speed_type: i32,
-    speed: i32,
-    flags: i32,
-}
-
-const FANCTRL_SPEED_TYPE_PERCENT: i32 = 1;
-const FANCTRL_SPEED_TYPE_RPM: i32 = 2;
-const FANCTRL_FLAG_USER_DEFINED_SPEED: i32 = 1;
-type FnRegSet = unsafe extern "C" fn(Ctx, i32, i32, *const c_char, *const c_char, i32) -> i32;
-
-const ADL_MAX_PATH: usize = 256;
-const AMD_VENDOR_ID: i32 = 1002;
-
-// ADLOD8SettingId (adl_defines.h)
-const OD8_GFXCLK_FMAX: usize = 0;
-const OD8_GFXCLK_FMIN: usize = 1;
-const OD8_GFXCLK_FREQ3: usize = 6;
-const OD8_UCLK_FMAX: usize = 8;
-const OD8_UCLK_FMIN: usize = 34;
-const OD8_OPTIMZED_POWER_MODE: usize = 36;
-/// Liczba ustawień w bieżącym SDK.
-const OD8_COUNT: usize = 77;
-/// Tabele w naszych strukturach są większe niż w SDK: jeśli nowszy sterownik
-/// zna więcej ustawień, nie wyjdzie przy zapisie poza bufor.
-const TABLE: usize = 256;
-
-// ADLOD8FeatureControl
-const CAP_GFXCLK_LIMITS: i32 = 1 << 0;
-const CAP_GFXCLK_CURVE: i32 = 1 << 1;
-const CAP_UCLK_MAX: i32 = 1 << 2;
-const CAP_OPTIMIZED_POWER_MODE: i32 = 1 << 16;
-
-// ADL_PMLOG_SENSORS
-const PMLOG_CLK_GFXCLK: usize = 1;
-const PMLOG_CLK_MEMCLK: usize = 2;
-const PMLOG_TEMPERATURE_EDGE: usize = 8;
-const PMLOG_FAN_RPM: usize = 14;
-const PMLOG_FAN_PERCENTAGE: usize = 15;
-const PMLOG_INFO_ACTIVITY_GFX: usize = 19;
-const PMLOG_GFX_VOLTAGE: usize = 21;
-const PMLOG_ASIC_POWER: usize = 23;
-const PMLOG_TEMPERATURE_HOTSPOT: usize = 27;
-const PMLOG_TEMPERATURE_GFX: usize = 28;
-/// Moc całej karty. Karty RDNA 3 i 4 (np. RX 9070 XT) podają moc tylko tu -
-/// `PMLOG_ASIC_POWER` mają nieobsługiwane (tak samo czyta LibreHardwareMonitor).
-const PMLOG_BOARD_POWER: usize = 73;
-
-// ----------------------------- struktury -----------------------------------
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct AdapterInfo {
-    size: i32,
-    adapter_index: i32,
-    udid: [u8; ADL_MAX_PATH],
-    bus_number: i32,
-    device_number: i32,
-    function_number: i32,
-    vendor_id: i32,
-    adapter_name: [u8; ADL_MAX_PATH],
-    display_name: [u8; ADL_MAX_PATH],
-    present: i32,
-    exist: i32,
-    driver_path: [u8; ADL_MAX_PATH],
-    driver_path_ext: [u8; ADL_MAX_PATH],
-    pnp_string: [u8; ADL_MAX_PATH],
-    os_display_index: i32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct SingleInit {
-    feature_id: i32,
-    min: i32,
-    max: i32,
-    default: i32,
-}
-
-#[repr(C)]
-struct InitSetting {
-    count: i32,
-    caps: i32,
-    table: [SingleInit; TABLE],
-}
-
-#[repr(C)]
-struct CurrentSetting {
-    count: i32,
-    table: [i32; TABLE],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct SingleSet {
-    value: i32,
-    requested: i32,
-    reset: i32,
-}
-
-#[repr(C)]
-struct SetSetting {
-    count: i32,
-    table: [SingleSet; TABLE],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct SensorData {
-    supported: i32,
-    value: i32,
-}
-
-#[repr(C)]
-struct PmLogOutput {
-    size: i32,
-    sensors: [SensorData; 256],
-}
-
-// Rozmiary zgodne z nagłówkami SDK (Windows).
-const _: () = assert!(size_of::<AdapterInfo>() == 1572);
-const _: () = assert!(size_of::<SingleInit>() == 16);
-const _: () = assert!(size_of::<SingleSet>() == 12);
-const _: () = assert!(size_of::<PmLogOutput>() == 2052);
-
-// ------------------------- pamięć dla ADL ----------------------------------
-// ADL prosi o pamięć przez wywołanie zwrotne, a zwalnia ją wywołujący.
-// Rozmiar bloku trzymamy w nagłówku przed zwracanym wskaźnikiem.
-
-const HEADER: usize = 16;
-
-unsafe extern "system" fn adl_alloc(size: i32) -> *mut c_void {
-    if size <= 0 {
-        return std::ptr::null_mut();
-    }
-    let total = size as usize + HEADER;
-    let Ok(layout) = Layout::from_size_align(total, 16) else {
-        return std::ptr::null_mut();
-    };
-    let base = std::alloc::alloc_zeroed(layout);
-    if base.is_null() {
-        return std::ptr::null_mut();
-    }
-    (base as *mut usize).write(total);
-    base.add(HEADER) as *mut c_void
-}
-
-unsafe fn adl_free(ptr: *mut c_void) {
-    if ptr.is_null() {
-        return;
-    }
-    let base = (ptr as *mut u8).sub(HEADER);
-    let total = (base as *const usize).read();
-    std::alloc::dealloc(base, Layout::from_size_align_unchecked(total, 16));
-}
-
-// ------------------------------- API ---------------------------------------
-
-struct Od8 {
-    caps: i32,
-    init: [SingleInit; OD8_COUNT],
-    current: [i32; OD8_COUNT],
+struct Card {
+    gpu: Obj,
+    name: String,
+    /// Klucz karty w pamięci procesu (`UniqueId` ADLX, inaczej pozycja na
+    /// liście) - wspólny dla egzemplarzy `Amd` z różnych wątków.
+    key: i32,
+    /// Układ zintegrowany w procesorze.
+    integrated: bool,
+    /// Najwyższe obroty wentylatora według sterownika (do przeliczenia na %).
+    fan_max_rpm: Option<i32>,
 }
 
 pub struct Amd {
-    _lib: crate::dll::Library,
-    ctx: Ctx,
-    /// Indeksy adapterów ADL, po jednym na fizyczną kartę.
-    adapters: Vec<i32>,
-    names: Vec<String>,
-    destroy: Option<FnDestroy>,
-    caps: Option<FnCaps>,
-    init: Option<FnInit>,
-    init_x2: Option<FnInitX2>,
-    current: Option<FnCurrent>,
-    current_x2: Option<FnCurrentX2>,
-    set: Option<FnSet>,
-    pmlog: Option<FnPmLog>,
-    reg_set: Option<FnRegSet>,
-    fan_get: Option<FnFanSpeed>,
-    fan_set: Option<FnFanSpeed>,
-    fan_default: Option<FnFanDefault>,
+    cards: Vec<Card>,
+    /// IADLXGPUTuningServices
+    tuning: Option<Obj>,
+    /// IADLXPerformanceMonitoringServices
+    perf: Option<Obj>,
+    _adlx: Arc<Adlx>,
 }
 
-unsafe fn sym<T: Copy>(lib: &crate::dll::Library, name: &[u8]) -> Option<T> {
-    lib.get::<T>(name).ok().map(|s| *s)
+fn fail(what: &str, code: i32) -> String {
+    format!("{what}: {}", describe(code))
 }
 
-fn c_string(buf: &[u8]) -> String {
-    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    String::from_utf8_lossy(&buf[..end]).trim().to_string()
+fn bad_index() -> String {
+    crate::i18n::tr("Nieprawidłowy indeks karty", "Invalid card index").to_string()
 }
 
-fn check(name: &str, status: i32) -> Result<()> {
-    match status {
-        0 => Ok(()),
-        -8 => Err(crate::trf!(
-            "{name}: funkcja nieobsługiwana przez tę kartę (kod -8)",
-            "{name}: function not supported by this card (code -8)"
-        )),
-        s => Err(crate::trf!(
-            "{name}: błąd ADL (kod {s})",
-            "{name}: ADL error (code {s})"
-        )),
+// ------------------------- wentylator: stan sprzed -------------------------
+// Tryb automatyczny = przywrócenie krzywej wentylatora (i ZeroRPM / obrotów
+// docelowych) odczytanych przed pierwszą zmianą w tym procesie. Nie używamy
+// `IADLXGPUTuningServices::ResetToFactory`, bo przywraca fabryczne także
+// zegary, napięcia i limit mocy ustawione przez użytkownika.
+
+#[derive(Clone)]
+struct FanSnapshot {
+    /// Punkty krzywej: (wysterowanie %, temperatura °C).
+    curve: Vec<(i32, i32)>,
+    zero_rpm: Option<bool>,
+    target_rpm: Option<i32>,
+}
+
+/// Stan wentylatorów sprzed zmian, wspólny dla wątków (klucz karty).
+static FAN_SNAPSHOTS: Mutex<Vec<(i32, FanSnapshot)>> = Mutex::new(Vec::new());
+
+/// Pierwsza odczytana wartość zegara (klucz karty, rdzeń = 0 / pamięć = 1) -
+/// wartość "domyślna", gdy sterownik nie podaje fabrycznej.
+static FIRST_CLOCK: Mutex<Vec<((i32, u8), i32)>> = Mutex::new(Vec::new());
+
+fn first_clock(key: i32, domain: Domain, value: i32) -> i32 {
+    let id = (key, (domain == Domain::Memory) as u8);
+    let mut seen = FIRST_CLOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, v)) = seen.iter().find(|(k, _)| *k == id) {
+        return *v;
+    }
+    seen.push((id, value));
+    value
+}
+
+// ------------------------------ zegary --------------------------------------
+
+/// Pozycje metod jednej domeny zegara (rdzeń: Graphics, pamięć: VRAM).
+struct Spec {
+    supported: usize,
+    get: usize,
+    iid1: &'static str,
+    iid2: &'static str,
+    iid2_1: &'static str,
+    v1_ranges: usize,
+    v1_states: usize,
+    v1_empty: usize,
+    v1_valid: usize,
+    v1_set: usize,
+    v2_range: usize,
+    v2_get: usize,
+    v2_set: usize,
+    v2_1_default: usize,
+}
+
+const GFX: Spec = Spec {
+    supported: tuning::IS_SUPPORTED_MANUAL_GFX,
+    get: tuning::GET_MANUAL_GFX,
+    iid1: gfx::IID1,
+    iid2: gfx::IID2,
+    iid2_1: gfx::IID2_1,
+    v1_ranges: gfx::V1_GET_RANGES,
+    v1_states: gfx::V1_GET_STATES,
+    v1_empty: gfx::V1_GET_EMPTY_STATES,
+    v1_valid: gfx::V1_IS_VALID_STATES,
+    v1_set: gfx::V1_SET_STATES,
+    v2_range: gfx::V2_GET_MAX_FREQUENCY_RANGE,
+    v2_get: gfx::V2_GET_MAX_FREQUENCY,
+    v2_set: gfx::V2_SET_MAX_FREQUENCY,
+    v2_1_default: gfx::V2_1_GET_MAX_FREQUENCY_DEFAULT,
+};
+
+const VRAM: Spec = Spec {
+    supported: tuning::IS_SUPPORTED_MANUAL_VRAM,
+    get: tuning::GET_MANUAL_VRAM,
+    iid1: vram::IID1,
+    iid2: vram::IID2,
+    iid2_1: vram::IID2_1,
+    v1_ranges: vram::V1_GET_RANGES,
+    v1_states: vram::V1_GET_STATES,
+    v1_empty: vram::V1_GET_EMPTY_STATES,
+    v1_valid: vram::V1_IS_VALID_STATES,
+    v1_set: vram::V1_SET_STATES,
+    v2_range: vram::V2_GET_MAX_FREQUENCY_RANGE,
+    v2_get: vram::V2_GET_MAX_FREQUENCY,
+    v2_set: vram::V2_SET_MAX_FREQUENCY,
+    v2_1_default: vram::V2_1_GET_MAX_FREQUENCY_DEFAULT,
+};
+
+fn spec(domain: Domain) -> &'static Spec {
+    match domain {
+        Domain::Core => &GFX,
+        Domain::Memory => &VRAM,
     }
 }
+
+/// Interfejs strojenia jednej domeny: nowszy (min/max) albo starszy (stany).
+enum Clock {
+    /// IADLXManualGraphicsTuning2 / IADLXManualVRAMTuning2 i obiekt bazowy
+    /// (do zapytania o wersję 2_1).
+    V2(Obj, Obj),
+    /// IADLXManualGraphicsTuning1 / IADLXManualVRAMTuning1.
+    V1(Obj),
+}
+
+/// Stany (częstotliwość MHz, napięcie mV) z listy IADLXManualTuningStateList.
+fn read_states(states: &Obj) -> Result<Vec<(i32, i32)>> {
+    let mut out = Vec::new();
+    for i in 0..states.count(list::SIZE) {
+        let s = states
+            .at(list::AT_TYPED, i)
+            .map_err(|e| fail("ManualTuningStateList::At", e))?;
+        let f = s
+            .int(state::GET_FREQUENCY)
+            .map_err(|e| fail("GetFrequency", e))?;
+        let v = s.int(state::GET_VOLTAGE).map_err(|e| fail("GetVoltage", e))?;
+        out.push((f, v));
+    }
+    Ok(out)
+}
+
+// -------------------------------- API ---------------------------------------
 
 impl Amd {
     pub fn load() -> Result<Self> {
-        unsafe {
-            let lib = crate::dll::Library::new("atiadlxx.dll").map_err(|e| {
-                crate::trf!(
-                    "Nie można załadować atiadlxx.dll (brak sterownika AMD?): {e}",
-                    "Cannot load atiadlxx.dll (AMD driver missing?): {e}"
-                )
-            })?;
+        let adlx = Adlx::shared()?;
+        let _g = Adlx::lock();
+        let sys = adlx.system();
+        let gpus = sys
+            .get(system::GET_GPUS)
+            .map_err(|e| fail("GetGPUs", e))?;
+        let tuning = sys.get(system::GET_GPU_TUNING_SERVICES).ok();
+        let perf = sys.get(system::GET_PERFORMANCE_MONITORING_SERVICES).ok();
 
-            let create: FnCreate = sym(&lib, b"ADL2_Main_Control_Create\0").ok_or_else(|| {
-                crate::i18n::tr(
-                    "Brak ADL2_Main_Control_Create",
-                    "ADL2_Main_Control_Create is missing",
-                )
-                .to_string()
-            })?;
-            let num_adapters: FnNumAdapters = sym(&lib, b"ADL2_Adapter_NumberOfAdapters_Get\0")
-                .ok_or_else(|| {
-                    crate::i18n::tr(
-                        "Brak ADL2_Adapter_NumberOfAdapters_Get",
-                        "ADL2_Adapter_NumberOfAdapters_Get is missing",
-                    )
-                    .to_string()
-                })?;
-            let adapter_info: FnAdapterInfo = sym(&lib, b"ADL2_Adapter_AdapterInfo_Get\0")
-                .ok_or_else(|| {
-                    crate::i18n::tr(
-                        "Brak ADL2_Adapter_AdapterInfo_Get",
-                        "ADL2_Adapter_AdapterInfo_Get is missing",
-                    )
-                    .to_string()
-                })?;
-            let destroy: Option<FnDestroy> = sym(&lib, b"ADL2_Main_Control_Destroy\0");
-
-            let mut ctx: Ctx = std::ptr::null_mut();
-            check("ADL2_Main_Control_Create", create(adl_alloc, 1, &mut ctx))?;
-
-            let fail = |msg: String| -> Result<Self> {
-                if let Some(f) = destroy {
-                    f(ctx);
-                }
-                Err(msg)
+        let mut cards: Vec<Card> = Vec::new();
+        for i in 0..gpus.count(list::SIZE) {
+            let Ok(g) = gpus.at(list::AT_TYPED, i) else {
+                continue;
             };
-
-            let mut count = 0i32;
-            if let Err(e) = check(
-                "ADL2_Adapter_NumberOfAdapters_Get",
-                num_adapters(ctx, &mut count),
-            ) {
-                return fail(e);
+            let amd = g
+                .text(gpu::VENDOR_ID)
+                .map(|v| v.trim().eq_ignore_ascii_case(AMD_VENDOR_ID))
+                .unwrap_or(true);
+            if !amd {
+                continue;
             }
-            if count <= 0 {
-                return fail(
-                    crate::i18n::tr("Nie znaleziono żadnej karty AMD", "No AMD card found")
-                        .to_string(),
-                );
-            }
-
-            let mut infos: Vec<AdapterInfo> = vec![zeroed(); count as usize];
-            let bytes = (size_of::<AdapterInfo>() * infos.len()) as i32;
-            if let Err(e) = check(
-                "ADL2_Adapter_AdapterInfo_Get",
-                adapter_info(ctx, infos.as_mut_ptr(), bytes),
-            ) {
-                return fail(e);
-            }
-
-            // ADL zwraca osobny wpis dla każdego wyjścia obrazu; zostawiamy po
-            // jednym na fizyczną kartę (ta sama szyna, urządzenie i funkcja).
-            let mut adapters = Vec::new();
-            let mut names = Vec::new();
-            let mut seen: Vec<(i32, i32, i32)> = Vec::new();
-            for info in &infos {
-                if info.vendor_id != AMD_VENDOR_ID || info.bus_number < 0 {
-                    continue;
-                }
-                let key = (info.bus_number, info.device_number, info.function_number);
-                if seen.contains(&key) {
-                    continue;
-                }
-                seen.push(key);
-                adapters.push(info.adapter_index);
-                let name = c_string(&info.adapter_name);
-                names.push(if name.is_empty() {
-                    format!("AMD GPU {}", adapters.len())
-                } else {
-                    name
-                });
-            }
-            if adapters.is_empty() {
-                return fail(
-                    crate::i18n::tr("Nie znaleziono żadnej karty AMD", "No AMD card found")
-                        .to_string(),
-                );
-            }
-
-            Ok(Self {
-                ctx,
-                adapters,
-                names,
-                destroy,
-                caps: sym(&lib, b"ADL2_Overdrive_Caps\0"),
-                init: sym(&lib, b"ADL2_Overdrive8_Init_Setting_Get\0"),
-                init_x2: sym(&lib, b"ADL2_Overdrive8_Init_SettingX2_Get\0"),
-                current: sym(&lib, b"ADL2_Overdrive8_Current_Setting_Get\0"),
-                current_x2: sym(&lib, b"ADL2_Overdrive8_Current_SettingX2_Get\0"),
-                set: sym(&lib, b"ADL2_Overdrive8_Setting_Set\0"),
-                pmlog: sym(&lib, b"ADL2_New_QueryPMLogData_Get\0"),
-                reg_set: sym(&lib, b"ADL2_Adapter_RegValueInt_Set\0"),
-                fan_get: sym(&lib, b"ADL2_Overdrive5_FanSpeed_Get\0"),
-                fan_set: sym(&lib, b"ADL2_Overdrive5_FanSpeed_Set\0"),
-                fan_default: sym(&lib, b"ADL2_Overdrive5_FanSpeedToDefault_Set\0"),
-                _lib: lib,
-            })
+            let name = g
+                .text(gpu::NAME)
+                .ok()
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| format!("AMD GPU {}", cards.len() + 1));
+            let key = g.int(gpu::UNIQUE_ID).unwrap_or(i as i32);
+            let integrated = g.int(gpu::TYPE) == Ok(gpu::TYPE_INTEGRATED);
+            let fan_max_rpm = perf
+                .as_ref()
+                .and_then(|p| p.get_for(perf::GET_SUPPORTED_GPU_METRICS, &g).ok())
+                .filter(|s| s.flag(metrics_support::IS_SUPPORTED_GPU_FAN_SPEED) == Ok(true))
+                .and_then(|s| s.int_pair(metrics_support::GET_GPU_FAN_SPEED_RANGE).ok())
+                .map(|(_, max)| max)
+                .filter(|max| *max > 0);
+            cards.push(Card {
+                gpu: g,
+                name,
+                key,
+                integrated,
+                fan_max_rpm,
+            });
         }
-    }
-
-    fn adapter(&self, gpu: usize) -> Result<i32> {
-        self.adapters.get(gpu).copied().ok_or_else(|| {
-            crate::i18n::tr("Nieprawidłowy indeks karty", "Invalid card index").to_string()
+        drop(gpus);
+        if cards.is_empty() {
+            return Err(
+                crate::i18n::tr("Nie znaleziono żadnej karty AMD", "No AMD card found").to_string(),
+            );
+        }
+        Ok(Self {
+            cards,
+            tuning,
+            perf,
+            _adlx: adlx.clone(),
         })
     }
 
-    /// Obroty albo wysterowanie wentylatora przez Overdrive 5.
-    fn od5_fan(&self, adapter: i32, speed_type: i32) -> Option<u32> {
-        let f = self.fan_get?;
-        let mut value = FanSpeedValue {
-            size: size_of::<FanSpeedValue>() as i32,
-            speed_type,
-            speed: 0,
-            flags: 0,
-        };
-        (unsafe { f(self.ctx, adapter, 0, &mut value) } == 0).then_some(value.speed.max(0) as u32)
+    fn card(&self, gpu: usize) -> Result<&Card> {
+        self.cards.get(gpu).ok_or_else(bad_index)
     }
 
-    /// Zakresy, wartości domyślne i bieżące ustawienia Overdrive 8.
-    fn read_od8(&self, adapter: i32) -> Result<Od8> {
-        let caps_fn = self.caps.ok_or_else(|| {
+    fn services(&self) -> Result<&Obj> {
+        self.tuning.as_ref().ok_or_else(|| {
             crate::i18n::tr(
-                "ADL2_Overdrive_Caps: funkcja niedostępna w tym sterowniku",
-                "ADL2_Overdrive_Caps: function not available in this driver",
+                "Sterownik nie udostępnia usługi strojenia karty (ADLX GPUTuningServices).",
+                "The driver does not provide the GPU tuning service (ADLX GPUTuningServices).",
             )
             .to_string()
-        })?;
-        let (mut supported, mut enabled, mut version) = (0i32, 0i32, 0i32);
-        check("ADL2_Overdrive_Caps", unsafe {
-            caps_fn(
-                self.ctx,
-                adapter,
-                &mut supported,
-                &mut enabled,
-                &mut version,
+        })
+    }
+
+    /// Odczyty czujników; wymaga `Adlx::lock`.
+    fn read_monitor(&self, gpu: usize) -> Monitor {
+        let mut m = Monitor::default();
+        let (Ok(c), Some(p)) = (self.card(gpu), self.perf.as_ref()) else {
+            return m;
+        };
+        let Ok(x) = p.get_for(perf::GET_CURRENT_GPU_METRICS, &c.gpu) else {
+            return m;
+        };
+        let real = |slot: usize| x.double(slot).ok().filter(|v| v.is_finite());
+        let int = |slot: usize| x.int(slot).ok();
+        m.temp_c = real(metrics::GPU_TEMPERATURE).map(|v| v.round() as i32);
+        m.hotspot_c = real(metrics::GPU_HOTSPOT_TEMPERATURE)
+            .filter(|v| *v > 0.0)
+            .map(|v| v as f32);
+        m.core_mhz = int(metrics::GPU_CLOCK_SPEED)
+            .filter(|v| *v >= 0)
+            .map(|v| v as f32);
+        m.mem_mhz = int(metrics::GPU_VRAM_CLOCK_SPEED)
+            .filter(|v| *v >= 0)
+            .map(|v| v as f32);
+        m.voltage_mv = int(metrics::GPU_VOLTAGE)
+            .filter(|v| *v > 0)
+            .map(|v| v as f32);
+        m.usage_pct = real(metrics::GPU_USAGE).map(|v| v.clamp(0.0, 100.0).round() as u32);
+        m.fan_rpm = int(metrics::GPU_FAN_SPEED)
+            .filter(|v| *v >= 0)
+            .map(|v| v as u32);
+        // ADLX podaje tylko obroty; procent liczymy względem najwyższych
+        // obrotów z zakresu sterownika.
+        m.fan_pct = match (m.fan_rpm, c.fan_max_rpm) {
+            (Some(rpm), Some(max)) => {
+                Some(((rpm as f64 * 100.0 / max as f64).round() as u32).min(100))
+            }
+            _ => None,
+        };
+        // Układ zintegrowany w procesorze (typ z ADLX albo brak odczytu
+        // wentylatora) podaje tu moc całego procesora, np. 157 W na Ryzen 9
+        // 9950X3D - to nie jest pobór karty, więc go pomijamy (moc procesora
+        // pokazuje zakładka POWER).
+        let integrated = c.integrated || (m.fan_rpm.is_none() && m.fan_pct.is_none());
+        // Moc całej karty; starsze karty podają tylko moc układu.
+        m.power_w = [metrics::GPU_TOTAL_BOARD_POWER, metrics::GPU_POWER]
+            .into_iter()
+            .filter_map(real)
+            .find(|v| *v > 0.0)
+            .filter(|_| !integrated)
+            .map(|v| v as f32);
+        m
+    }
+
+    /// IADLXManualFanTuning karty; wymaga `Adlx::lock`.
+    fn fan_tuning(&self, c: &Card) -> Result<Obj> {
+        let s = self.services()?;
+        if s.flag_for(tuning::IS_SUPPORTED_MANUAL_FAN, &c.gpu) != Ok(true) {
+            return Err(crate::i18n::tr(
+                "Ta karta nie pozwala sterować wentylatorem przez sterownik.",
+                "This card does not allow fan control through the driver.",
+            )
+            .to_string());
+        }
+        let base = s
+            .get_for(tuning::GET_MANUAL_FAN, &c.gpu)
+            .map_err(|e| fail("GetManualFanTuning", e))?;
+        base.query(fan::IID).ok_or_else(|| fail("IADLXManualFanTuning", 12))
+    }
+
+    /// Bieżąca krzywa wentylatora: (wysterowanie %, temperatura °C).
+    fn read_fan_curve(ft: &Obj) -> Result<Vec<(i32, i32)>> {
+        let states = ft
+            .get(fan::GET_STATES)
+            .map_err(|e| fail("GetFanTuningStates", e))?;
+        let mut out = Vec::new();
+        for i in 0..states.count(list::SIZE) {
+            let s = states
+                .at(list::AT_TYPED, i)
+                .map_err(|e| fail("ManualFanTuningStateList::At", e))?;
+            let speed = s
+                .int(fan_state::GET_FAN_SPEED)
+                .map_err(|e| fail("GetFanSpeed", e))?;
+            let temp = s
+                .int(fan_state::GET_TEMPERATURE)
+                .map_err(|e| fail("GetTemperature", e))?;
+            out.push((speed, temp));
+        }
+        Ok(out)
+    }
+
+    /// Zapis krzywej wentylatora jak w przykładzie AMD (ManualFanTuning):
+    /// pusta lista od sterownika, wypełnienie, sprawdzenie, zapis.
+    fn write_fan_curve(ft: &Obj, points: &[(i32, i32)]) -> Result<()> {
+        let empty = ft
+            .get(fan::GET_EMPTY_STATES)
+            .map_err(|e| fail("GetEmptyFanTuningStates", e))?;
+        if empty.count(list::SIZE) as usize != points.len() {
+            return Err(crate::i18n::tr(
+                "Sterownik zmienił liczbę punktów krzywej wentylatora.",
+                "The driver changed the number of fan curve points.",
+            )
+            .to_string());
+        }
+        for (i, &(speed, temp)) in points.iter().enumerate() {
+            let s = empty
+                .at(list::AT_TYPED, i as u32)
+                .map_err(|e| fail("ManualFanTuningStateList::At", e))?;
+            s.set_int(fan_state::SET_FAN_SPEED, speed)
+                .map_err(|e| fail("SetFanSpeed", e))?;
+            s.set_int(fan_state::SET_TEMPERATURE, temp)
+                .map_err(|e| fail("SetTemperature", e))?;
+        }
+        ft.validate(fan::IS_VALID_STATES, &empty).map_err(|(e, i)| {
+            crate::trf!(
+                "IsValidFanTuningStates: {} (punkt {i})",
+                "IsValidFanTuningStates: {} (point {i})",
+                describe(e)
             )
         })?;
-        if version != 8 {
-            return Err(crate::trf!("Ta karta używa interfejsu Overdrive w wersji {version}. Strojenie zegarów jest obsługiwane tylko dla Overdrive 8 (seria RX 5000 i nowsze).", "This card uses Overdrive interface version {version}. Clock tuning is supported only for Overdrive 8 (RX 5000 series and newer)."
+        ft.call_with(fan::SET_STATES, &empty)
+            .map_err(|e| fail("SetFanTuningStates", e))
+    }
+
+    /// Stałe wysterowanie `p` %; wymaga `Adlx::lock`.
+    fn fan_fixed(&self, c: &Card, p: u32) -> Result<()> {
+        let ft = self.fan_tuning(c)?;
+        let curve = Self::read_fan_curve(&ft).unwrap_or_default();
+        let zero_supported = ft.flag(fan::IS_SUPPORTED_ZERO_RPM) == Ok(true);
+        let target_supported = ft.flag(fan::IS_SUPPORTED_TARGET_FAN_SPEED) == Ok(true);
+
+        // Stan sprzed pierwszej zmiany - do powrotu w tryb automatyczny.
+        {
+            let mut snaps = FAN_SNAPSHOTS.lock().unwrap_or_else(|e| e.into_inner());
+            if !snaps.iter().any(|(k, _)| *k == c.key) {
+                let snap = FanSnapshot {
+                    curve: curve.clone(),
+                    zero_rpm: zero_supported
+                        .then(|| ft.flag(fan::GET_ZERO_RPM).ok())
+                        .flatten(),
+                    target_rpm: target_supported
+                        .then(|| ft.int(fan::GET_TARGET_FAN_SPEED).ok())
+                        .flatten(),
+                };
+                snaps.push((c.key, snap));
+            }
+        }
+
+        // ZeroRPM zatrzymałby wentylator poniżej progu temperatury mimo
+        // ustawionego wysterowania; zostaje włączony tylko dla 0 %.
+        if zero_supported {
+            ft.set_flag(fan::SET_ZERO_RPM, p == 0)
+                .map_err(|e| fail("SetZeroRPMState", e))?;
+        }
+
+        if !curve.is_empty() {
+            // Płaska krzywa: każdy punkt z tą samą wartością (najbliższą
+            // dozwolonej), temperatury punktów bez zmian.
+            let (speed, _) = ft
+                .ranges(fan::GET_RANGES)
+                .map_err(|e| fail("GetFanTuningRanges", e))?;
+            let v = (p.min(100) as i32).clamp(speed.min, speed.max.max(speed.min));
+            let flat: Vec<(i32, i32)> = curve.iter().map(|&(_, t)| (v, t)).collect();
+            Self::write_fan_curve(&ft, &flat)
+        } else if target_supported {
+            // Starsze karty: tylko docelowe obroty (RPM) - procent zakresu.
+            let r = ft
+                .range(fan::GET_TARGET_FAN_SPEED_RANGE)
+                .map_err(|e| fail("GetTargetFanSpeedRange", e))?;
+            let rpm = r.min + ((r.max - r.min).max(0) as i64 * p.min(100) as i64 / 100) as i32;
+            ft.set_int(fan::SET_TARGET_FAN_SPEED, rpm)
+                .map_err(|e| fail("SetTargetFanSpeed", e))
+        } else {
+            Err(crate::i18n::tr(
+                "Ta karta nie pozwala sterować wentylatorem przez sterownik.",
+                "This card does not allow fan control through the driver.",
+            )
+            .to_string())
+        }
+    }
+
+    /// Powrót do stanu sprzed zmian; wymaga `Adlx::lock`.
+    fn fan_auto(&self, c: &Card) -> Result<()> {
+        let snap = {
+            let mut snaps = FAN_SNAPSHOTS.lock().unwrap_or_else(|e| e.into_inner());
+            match snaps.iter().position(|(k, _)| *k == c.key) {
+                Some(i) => snaps.remove(i).1,
+                // Ten proces nie zmieniał wentylatora - nie ma czego przywracać.
+                None => return Ok(()),
+            }
+        };
+        let restore = || -> Result<()> {
+            let ft = self.fan_tuning(c)?;
+            if !snap.curve.is_empty() {
+                Self::write_fan_curve(&ft, &snap.curve)?;
+            }
+            if let Some(t) = snap.target_rpm {
+                ft.set_int(fan::SET_TARGET_FAN_SPEED, t)
+                    .map_err(|e| fail("SetTargetFanSpeed", e))?;
+            }
+            if let Some(z) = snap.zero_rpm {
+                ft.set_flag(fan::SET_ZERO_RPM, z)
+                    .map_err(|e| fail("SetZeroRPMState", e))?;
+            }
+            Ok(())
+        };
+        let result = restore();
+        if result.is_err() {
+            // Następna próba przywróci ten sam stan.
+            let mut snaps = FAN_SNAPSHOTS.lock().unwrap_or_else(|e| e.into_inner());
+            snaps.push((c.key, snap.clone()));
+        }
+        result
+    }
+
+    /// Interfejs strojenia domeny; `None`, gdy karta go nie ma. Wymaga
+    /// `Adlx::lock`.
+    fn clock(&self, c: &Card, spec: &Spec) -> Result<Option<Clock>> {
+        let s = self.services()?;
+        if s.flag_for(spec.supported, &c.gpu) != Ok(true) {
+            return Ok(None);
+        }
+        let base = s
+            .get_for(spec.get, &c.gpu)
+            .map_err(|e| fail("GetManualTuning", e))?;
+        if let Some(v2) = base.query(spec.iid2) {
+            return Ok(Some(Clock::V2(v2, base)));
+        }
+        Ok(base.query(spec.iid1).map(Clock::V1))
+    }
+
+    /// Zakres i bieżący maksymalny zegar domeny (wartości w kHz).
+    fn clock_info(&self, c: &Card, domain: Domain) -> Result<Option<OffsetInfo>> {
+        let spec = spec(domain);
+        let Some(clock) = self.clock(c, spec)? else {
+            return Ok(None);
+        };
+        let (min, max, value, default) = match &clock {
+            Clock::V2(t, base) => {
+                let r = t.range(spec.v2_range).map_err(|e| fail("GetMaxFrequencyRange", e))?;
+                let v = t.int(spec.v2_get).map_err(|e| fail("GetMaxFrequency", e))?;
+                let d = base
+                    .query(spec.iid2_1)
+                    .and_then(|t| t.int(spec.v2_1_default).ok())
+                    .filter(|d| *d > 0);
+                (r.min, r.max, v, d)
+            }
+            Clock::V1(t) => {
+                let (r, _) = t.ranges(spec.v1_ranges).map_err(|e| fail("GetTuningRanges", e))?;
+                let states = t.get(spec.v1_states).map_err(|e| fail("GetTuningStates", e))?;
+                let Some(&(top, _)) = read_states(&states)?.last() else {
+                    return Ok(None);
+                };
+                (r.min, r.max, top, None)
+            }
+        };
+        let first = first_clock(c.key, domain, value);
+        Ok((max > min).then(|| OffsetInfo {
+            value_khz: value.saturating_mul(1000),
+            min_khz: min.saturating_mul(1000),
+            max_khz: max.saturating_mul(1000),
+            default_khz: default.unwrap_or(first).saturating_mul(1000),
+        }))
+    }
+
+    /// Ustawia maksymalny zegar domeny (MHz); wymaga `Adlx::lock`.
+    fn set_clock(&self, c: &Card, domain: Domain, mhz: i32) -> Result<()> {
+        let spec = spec(domain);
+        let label = match domain {
+            Domain::Core => crate::i18n::tr("zegar rdzenia", "core clock"),
+            Domain::Memory => crate::i18n::tr("zegar pamięci", "memory clock"),
+        };
+        let not_allowed = || {
+            crate::trf!(
+                "Ta karta nie pozwala zmieniać ustawienia: {label}",
+                "This card does not allow changing: {label}"
+            )
+        };
+        let info = self.clock_info(c, domain)?.ok_or_else(not_allowed)?;
+        let (min, max) = (info.min_khz / 1000, info.max_khz / 1000);
+        if mhz < min || mhz > max {
+            return Err(crate::trf!(
+                "{label}: {mhz} MHz poza zakresem sterownika ({min}-{max} MHz)",
+                "{label}: {mhz} MHz is outside the driver range ({min}-{max} MHz)"
             ));
         }
-
-        let mut od = Od8 {
-            caps: 0,
-            init: [SingleInit::default(); OD8_COUNT],
-            current: [0; OD8_COUNT],
-        };
-
-        // --- zakresy ---
-        if let Some(f) = self.init_x2 {
-            let mut n = OD8_COUNT as i32;
-            let mut list: *mut SingleInit = std::ptr::null_mut();
-            let status = unsafe { f(self.ctx, adapter, &mut od.caps, &mut n, &mut list) };
-            if status == 0 && !list.is_null() {
-                let n = (n.max(0) as usize).min(OD8_COUNT);
-                for (i, slot) in od.init.iter_mut().enumerate().take(n) {
-                    *slot = unsafe { *list.add(i) };
+        match self.clock(c, spec)?.ok_or_else(not_allowed)? {
+            Clock::V2(t, _) => t
+                .set_int(spec.v2_set, mhz)
+                .map_err(|e| fail("SetMaxFrequency", e)),
+            Clock::V1(t) => {
+                // Najwyższy stan dostaje nową częstotliwość, niższe nie mogą
+                // jej przekraczać; napięcia bez zmian (przykład AMD:
+                // ManualGraphicsTuning - pusta lista, wypełnienie, sprawdzenie).
+                let states = t.get(spec.v1_states).map_err(|e| fail("GetTuningStates", e))?;
+                let current = read_states(&states)?;
+                let empty = t
+                    .get(spec.v1_empty)
+                    .map_err(|e| fail("GetEmptyTuningStates", e))?;
+                if current.is_empty() || empty.count(list::SIZE) as usize != current.len() {
+                    return Err(not_allowed());
                 }
-            }
-            unsafe { adl_free(list as *mut c_void) };
-            check("ADL2_Overdrive8_Init_SettingX2_Get", status)?;
-        } else {
-            let f = self.init.ok_or_else(|| {
-                crate::i18n::tr(
-                    "ADL2_Overdrive8_Init_Setting_Get: funkcja niedostępna w tym sterowniku",
-                    "ADL2_Overdrive8_Init_Setting_Get: function not available in this driver",
-                )
-                .to_string()
-            })?;
-            let mut s: Box<InitSetting> = Box::new(unsafe { zeroed() });
-            s.count = OD8_COUNT as i32;
-            check("ADL2_Overdrive8_Init_Setting_Get", unsafe {
-                f(self.ctx, adapter, &mut *s)
-            })?;
-            od.caps = s.caps;
-            od.init.copy_from_slice(&s.table[..OD8_COUNT]);
-        }
-
-        // --- bieżące wartości ---
-        if let Some(f) = self.current_x2 {
-            let mut n = OD8_COUNT as i32;
-            let mut list: *mut i32 = std::ptr::null_mut();
-            let status = unsafe { f(self.ctx, adapter, &mut n, &mut list) };
-            if status == 0 && !list.is_null() {
-                let n = (n.max(0) as usize).min(OD8_COUNT);
-                for (i, slot) in od.current.iter_mut().enumerate().take(n) {
-                    *slot = unsafe { *list.add(i) };
+                let last = current.len() - 1;
+                for (i, &(f, v)) in current.iter().enumerate() {
+                    let s = empty
+                        .at(list::AT_TYPED, i as u32)
+                        .map_err(|e| fail("ManualTuningStateList::At", e))?;
+                    let f = if i == last { mhz } else { f.min(mhz) };
+                    s.set_int(state::SET_FREQUENCY, f)
+                        .map_err(|e| fail("SetFrequency", e))?;
+                    s.set_int(state::SET_VOLTAGE, v)
+                        .map_err(|e| fail("SetVoltage", e))?;
                 }
+                t.validate(spec.v1_valid, &empty).map_err(|(e, i)| {
+                    crate::trf!(
+                        "IsValidTuningStates: {} (stan {i})",
+                        "IsValidTuningStates: {} (state {i})",
+                        describe(e)
+                    )
+                })?;
+                t.call_with(spec.v1_set, &empty)
+                    .map_err(|e| fail("SetTuningStates", e))
             }
-            unsafe { adl_free(list as *mut c_void) };
-            check("ADL2_Overdrive8_Current_SettingX2_Get", status)?;
-        } else {
-            let f = self.current.ok_or_else(|| {
-                crate::i18n::tr(
-                    "ADL2_Overdrive8_Current_Setting_Get: funkcja niedostępna w tym sterowniku",
-                    "ADL2_Overdrive8_Current_Setting_Get: function not available in this driver",
-                )
-                .to_string()
-            })?;
-            let mut s: Box<CurrentSetting> = Box::new(unsafe { zeroed() });
-            s.count = OD8_COUNT as i32;
-            check("ADL2_Overdrive8_Current_Setting_Get", unsafe {
-                f(self.ctx, adapter, &mut *s)
-            })?;
-            od.current.copy_from_slice(&s.table[..OD8_COUNT]);
         }
-
-        Ok(od)
-    }
-
-    fn write(
-        &self,
-        adapter: i32,
-        set: &mut SetSetting,
-        current: &mut CurrentSetting,
-    ) -> Result<()> {
-        let f = self.set.ok_or_else(|| {
-            crate::i18n::tr(
-                "ADL2_Overdrive8_Setting_Set: funkcja niedostępna w tym sterowniku",
-                "ADL2_Overdrive8_Setting_Set: function not available in this driver",
-            )
-            .to_string()
-        })?;
-        check("ADL2_Overdrive8_Setting_Set", unsafe {
-            f(self.ctx, adapter, set, current)
-        })
-    }
-
-    fn info(od: &Od8, id: usize) -> Option<OffsetInfo> {
-        let r = od.init[id];
-        (r.max > r.min).then(|| OffsetInfo {
-            value_khz: od.current[id].saturating_mul(1000),
-            min_khz: r.min.saturating_mul(1000),
-            max_khz: r.max.saturating_mul(1000),
-            default_khz: r.default.saturating_mul(1000),
-        })
     }
 }
 
 impl Drop for Amd {
     fn drop(&mut self) {
-        if let Some(f) = self.destroy {
-            unsafe {
-                f(self.ctx);
-            }
-        }
+        // `Release` obiektów ADLX też pod blokadą.
+        let _g = Adlx::lock();
+        self.cards.clear();
+        self.tuning = None;
+        self.perf = None;
     }
 }
 
 impl Backend for Amd {
     fn gpus(&self) -> Vec<String> {
-        self.names.clone()
+        self.cards.iter().map(|c| c.name.clone()).collect()
     }
 
     fn vendor(&self, _gpu: usize) -> Vendor {
@@ -519,55 +587,11 @@ impl Backend for Amd {
     }
 
     fn monitor(&mut self, gpu: usize) -> Monitor {
-        let mut m = Monitor::default();
-        let (Ok(adapter), Some(f)) = (self.adapter(gpu), self.pmlog) else {
-            return m;
-        };
-        let mut log: Box<PmLogOutput> = Box::new(unsafe { zeroed() });
-        log.size = size_of::<PmLogOutput>() as i32;
-        if unsafe { f(self.ctx, adapter, &mut *log) } != 0 {
-            return m;
-        }
-        let read = |id: usize| {
-            let s = log.sensors[id];
-            (s.supported != 0).then_some(s.value)
-        };
-        m.temp_c = read(PMLOG_TEMPERATURE_EDGE).or_else(|| read(PMLOG_TEMPERATURE_GFX));
-        m.core_mhz = read(PMLOG_CLK_GFXCLK).map(|v| v as f32);
-        m.mem_mhz = read(PMLOG_CLK_MEMCLK).map(|v| v as f32);
-        m.voltage_mv = read(PMLOG_GFX_VOLTAGE).filter(|v| *v > 0).map(|v| v as f32);
-        m.usage_pct = read(PMLOG_INFO_ACTIVITY_GFX).map(|v| v.max(0) as u32);
-        m.hotspot_c = read(PMLOG_TEMPERATURE_HOTSPOT)
-            .filter(|v| *v > 0)
-            .map(|v| v as f32);
-        m.fan_rpm = read(PMLOG_FAN_RPM).map(|v| v.max(0) as u32);
-        m.fan_pct = read(PMLOG_FAN_PERCENTAGE).map(|v| v.clamp(0, 100) as u32);
-        // Układ zintegrowany w procesorze (żadnego odczytu wentylatora) podaje
-        // tu moc całego procesora, np. 157 W na Ryzen 9 9950X3D - to nie jest
-        // pobór karty, więc go pomijamy (moc procesora pokazuje zakładka POWER).
-        let integrated = m.fan_rpm.is_none()
-            && m.fan_pct.is_none()
-            && self.od5_fan(adapter, FANCTRL_SPEED_TYPE_RPM).is_none()
-            && self.od5_fan(adapter, FANCTRL_SPEED_TYPE_PERCENT).is_none();
-        m.power_w = [PMLOG_BOARD_POWER, PMLOG_ASIC_POWER]
-            .into_iter()
-            .filter_map(read)
-            .find(|v| *v > 0)
-            .filter(|_| !integrated)
-            .map(|v| v as f32);
-        m
+        let _g = Adlx::lock();
+        self.read_monitor(gpu)
     }
 
     fn fan(&mut self, gpu: usize) -> Option<FanStatus> {
-        let adapter = self.adapter(gpu).ok()?;
-        let status = FanStatus {
-            rpm: self.od5_fan(adapter, FANCTRL_SPEED_TYPE_RPM),
-            pct: self.od5_fan(adapter, FANCTRL_SPEED_TYPE_PERCENT),
-        };
-        if status != FanStatus::default() {
-            return Some(status);
-        }
-        // Nowsze karty podają wentylator tylko w danych PMLog.
         let m = self.monitor(gpu);
         (m.fan_rpm.is_some() || m.fan_pct.is_some()).then_some(FanStatus {
             rpm: m.fan_rpm,
@@ -576,149 +600,49 @@ impl Backend for Amd {
     }
 
     fn fan_controllable(&mut self, gpu: usize) -> bool {
-        let Ok(adapter) = self.adapter(gpu) else {
+        let _g = Adlx::lock();
+        let Ok(c) = self.card(gpu) else {
             return false;
         };
-        // Sterowanie idzie przez Overdrive 5; skoro sterownik odpowiada na
-        // odczyt wysterowania tą drogą, przyjmie też zapis.
-        self.fan_set.is_some()
-            && self.fan_default.is_some()
-            && self.od5_fan(adapter, FANCTRL_SPEED_TYPE_PERCENT).is_some()
+        let Ok(ft) = self.fan_tuning(c) else {
+            return false;
+        };
+        let curve = Self::read_fan_curve(&ft).is_ok_and(|c| !c.is_empty())
+            && ft.ranges(fan::GET_RANGES).is_ok();
+        curve || ft.flag(fan::IS_SUPPORTED_TARGET_FAN_SPEED) == Ok(true)
     }
 
     fn set_fan(&mut self, gpu: usize, pct: Option<u32>) -> Result<()> {
-        let adapter = self.adapter(gpu)?;
+        let _g = Adlx::lock();
+        let c = self.card(gpu)?;
         match pct {
-            Some(p) => {
-                let f = self.fan_set.ok_or_else(|| {
-                    crate::i18n::tr(
-                        "ADL2_Overdrive5_FanSpeed_Set: funkcja niedostępna w tym sterowniku",
-                        "ADL2_Overdrive5_FanSpeed_Set: function not available in this driver",
-                    )
-                    .to_string()
-                })?;
-                let mut value = FanSpeedValue {
-                    size: size_of::<FanSpeedValue>() as i32,
-                    speed_type: FANCTRL_SPEED_TYPE_PERCENT,
-                    speed: p.min(100) as i32,
-                    flags: FANCTRL_FLAG_USER_DEFINED_SPEED,
-                };
-                check("ADL2_Overdrive5_FanSpeed_Set", unsafe {
-                    f(self.ctx, adapter, 0, &mut value)
-                })
-            }
-            None => {
-                let f = self.fan_default.ok_or_else(|| {
-                    crate::i18n::tr(
-                        "ADL2_Overdrive5_FanSpeedToDefault_Set: funkcja niedostępna w tym sterowniku",
-                        "ADL2_Overdrive5_FanSpeedToDefault_Set: function not available in this driver",
-                    )
-                    .to_string()
-                })?;
-                check("ADL2_Overdrive5_FanSpeedToDefault_Set", unsafe {
-                    f(self.ctx, adapter, 0)
-                })
-            }
+            Some(p) => self.fan_fixed(c, p),
+            None => self.fan_auto(c),
         }
     }
 
     /// Dla AMD "offsety" to bezwzględne maksymalne zegary (wartości w kHz).
     fn offsets(&mut self, gpu: usize) -> Result<Offsets> {
-        let od = self.read_od8(self.adapter(gpu)?)?;
-        let mut out = Offsets::default();
-        if od.caps & CAP_GFXCLK_LIMITS != 0 {
-            out.core = Self::info(&od, OD8_GFXCLK_FMAX);
-        }
-        if od.caps & CAP_UCLK_MAX != 0 {
-            out.mem = Self::info(&od, OD8_UCLK_FMAX);
+        let _g = Adlx::lock();
+        let c = self.card(gpu)?;
+        let out = Offsets {
+            core: self.clock_info(c, Domain::Core)?,
+            mem: self.clock_info(c, Domain::Memory)?,
+        };
+        if out.core.is_none() && out.mem.is_none() {
+            return Err(crate::i18n::tr(
+                "Ta karta nie pozwala na ręczne strojenie zegarów przez sterownik (ADLX).",
+                "This card does not allow manual clock tuning through the driver (ADLX).",
+            )
+            .to_string());
         }
         Ok(out)
     }
 
     fn set_offset(&mut self, gpu: usize, domain: Domain, khz: i32) -> Result<()> {
-        let adapter = self.adapter(gpu)?;
-        let od = self.read_od8(adapter)?;
-        let mhz = khz / 1000;
-
-        let (id, cap, label) = match domain {
-            Domain::Core => (
-                OD8_GFXCLK_FMAX,
-                CAP_GFXCLK_LIMITS,
-                crate::i18n::tr("zegar rdzenia", "core clock"),
-            ),
-            Domain::Memory => (
-                OD8_UCLK_FMAX,
-                CAP_UCLK_MAX,
-                crate::i18n::tr("zegar pamięci", "memory clock"),
-            ),
-        };
-        if od.caps & cap == 0 {
-            return Err(crate::trf!(
-                "Ta karta nie pozwala zmieniać ustawienia: {label}",
-                "This card does not allow changing: {label}"
-            ));
-        }
-        let range = od.init[id];
-        if mhz < range.min || mhz > range.max {
-            return Err(crate::trf!(
-                "{label}: {mhz} MHz poza zakresem sterownika ({}-{} MHz)",
-                "{label}: {mhz} MHz is outside the driver range ({}-{} MHz)",
-                range.min,
-                range.max
-            ));
-        }
-
-        let mut current: Box<CurrentSetting> = Box::new(unsafe { zeroed() });
-        current.count = OD8_COUNT as i32;
-        current.table[..OD8_COUNT].copy_from_slice(&od.current);
-
-        let mut set: Box<SetSetting> = Box::new(unsafe { zeroed() });
-        set.count = OD8_COUNT as i32;
-
-        // Kolejność jak w przykładzie AMD (Sample/Overdrive8: SetOD8Range /
-        // SetOD8PlusRange). Karty z limitami zegara, ale bez krzywej
-        // (RX 6000 i nowsze) wymagają trybu ręcznego i podania pary min/max.
-        let plus = od.caps & CAP_GFXCLK_LIMITS != 0 && od.caps & CAP_GFXCLK_CURVE == 0;
-        if plus {
-            if od.caps & CAP_OPTIMIZED_POWER_MODE != 0 {
-                let mut mode: Box<SetSetting> = Box::new(unsafe { zeroed() });
-                mode.count = OD8_COUNT as i32;
-                mode.table[OD8_OPTIMZED_POWER_MODE].requested = 1;
-                mode.table[OD8_OPTIMZED_POWER_MODE].value = 3; // tryb ręczny
-                self.write(adapter, &mut mode, &mut current)?;
-            }
-            let pair = match domain {
-                Domain::Core => [OD8_GFXCLK_FMAX, OD8_GFXCLK_FMIN],
-                Domain::Memory => [OD8_UCLK_FMAX, OD8_UCLK_FMIN],
-            };
-            for i in pair {
-                set.table[i].requested = 1;
-                set.table[i].value = od.current[i];
-            }
-        }
-
-        set.table[id].requested = 1;
-        set.table[id].value = mhz;
-        if !plus && id == OD8_GFXCLK_FMAX {
-            set.table[OD8_GFXCLK_FREQ3].value = mhz;
-        }
-
-        self.write(adapter, &mut set, &mut current)?;
-
-        // Jak w przykładzie AMD: oznacza w sterowniku, że strojenie jest ręczne.
-        if let Some(f) = self.reg_set {
-            unsafe {
-                f(
-                    self.ctx,
-                    adapter,
-                    1,
-                    std::ptr::null(),
-                    c"IsAutoDefault".as_ptr(),
-                    0,
-                );
-            }
-        }
-        Ok(())
+        let _g = Adlx::lock();
+        let c = self.card(gpu)?;
+        self.set_clock(c, domain, khz / 1000)
     }
 
     fn curve(&mut self, _gpu: usize) -> Result<Vec<CurvePoint>> {

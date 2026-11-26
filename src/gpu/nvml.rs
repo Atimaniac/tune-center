@@ -18,6 +18,26 @@ type FnArg = unsafe extern "C" fn(Device, u32, *mut u32) -> i32;
 type FnPair = unsafe extern "C" fn(Device, *mut u32, *mut u32) -> i32;
 type FnMemory = unsafe extern "C" fn(Device, *mut Memory) -> i32;
 type FnFields = unsafe extern "C" fn(Device, i32, *mut FieldValue) -> i32;
+type FnFanRpm = unsafe extern "C" fn(Device, *mut FanSpeedInfo) -> i32;
+type FnSet = unsafe extern "C" fn(Device, u32, u32) -> i32;
+type FnFanDefault = unsafe extern "C" fn(Device, u32) -> i32;
+
+/// `nvmlFanSpeedInfo_t` (wersja 1): obroty wentylatora `fan`.
+#[repr(C)]
+#[derive(Default)]
+struct FanSpeedInfo {
+    version: u32,
+    fan: u32,
+    speed: u32,
+}
+
+/// `NVML_STRUCT_VERSION(FanSpeedInfo, 1)`: rozmiar i numer wersji w bicie 24.
+const FAN_SPEED_INFO_V1: u32 = std::mem::size_of::<FanSpeedInfo>() as u32 | 1 << 24;
+
+/// `NVML_FI_DEV_POWER_INSTANT` z zakresem `NVML_POWER_SCOPE_GPU` - chwilowa
+/// moc samego układu GPU (mW).
+const FIELD_POWER_INSTANT: u32 = 186;
+const POWER_SCOPE_GPU: u32 = 0;
 
 /// `nvmlMemory_t` (bajty).
 #[repr(C)]
@@ -92,6 +112,11 @@ pub struct Nvml {
     clock: Option<FnArg>,
     pstate: Option<FnValue>,
     reasons: Option<FnValue64>,
+    num_fans: Option<FnValue>,
+    fan_v2: Option<FnArg>,
+    fan_rpm: Option<FnFanRpm>,
+    set_fan: Option<FnSet>,
+    default_fan: Option<FnFanDefault>,
 }
 
 /// Przyczyny ograniczania zegarów (jak "PerfCap Reason" w GPU-Z).
@@ -180,6 +205,11 @@ impl Nvml {
                 pstate: sym(&lib, b"nvmlDeviceGetPerformanceState\0"),
                 reasons: sym::<FnValue64>(&lib, b"nvmlDeviceGetCurrentClocksEventReasons\0")
                     .or_else(|| sym(&lib, b"nvmlDeviceGetCurrentClocksThrottleReasons\0")),
+                num_fans: sym(&lib, b"nvmlDeviceGetNumFans\0"),
+                fan_v2: sym(&lib, b"nvmlDeviceGetFanSpeed_v2\0"),
+                fan_rpm: sym(&lib, b"nvmlDeviceGetFanSpeedRPM\0"),
+                set_fan: sym(&lib, b"nvmlDeviceSetFanSpeed_v2\0"),
+                default_fan: sym(&lib, b"nvmlDeviceSetDefaultFanSpeed_v2\0"),
                 shutdown,
                 devices,
                 _lib: lib,
@@ -191,20 +221,6 @@ impl Nvml {
     fn device(&self, index: usize, name: &str) -> Option<Device> {
         let names: Vec<&str> = self.devices.iter().map(|(_, n)| n.as_str()).collect();
         pick(&names, index, name).map(|i| self.devices[i].0)
-    }
-
-    #[cfg(test)]
-    /// Pole NVML typu double (`nvmlDeviceGetFieldValues`, typ wartości 0).
-    pub fn field_f64(&self, index: usize, name: &str, id: u32) -> Option<f64> {
-        let dev = self.device(index, name)?;
-        let f = self.fields?;
-        let mut v = FieldValue {
-            field_id: id,
-            ..Default::default()
-        };
-        // SAFETY: uchwyt z NVML, jedna struktura wyniku.
-        (unsafe { f(dev, 1, &mut v) } == 0 && v.status == 0 && v.value_type == 0)
-            .then(|| f64::from_bits(v.value))
     }
 
     /// `detail`: także przepływ PCIe TX/RX (NVML mierzy go przez ok. 20 ms na
@@ -278,6 +294,77 @@ impl Nvml {
             pstate: value(self.pstate).filter(|&p| p < 32),
             limit_reasons: reasons,
         }
+    }
+}
+
+impl Nvml {
+    /// Liczba wentylatorów karty (0 = brak albo karta bez sterowania).
+    fn fans(&self, dev: Device) -> u32 {
+        let Some(f) = self.num_fans else { return 0 };
+        let mut n = 0u32;
+        // SAFETY: uchwyt z NVML, wskaźnik na lokalną zmienną.
+        if unsafe { f(dev, &mut n) } == 0 { n.min(16) } else { 0 }
+    }
+
+    /// Wentylatory: obroty najszybszego (RPM) i wysterowanie pierwszego (%).
+    pub fn fan_status(&self, index: usize, name: &str) -> Option<(Option<u32>, Option<u32>)> {
+        let dev = self.device(index, name)?;
+        let n = self.fans(dev);
+        if n == 0 {
+            return None;
+        }
+        // SAFETY (oba odczyty): uchwyt z NVML, struktury i zmienne lokalne.
+        let pct = self.fan_v2.and_then(|f| {
+            let mut v = 0u32;
+            (unsafe { f(dev, 0, &mut v) } == 0).then_some(v.min(100))
+        });
+        let rpm = self.fan_rpm.and_then(|f| {
+            (0..n)
+                .filter_map(|fan| {
+                    let mut s = FanSpeedInfo { version: FAN_SPEED_INFO_V1, fan, speed: 0 };
+                    (unsafe { f(dev, &mut s) } == 0).then_some(s.speed)
+                })
+                .max()
+        });
+        Some((rpm, pct))
+    }
+
+    /// Czy wentylatory karty da się ustawiać (są i funkcje zapisu istnieją).
+    pub fn fan_controllable(&self, index: usize, name: &str) -> bool {
+        self.set_fan.is_some()
+            && self.default_fan.is_some()
+            && self.device(index, name).is_some_and(|d| self.fans(d) > 0)
+    }
+
+    /// Ustawia wszystkie wentylatory na `pct` albo oddaje je sterownikowi
+    /// (`None`, tryb automatyczny). Wymaga uprawnień administratora.
+    pub fn set_fans(&self, index: usize, name: &str, pct: Option<u32>) -> Result<(), String> {
+        let dev = self.device(index, name).ok_or_else(|| crate::i18n::tr("NVML nie widzi tej karty", "NVML doesn't see this card").to_string())?;
+        let n = self.fans(dev);
+        if n == 0 {
+            return Err(crate::i18n::tr("sterownik nie zgłosił żadnego wentylatora", "the driver reported no fans").to_string());
+        }
+        for fan in 0..n {
+            // SAFETY: uchwyt z NVML, numer wentylatora z nvmlDeviceGetNumFans.
+            let r = match (pct, self.set_fan, self.default_fan) {
+                (Some(p), Some(f), _) => unsafe { f(dev, fan, p.min(100)) },
+                (None, _, Some(f)) => unsafe { f(dev, fan) },
+                _ => return Err("NVML: brak funkcji / missing function".into()),
+            };
+            if r != 0 {
+                return Err(crate::trf!("NVML: wentylator {fan}: błąd {r}", "NVML: fan {fan}: error {r}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Chwilowa moc samego układu GPU (W), jeśli karta ją podaje.
+    pub fn chip_power(&self, index: usize, name: &str) -> Option<f32> {
+        let dev = self.device(index, name)?;
+        let f = self.fields?;
+        let mut v = FieldValue { field_id: FIELD_POWER_INSTANT, scope_id: POWER_SCOPE_GPU, ..Default::default() };
+        // SAFETY: uchwyt z NVML, jedna struktura wyniku.
+        (unsafe { f(dev, 1, &mut v) } == 0 && v.status == 0 && v.value as u32 > 0).then(|| v.value as u32 as f32 / 1000.0)
     }
 }
 
@@ -467,5 +554,45 @@ mod timing {
         run("fan", &mut || {
             value(n.fan);
         });
+    }
+}
+
+#[cfg(test)]
+mod fan_probe {
+    //! Wentylatory i moc układu z NVML (tylko odczyt):
+    //! `cargo test nvml_fan_probe -- --ignored --nocapture`.
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn nvml_fan_probe() {
+        let n = Nvml::load().expect("NVML");
+        let (dev, name) = n.devices[0].clone();
+        println!("karta {name}, wentylatorów {}", n.fans(dev));
+        println!("stan {:?}", n.fan_status(0, &name));
+        println!("sterowanie {}", n.fan_controllable(0, &name));
+        println!("moc układu {:?} W, karty {:?} W", n.chip_power(0, &name), n.read(0, &name, false).power_w);
+    }
+}
+
+#[cfg(test)]
+mod fan_write {
+    //! Zapis wentylatora przez NVML: 40 % na 6 s, potem tryb automatyczny.
+    //! Zmienia pracę wentylatora karty! `cargo test nvml_fan_write -- --ignored --nocapture`.
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn nvml_fan_write() {
+        let n = Nvml::load().expect("NVML");
+        let name = n.devices[0].1.clone();
+        println!("ustaw 40%: {:?}", n.set_fans(0, &name, Some(40)));
+        for _ in 0..3 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            println!("stan {:?}", n.fan_status(0, &name));
+        }
+        println!("auto: {:?}", n.set_fans(0, &name, None));
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        println!("po auto {:?}", n.fan_status(0, &name));
     }
 }
