@@ -179,6 +179,18 @@ mod sys {
     #[link(name = "advapi32")]
     extern "system" {
         fn RegOpenKeyExW(key: isize, sub: *const u16, options: u32, access: u32, out: *mut isize) -> i32;
+        #[allow(clippy::too_many_arguments)]
+        fn RegCreateKeyExW(
+            key: isize,
+            sub: *const u16,
+            reserved: u32,
+            class: *const u16,
+            options: u32,
+            access: u32,
+            security: *const core::ffi::c_void,
+            out: *mut isize,
+            disposition: *mut u32,
+        ) -> i32;
         fn RegQueryValueExW(key: isize, name: *const u16, reserved: *mut u32, kind: *mut u32, data: *mut u8, len: *mut u32) -> i32;
         fn RegSetValueExW(key: isize, name: *const u16, reserved: u32, kind: u32, data: *const u8, len: u32) -> i32;
         fn RegDeleteValueW(key: isize, name: *const u16) -> i32;
@@ -371,7 +383,26 @@ mod sys {
 
     fn write(instance: &str, policy: Option<u32>, mask: Option<&[u8]>) -> Result<(), String> {
         let no_admin = || crate::i18n::tr("wymaga uprawnień administratora", "needs administrator rights").to_owned();
-        let key = open(&policy_path(instance), KEY_SET_VALUE).ok_or_else(no_admin)?;
+        // Klucz zasady może nie istnieć (urządzenie bez własnych ustawień) - tworzymy go.
+        let mut key = 0isize;
+        let code = unsafe {
+            RegCreateKeyExW(
+                HKLM,
+                wide(&policy_path(instance)).as_ptr(),
+                0,
+                std::ptr::null(),
+                0,
+                KEY_SET_VALUE,
+                std::ptr::null(),
+                &mut key,
+                std::ptr::null_mut(),
+            )
+        };
+        match code {
+            0 => {}
+            5 => return Err(no_admin()),
+            c => return Err(crate::trf!("rejestr: błąd {c}", "registry: error {c}")),
+        }
         let mut ok = true;
         unsafe {
             match policy {
@@ -406,7 +437,11 @@ mod sys {
             mask: value(&path, "AssignmentSetOverride"),
         };
         // 4 = IrqPolicySpecifiedProcessors.
-        write(instance, Some(4), Some(&(1u64 << cpu.min(63)).to_le_bytes())).map_err(|e| (None, e))?;
+        if let Err(e) = write(instance, Some(4), Some(&(1u64 << cpu.min(63)).to_le_bytes())) {
+            // Zapis mógł się udać w połowie - przywracamy poprzednie wartości.
+            let _ = write(instance, backup.policy, backup.mask.as_deref());
+            return Err((None, e));
+        }
         match restart(instance) {
             Ok(()) => Ok(backup),
             Err(e) => Err((Some(backup), e)),

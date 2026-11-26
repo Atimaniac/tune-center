@@ -87,6 +87,12 @@ pub fn install() {
     std::panic::set_hook(Box::new(|info| {
         // Najpierw oddajemy wentylatory płycie - dalej może już nie być okazji.
         crate::hw::service::emergency_restore();
+        // Sesje śledzenia (analizator DPC, nauka Fast Load) nie mogą zostać po programie.
+        #[cfg(windows)]
+        {
+            crate::dpc::stop_sessions();
+            crate::fastload_trace::stop_stale();
+        }
         let thread = std::thread::current();
         let name = thread.name().unwrap_or("?").to_owned();
         let message = info
@@ -186,6 +192,12 @@ mod native {
 
     unsafe extern "system" fn filter(info: *const ExceptionPointers) -> i32 {
         crate::hw::service::emergency_restore();
+        // Sesje śledzenia (analizator DPC, nauka Fast Load) nie mogą zostać po programie.
+        #[cfg(windows)]
+        {
+            crate::dpc::stop_sessions();
+            crate::fastload_trace::stop_stale();
+        }
         let (code, address) = match info.as_ref().and_then(|i| i.record.as_ref()) {
             Some(r) => (r.code, r.address as *const c_void),
             None => (0, std::ptr::null()),

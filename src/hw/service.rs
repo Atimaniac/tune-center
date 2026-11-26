@@ -131,6 +131,11 @@ impl Service {
         Ok(())
     }
 
+    /// Czy któryś wentylator jest teraz wysterowany przez program.
+    pub fn touched(&self) -> bool {
+        self.touched
+    }
+
     /// Oddaje płycie wszystkie wentylatory.
     pub fn restore_all(&mut self) {
         if !self.touched {
@@ -157,8 +162,15 @@ impl Drop for Service {
 pub fn emergency_restore() {
     let Ok(active) = ACTIVE.try_lock() else { return };
     let Some(service) = active.as_ref().and_then(Weak::upgrade) else { return };
-    let guard = service.try_lock();
-    if let Ok(mut s) = guard {
+    // Blokada zatruta przez wcześniejszą panikę też pozwala oddać wentylatory;
+    // zajęta przez wątek, który właśnie padł - nie (oddaje je wtedy ten wątek
+    // po zwinięciu stosu albo zamknięcie programu).
+    let guard = match service.try_lock() {
+        Ok(g) => Some(g),
+        Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    };
+    if let Some(mut s) = guard {
         s.restore_all();
     }
 }

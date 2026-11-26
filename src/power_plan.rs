@@ -23,15 +23,29 @@ pub struct Plan {
     pub name: String,
 }
 
-/// Co zrobić po zmianie stanu gry: `Some(plan)` - włączyć ten plan.
-/// Zmiana tylko na zboczu (gra ruszyła / gra się zamknęła) i tylko gdy
-/// funkcja jest włączona, a plan wybrany.
-pub fn decide(enabled: bool, was_running: bool, running: bool, game_plan: &str, idle_plan: &str) -> Option<String> {
-    if !enabled || was_running == running {
-        return None;
+/// Krok przełączania planu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    Nothing,
+    /// Włączyć plan gry.
+    Game,
+    /// Wrócić na plan "po grze".
+    Idle,
+}
+
+/// Co zrobić w tym obiegu. `switched` - plan gry włączył program; `tried` -
+/// w tej sesji gry już próbowano go włączyć (jedna próba na uruchomienie gry,
+/// więc ręczna zmiana planu w trakcie gry nie jest cofana).
+/// Powrót na plan "po grze" następuje, gdy gra się zamknie albo funkcja
+/// zostanie wyłączona w trakcie gry.
+pub fn decide(enabled: bool, running: bool, switched: bool, tried: bool, has_game_plan: bool) -> Step {
+    if switched && (!running || !enabled) {
+        Step::Idle
+    } else if enabled && running && !switched && !tried && has_game_plan {
+        Step::Game
+    } else {
+        Step::Nothing
     }
-    let plan = if running { game_plan } else { idle_plan };
-    (!plan.is_empty()).then(|| plan.to_owned())
 }
 
 #[cfg(windows)]
@@ -127,6 +141,7 @@ pub struct PowerPlan {
     plans: Vec<Plan>,
     active: Option<String>,
     read: Option<Instant>,
+    dry: bool,
 }
 
 /// Nazwa gry, której proces działa: foldery gier (małymi literami) i nazwy.
@@ -136,7 +151,8 @@ fn running_game(games: &[(String, String)]) -> Option<String> {
 }
 
 impl PowerPlan {
-    pub fn start(settings: Settings, repaint: impl Fn() + Send + 'static) -> Self {
+    /// `dry` - tryb demonstracyjny: plan i rdzeń nie są ruszane także po zmianie ustawień.
+    pub fn start(settings: Settings, dry: bool, repaint: impl Fn() + Send + 'static) -> Self {
         let shared = Arc::new(Mutex::new(Shared { settings, ..Default::default() }));
         let s = shared.clone();
         crate::spawn("power-plan", move || {
@@ -147,9 +163,11 @@ impl PowerPlan {
             #[cfg(windows)]
             let mut awake: Option<crate::dpc::KeepAwake> = None;
             let mut tried = false;
+            // W tej sesji gry już próbowano włączyć plan gry.
+            let mut plan_tried = false;
             loop {
-                let (settings, was, quit) = match s.lock() {
-                    Ok(g) => (g.settings.clone(), g.running.is_some(), g.quit),
+                let (settings, quit) = match s.lock() {
+                    Ok(g) => (g.settings.clone(), g.quit),
                     Err(_) => break,
                 };
                 if quit {
@@ -168,9 +186,22 @@ impl PowerPlan {
                 } else {
                     None
                 };
-                // Plan zasilania: tylko przy uruchomieniu i zamknięciu gry.
-                let action = decide(settings.enabled, was, now.is_some(), &settings.game, &settings.idle);
-                let result = action.as_deref().map(sys::set_active);
+                // Plan zasilania: przy uruchomieniu gry i po jej zamknięciu (albo
+                // po wyłączeniu funkcji w trakcie gry).
+                if now.is_none() {
+                    plan_tried = false;
+                }
+                let switched = s.lock().map(|g| g.switched).unwrap_or(false);
+                let step = decide(settings.enabled, now.is_some(), switched, plan_tried, !settings.game.is_empty());
+                let result = match step {
+                    Step::Game => {
+                        plan_tried = true;
+                        Some(sys::set_active(&settings.game))
+                    }
+                    // Bez wybranego planu "po grze" zostaje bieżący.
+                    Step::Idle if !settings.idle.is_empty() => Some(sys::set_active(&settings.idle)),
+                    _ => None,
+                };
                 // Rdzeń karty: nie zasypia, dopóki działa gra.
                 let mut awake_error = None;
                 #[cfg(windows)]
@@ -187,7 +218,8 @@ impl PowerPlan {
                         awake = None;
                         tried = false;
                     }
-                    awake.as_ref().map(|a| a.cpu)
+                    // Rdzeń pokazujemy dopiero, gdy pętla faktycznie na nim działa.
+                    awake.as_ref().filter(|a| a.active()).map(|a| a.cpu)
                 };
                 #[cfg(not(windows))]
                 let awake_cpu: Option<u16> = {
@@ -198,7 +230,11 @@ impl PowerPlan {
                     let changed = g.running != now || g.awake_cpu != awake_cpu || awake_error.is_some();
                     if let Some(r) = &result {
                         g.error = r.as_ref().err().cloned();
-                        g.switched = now.is_some() && r.is_ok();
+                    }
+                    match step {
+                        Step::Game => g.switched = result.as_ref().is_some_and(|r| r.is_ok()),
+                        Step::Idle => g.switched = false,
+                        Step::Nothing => {}
                     }
                     if awake_error.is_some() || awake_cpu.is_some() || now.is_none() {
                         g.awake_error = awake_error;
@@ -213,7 +249,7 @@ impl PowerPlan {
                 std::thread::sleep(Duration::from_secs(2));
             }
         });
-        Self { shared, plans: Vec::new(), active: None, read: None }
+        Self { shared, plans: Vec::new(), active: None, read: None, dry }
     }
 
     /// Działająca gra, podtrzymywany rdzeń i błąd jego wykrycia.
@@ -221,7 +257,12 @@ impl PowerPlan {
         self.shared.lock().map(|s| (s.running.clone(), s.awake_cpu, s.awake_error.clone())).unwrap_or_default()
     }
 
-    pub fn set(&self, settings: Settings) {
+    pub fn set(&self, mut settings: Settings) {
+        // Tryb demonstracyjny: nic nie trafia do systemu.
+        if self.dry {
+            settings.enabled = false;
+            settings.keep_awake = false;
+        }
         if let Ok(mut s) = self.shared.lock() {
             s.settings = settings;
         }
@@ -314,17 +355,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn switches_only_on_edges() {
-        // Gra ruszyła / zamknęła się.
-        assert_eq!(decide(true, false, true, "G", "I"), Some("G".into()));
-        assert_eq!(decide(true, true, false, "G", "I"), Some("I".into()));
-        // Bez zmiany stanu nic nie robimy (ręczna zmiana planu zostaje).
-        assert_eq!(decide(true, true, true, "G", "I"), None);
-        assert_eq!(decide(true, false, false, "G", "I"), None);
-        // Wyłączone albo plan nie wybrany.
-        assert_eq!(decide(false, false, true, "G", "I"), None);
-        assert_eq!(decide(true, false, true, "", "I"), None);
-        assert_eq!(decide(true, true, false, "G", ""), None);
+    fn plan_steps() {
+        // Gra ruszyła: plan gry, raz na sesję gry.
+        assert_eq!(decide(true, true, false, false, true), Step::Game);
+        assert_eq!(decide(true, true, false, true, true), Step::Nothing);
+        // Plan gry działa: nic do zrobienia (ręczna zmiana planu zostaje).
+        assert_eq!(decide(true, true, true, true, true), Step::Nothing);
+        // Gra się zamknęła albo funkcję wyłączono w trakcie gry: powrót.
+        assert_eq!(decide(true, false, true, true, true), Step::Idle);
+        assert_eq!(decide(false, true, true, true, true), Step::Idle);
+        // Bez gry, wyłączone albo bez wybranego planu gry: nic.
+        assert_eq!(decide(true, false, false, false, true), Step::Nothing);
+        assert_eq!(decide(false, true, false, false, true), Step::Nothing);
+        assert_eq!(decide(true, true, false, false, false), Step::Nothing);
     }
 
     /// Przełączenie planu i powrót (zmienia aktywny plan na ułamek sekundy).

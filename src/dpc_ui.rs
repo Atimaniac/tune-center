@@ -177,7 +177,14 @@ impl Dpc {
         let ctx = ui.ctx().clone();
         self.irq.ensure_scanned(elevated, move || ctx.request_repaint());
         let measured = self.irq.measured();
-        let gpu = gpu_core(&self.irq.devices, measured);
+        // Karta, której dotyczy pomiar (w komputerze z dwiema kartami - ta,
+        // której sterownik zmierzono), i jej rdzeń.
+        let gpu_dev = self.irq.measured_gpu().cloned();
+        let gpu = match &gpu_dev {
+            Some(d) => measured.or(d.core()),
+            None => gpu_core(&self.irq.devices, None),
+        };
+        let busy = self.irq.busy();
         let mut changed = false;
         let mut rescan = false;
         // Urządzenie do przypięcia, rdzeń i czy to dźwięk (inaczej karta graficzna).
@@ -211,7 +218,9 @@ impl Dpc {
                         ui.label(via);
                         // Rdzeń: zmierzony (karta), przypięty albo z przydziału Windows.
                         let label = |c: u16| core_label(classes, c);
-                        let (text, hover) = match (d.role, measured, d.pinned, d.core()) {
+                        // Pomiar dotyczy tylko karty, której sterownik zmierzono.
+                        let own = gpu_dev.as_ref().is_some_and(|g| g.instance == d.instance);
+                        let (text, hover) = match (d.role, measured.filter(|_| own), d.pinned, d.core()) {
                             (Role::Gpu, Some(m), ..) => (
                                 crate::trf!("rdzeń {}, zmierzony", "core {}, measured", label(m)),
                                 tr("Rdzeń, na którym przez 2 s wykonywały się DPC sterownika karty.", "The core on which the driver's DPCs ran during a 2 s trace.").to_owned(),
@@ -248,7 +257,7 @@ impl Dpc {
                 ui.add_space(4.0);
 
                 // Karta graficzna na rdzeniu E: wolniejsze DPC - propozycja przeniesienia na P.
-                if let (Some(g), Some(d)) = (gpu, self.irq.devices.iter().find(|d| d.role == Role::Gpu)) {
+                if let (Some(g), Some(d)) = (gpu, gpu_dev.as_ref()) {
                     if core_kind(classes, g) == Some('E') {
                         ui.label(
                             RichText::new(crate::trf!(
@@ -265,7 +274,7 @@ impl Dpc {
                                 "Move the graphics card to core {}",
                                 core_label(classes, target)
                             );
-                            if theme::primary_button(ui, Some(Icon::Swap), &label, elevated)
+                            if theme::primary_button(ui, Some(Icon::Swap), &label, elevated && !busy)
                                 .on_hover_text(tr(
                                     "Zapisuje przypisanie w rejestrze i restartuje kartę graficzną: ekran zgaśnie na kilka sekund, a otwarte gry i programy korzystające z karty mogą się zamknąć. Poprzedni stan jest zapamiętany - przycisk Cofnij go przywraca. Wymaga administratora.",
                                     "Writes the assignment to the registry and restarts the graphics card: the screen goes black for a few seconds, and open games and programs using the card may close. The previous state is remembered - the Undo button restores it. Needs administrator rights.",
@@ -308,7 +317,7 @@ impl Dpc {
                             "Move audio to core {}",
                             core_label(classes, target)
                         );
-                        if theme::primary_button(ui, Some(Icon::Swap), &label, elevated)
+                        if theme::primary_button(ui, Some(Icon::Swap), &label, elevated && !busy)
                             .on_hover_text(tr(
                                 "Zapisuje przypisanie w rejestrze urządzenia i restartuje kontroler dźwięku. Jeśli to kontroler USB, podłączone do niego urządzenia (także mysz i klawiatura) rozłączą się na kilka sekund. Poprzedni stan jest zapamiętany - przycisk Cofnij go przywraca. Wymaga administratora.",
                                 "Writes the assignment to the device's registry key and restarts the audio controller. If it is a USB controller, devices plugged into it (mouse and keyboard included) disconnect for a few seconds. The previous state is remembered - the Undo button restores it. Needs administrator rights.",
@@ -331,12 +340,16 @@ impl Dpc {
                 }
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if ui.button(tr("Sprawdź ponownie", "Check again")).clicked() {
+                    if ui.add_enabled(!busy, egui::Button::new(tr("Sprawdź ponownie", "Check again"))).clicked() {
                         rescan = true;
+                    }
+                    if busy {
+                        ui.spinner();
+                        ui.label(RichText::new(tr("Restart urządzenia...", "Restarting the device...")).size(12.5).color(theme::muted()));
                     }
                     if !backups.is_empty()
                         && ui
-                            .add_enabled(elevated, egui::Button::new(tr("Cofnij przypisania rdzeni", "Undo the core assignments")))
+                            .add_enabled(elevated && !busy, egui::Button::new(tr("Cofnij przypisania rdzeni", "Undo the core assignments")))
                             .on_hover_text(tr(
                                 "Przywraca stan sprzed przeniesień i restartuje zmienione urządzenia (przy karcie graficznej ekran zgaśnie na kilka sekund).",
                                 "Restores the state before the moves and restarts the changed devices (with the graphics card the screen goes black for a few seconds).",
@@ -352,42 +365,72 @@ impl Dpc {
             });
         });
 
-        if let Some((instance, target, audio)) = pin {
-            match crate::irq::pin(&instance, target) {
-                Ok(backup) => {
-                    backups.push(backup);
-                    let core = core_label(classes, target);
-                    let text = if audio {
-                        crate::trf!("Dźwięk przeniesiony na rdzeń {core}.", "Audio moved to core {core}.")
-                    } else {
-                        crate::trf!("Karta graficzna przeniesiona na rdzeń {core}.", "Graphics card moved to core {core}.")
-                    };
-                    self.irq.message = Some((text, false));
+        // Wynik operacji z wątku w tle: kopie stanu i komunikat.
+        if let Some(outcome) = self.irq.take_outcome() {
+            if let Some(b) = outcome.add {
+                // Jedna kopia na urządzenie: pierwsza opisuje stan sprzed zmian.
+                if !backups.iter().any(|x| x.instance.eq_ignore_ascii_case(&b.instance)) {
+                    backups.push(b);
                     changed = true;
                 }
-                Err((backup, e)) => {
-                    if let Some(b) = backup {
-                        backups.push(b);
-                        changed = true;
-                    }
-                    self.irq.message = Some((e, true));
-                }
             }
+            if !outcome.restored.is_empty() {
+                // Kopie nieprzywróconych urządzeń zostają do ponownej próby.
+                backups.retain(|x| !outcome.restored.iter().any(|r| r.eq_ignore_ascii_case(&x.instance)));
+                changed = true;
+            }
+            self.irq.message = Some(outcome.message);
             rescan = true;
         }
-        if undo {
-            let mut failed = None;
-            for b in backups.drain(..).rev() {
-                if let Err(e) = crate::irq::restore(&b) {
-                    failed = Some(e);
-                }
-            }
-            self.irq.message = Some(match failed {
-                Some(e) => (e, true),
-                None => (tr("Przywrócono poprzednie przypisanie.", "The previous assignment is restored.").to_owned(), false),
+        // Zapis w rejestrze i restart urządzenia trwają kilka sekund - w tle,
+        // żeby okno nie zamarzało.
+        if let Some((instance, target, audio)) = pin {
+            let core = core_label(classes, target);
+            let ctx = ui.ctx().clone();
+            self.irq.run(move || {
+                let outcome = match crate::irq::pin(&instance, target) {
+                    Ok(backup) => crate::dpc::IrqOutcome {
+                        add: Some(backup),
+                        restored: Vec::new(),
+                        message: (
+                            if audio {
+                                crate::trf!("Dźwięk przeniesiony na rdzeń {core}.", "Audio moved to core {core}.")
+                            } else {
+                                crate::trf!("Karta graficzna przeniesiona na rdzeń {core}.", "Graphics card moved to core {core}.")
+                            },
+                            false,
+                        ),
+                    },
+                    Err((backup, e)) => crate::dpc::IrqOutcome { add: backup, restored: Vec::new(), message: (e, true) },
+                };
+                ctx.request_repaint();
+                outcome
             });
-            changed = true;
-            rescan = true;
+        }
+        if undo {
+            let list = backups.clone();
+            let ctx = ui.ctx().clone();
+            self.irq.run(move || {
+                let mut restored = Vec::new();
+                let mut failed = None;
+                for b in list.iter().rev() {
+                    match crate::irq::restore(b) {
+                        Ok(()) => restored.push(b.instance.clone()),
+                        // Wpis przywrócony, ale urządzenie niezrestartowane też
+                        // liczy się jako cofnięte (zadziała po restarcie komputera).
+                        Err(e) => failed = Some(e),
+                    }
+                }
+                ctx.request_repaint();
+                crate::dpc::IrqOutcome {
+                    add: None,
+                    restored,
+                    message: match failed {
+                        Some(e) => (e, true),
+                        None => (tr("Przywrócono poprzednie przypisanie.", "The previous assignment is restored.").to_owned(), false),
+                    },
+                }
+            });
         }
         if rescan {
             let ctx = ui.ctx().clone();

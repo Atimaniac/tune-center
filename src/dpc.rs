@@ -87,6 +87,12 @@ const GPU_DRIVERS: [&str; 7] =
 /// Procesor logiczny, na którym wykonuje się najwięcej DPC sterownika karty
 /// graficznej (przy kilku kartach - tej z największą liczbą DPC).
 pub fn gpu_cpu(c: &Collector, modules: &[(u64, String)]) -> Option<u16> {
+    gpu_cpu_driver(c, modules).map(|(cpu, _)| cpu)
+}
+
+/// Jak `gpu_cpu`, razem z nazwą sterownika (małymi literami) - po niej widać,
+/// której karty dotyczy wynik w komputerze z dwiema kartami.
+pub fn gpu_cpu_driver(c: &Collector, modules: &[(u64, String)]) -> Option<(u16, String)> {
     let mut by: HashMap<(String, u16), u64> = HashMap::new();
     for ((routine, cpu), n) in &c.cpus {
         let driver = driver_of(modules, *routine).to_lowercase();
@@ -99,7 +105,24 @@ pub fn gpu_cpu(c: &Collector, modules: &[(u64, String)]) -> Option<u16> {
         *totals.entry(driver.as_str()).or_default() += n;
     }
     let top = totals.into_iter().max_by_key(|(d, n)| (*n, d.to_string()))?.0.to_owned();
-    by.into_iter().filter(|((d, _), _)| *d == top).max_by_key(|((_, cpu), n)| (*n, u16::MAX - *cpu)).map(|((_, cpu), _)| cpu)
+    by.into_iter()
+        .filter(|((d, _), _)| *d == top)
+        .max_by_key(|((_, cpu), n)| (*n, u16::MAX - *cpu))
+        .map(|((driver, cpu), _)| (cpu, driver))
+}
+
+/// Identyfikator producenta PCI karty obsługiwanej przez sterownik.
+pub fn driver_vendor(driver: &str) -> Option<&'static str> {
+    let d = driver.to_lowercase();
+    if d.starts_with("nvlddmkm") {
+        Some("VEN_10DE")
+    } else if d.starts_with("amdkm") || d.starts_with("atikm") {
+        Some("VEN_1002")
+    } else if d.starts_with("igdkm") {
+        Some("VEN_8086")
+    } else {
+        None
+    }
 }
 
 /// Wiersz wyniku: sterownik z czasami DPC i ISR.
@@ -420,7 +443,13 @@ mod sys {
 
     /// Pusta pętla na procesorze `cpu` (pierwsze 64 procesory logiczne), o
     /// najniższym priorytecie, do ustawienia `stop`.
-    pub fn spin(cpu: u16, stop: &AtomicBool) {
+    /// Zatrzymuje sesję o danej nazwie, jeśli istnieje.
+    pub fn stop_by_name(session: Session) {
+        stop_session(CONTROLTRACE_HANDLE::default(), session);
+    }
+
+    /// `active` jest ustawiane, gdy przypięcie do procesora się udało.
+    pub fn spin(cpu: u16, stop: &AtomicBool, active: &AtomicBool) {
         const IDLE: i32 = -15;
         if cpu >= 64 {
             return;
@@ -429,6 +458,7 @@ mod sys {
             if SetThreadAffinityMask(GetCurrentThread(), 1usize << cpu) == 0 {
                 return;
             }
+            active.store(true, Ordering::Relaxed);
             SetThreadPriority(GetCurrentThread(), IDLE);
         }
         while !stop.load(Ordering::Relaxed) {
@@ -482,11 +512,29 @@ mod sys {
 /// (2 s, administrator) we własnej sesji.
 #[cfg(windows)]
 pub fn detect_gpu_cpu() -> Result<u16, String> {
+    detect_gpu_cpu_driver().map(|(cpu, _)| cpu)
+}
+
+/// Jak `detect_gpu_cpu`, razem z nazwą sterownika karty.
+#[cfg(windows)]
+pub fn detect_gpu_cpu_driver() -> Result<(u16, String), String> {
+    // Jedna sesja naraz: dwa równoczesne pomiary pod tą samą nazwą
+    // przerywałyby się nawzajem.
+    static ONE: Mutex<()> = Mutex::new(());
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
     let modules = sys::modules();
     let trace = sys::Trace::start(sys::CORE)?;
     std::thread::sleep(Duration::from_secs(2));
     let collector = trace.finish();
-    gpu_cpu(&collector, &modules).ok_or_else(|| "brak DPC sterownika karty / no GPU driver DPCs".to_owned())
+    gpu_cpu_driver(&collector, &modules).ok_or_else(|| "brak DPC sterownika karty / no GPU driver DPCs".to_owned())
+}
+
+/// Zatrzymuje sesje śledzenia programu, jeśli zostały (zamknięcie programu w
+/// trakcie pomiaru, awaria).
+#[cfg(windows)]
+pub fn stop_sessions() {
+    sys::stop_by_name(sys::ANALYZER);
+    sys::stop_by_name(sys::CORE);
 }
 
 /// Wątek, który nie pozwala zasnąć jednemu procesorowi logicznemu: pusta
@@ -495,6 +543,8 @@ pub fn detect_gpu_cpu() -> Result<u16, String> {
 #[cfg(windows)]
 pub struct KeepAwake {
     stop: Arc<AtomicBool>,
+    /// Pętla działa na wybranym procesorze (przypięcie się udało).
+    active: Arc<AtomicBool>,
     pub cpu: u16,
 }
 
@@ -502,9 +552,16 @@ pub struct KeepAwake {
 impl KeepAwake {
     pub fn start(cpu: u16) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
-        let s = stop.clone();
-        crate::spawn("core-awake", move || sys::spin(cpu, &s));
-        Self { stop, cpu }
+        let active = Arc::new(AtomicBool::new(false));
+        let (s, a) = (stop.clone(), active.clone());
+        crate::spawn("core-awake", move || sys::spin(cpu, &s, &a));
+        Self { stop, active, cpu }
+    }
+
+    /// `false`, gdy wątku nie dało się przypiąć do procesora (np. ponad 64
+    /// procesory logiczne) - wtedy nic nie jest podtrzymywane.
+    pub fn active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
     }
 }
 
@@ -589,9 +646,11 @@ pub struct IrqPanel {
     pub devices: Vec<crate::irq::Device>,
     scanned: bool,
     /// Rdzeń karty graficznej z pomiaru (pewniejszy niż wpis w rejestrze).
-    measured: Arc<Mutex<Option<u16>>>,
+    measured: Arc<Mutex<Option<(u16, String)>>>,
     /// Komunikat i czy to błąd.
     pub message: Option<(String, bool)>,
+    /// Operacja w tle: czy trwa i jej gotowy wynik.
+    job: Arc<Mutex<(bool, Option<IrqOutcome>)>>,
 }
 
 impl IrqPanel {
@@ -600,13 +659,17 @@ impl IrqPanel {
     pub fn rescan(&mut self, elevated: bool, repaint: impl Fn() + Send + 'static) {
         self.scanned = true;
         self.devices = crate::irq::scan();
+        // Poprzedni pomiar jest nieaktualny (np. po przeniesieniu karty).
+        if let Ok(mut m) = self.measured.lock() {
+            *m = None;
+        }
         #[cfg(windows)]
         if elevated {
             let measured = self.measured.clone();
             crate::spawn("irq-gpu-core", move || {
-                if let Ok(cpu) = detect_gpu_cpu() {
+                if let Ok(found) = detect_gpu_cpu_driver() {
                     if let Ok(mut m) = measured.lock() {
-                        *m = Some(cpu);
+                        *m = Some(found);
                     }
                     repaint();
                 }
@@ -623,7 +686,59 @@ impl IrqPanel {
     }
 
     pub fn measured(&self) -> Option<u16> {
-        self.measured.lock().ok().and_then(|m| *m)
+        self.measured.lock().ok().and_then(|m| m.as_ref().map(|(cpu, _)| *cpu))
+    }
+
+    /// Karta graficzna, której dotyczy pomiar: po producencie sterownika, a
+    /// gdy karta jest jedna - ta jedyna. `None` przy kilku kartach bez pomiaru.
+    pub fn measured_gpu(&self) -> Option<&crate::irq::Device> {
+        let gpus: Vec<&crate::irq::Device> = self.devices.iter().filter(|d| d.role == crate::irq::Role::Gpu).collect();
+        let vendor = self.measured.lock().ok().and_then(|m| m.as_ref().and_then(|(_, driver)| driver_vendor(driver)));
+        match vendor {
+            Some(v) => gpus.iter().copied().find(|d| d.instance.to_ascii_uppercase().contains(v)).or(if gpus.len() == 1 { gpus.first().copied() } else { None }),
+            None if gpus.len() == 1 => gpus.first().copied(),
+            None => None,
+        }
+    }
+}
+
+/// Wynik przeniesienia albo cofnięcia przypisań (z wątku w tle).
+pub struct IrqOutcome {
+    /// Kopia stanu sprzed przypięcia - do dopisania w ustawieniach.
+    pub add: Option<crate::irq::Backup>,
+    /// Urządzenia, których poprzedni stan przywrócono (kopie do usunięcia).
+    pub restored: Vec<String>,
+    /// Komunikat i czy to błąd.
+    pub message: (String, bool),
+}
+
+impl IrqPanel {
+    /// Trwa zapis i restart urządzenia.
+    pub fn busy(&self) -> bool {
+        self.job.lock().map(|j| j.0).unwrap_or(false)
+    }
+
+    /// Uruchamia operację w tle (jedną naraz).
+    pub fn run(&mut self, work: impl FnOnce() -> IrqOutcome + Send + 'static) {
+        {
+            let Ok(mut j) = self.job.lock() else { return };
+            if j.0 {
+                return;
+            }
+            j.0 = true;
+        }
+        let job = self.job.clone();
+        crate::spawn("irq-pin", move || {
+            let outcome = work();
+            if let Ok(mut j) = job.lock() {
+                *j = (false, Some(outcome));
+            }
+        });
+    }
+
+    /// Gotowy wynik operacji, jeśli jest.
+    pub fn take_outcome(&mut self) -> Option<IrqOutcome> {
+        self.job.lock().ok().and_then(|mut j| j.1.take())
     }
 }
 
@@ -758,5 +873,14 @@ mod awake_tests {
         eprintln!("without: {} max {:.0} us avg {:.0} us ({} DPC)", before.driver, before.dpc.max_us, before.dpc.avg_us(), before.dpc.count);
         eprintln!("with:    {} max {:.0} us avg {:.0} us ({} DPC)", during.driver, during.dpc.max_us, during.dpc.avg_us(), during.dpc.count);
         assert!(during.dpc.count > 100);
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Dpc {
+    fn drop(&mut self) {
+        // Zamknięcie programu w trakcie pomiaru: sesja jądra nie może zostać.
+        self.stop();
+        stop_sessions();
     }
 }

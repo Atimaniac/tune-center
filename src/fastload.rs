@@ -476,7 +476,9 @@ fn any_file(dir: &Path) -> Option<PathBuf> {
     for _ in 0..3 {
         let mut next = Vec::new();
         for d in &level {
-            for e in std::fs::read_dir(d).ok()?.flatten() {
+            // Folder bez prawa odczytu nie przerywa szukania w pozostałych.
+            let Ok(entries) = std::fs::read_dir(d) else { continue };
+            for e in entries.flatten() {
                 match e.file_type() {
                     Ok(t) if t.is_file() => return Some(e.path()),
                     Ok(t) if t.is_dir() => next.push(e.path()),
@@ -562,15 +564,24 @@ impl Pin {
     /// Mapuje fragmenty i dotyka każdej strony (dane są już w pamięci
     /// podręcznej po `preload`, więc to szybkie). `go_on` przerywa.
     pub fn hold(segs: &[Seg], limit: u64, go_on: &dyn Fn() -> bool) -> Pin {
+        // Kawałki po 64 MiB: między nimi sprawdzamy Stop i wolną pamięć, więc
+        // nawet jeden wielogigabajtowy plik da się przerwać.
+        const STEP: u64 = 64 << 20;
         let mut pin = Pin::default();
-        for seg in segs {
-            if pin.bytes >= limit || !go_on() {
-                break;
-            }
-            let len = seg.len.min(limit - pin.bytes);
-            if let Some(view) = sys::map(&seg.path, seg.offset, len) {
-                pin.views.push(view);
-                pin.bytes += len;
+        'segments: for seg in segs {
+            let mut offset = seg.offset;
+            let mut left = seg.len;
+            while left > 0 {
+                if pin.bytes >= limit || !go_on() {
+                    break 'segments;
+                }
+                let part = left.min(STEP).min(limit - pin.bytes);
+                if let Some(view) = sys::map(&seg.path, offset, part) {
+                    pin.views.push(view);
+                    pin.bytes += part;
+                }
+                offset += part;
+                left -= part;
             }
         }
         pin
@@ -672,7 +683,6 @@ impl FastLoad {
         if ids.is_empty() || memory().0 < MIN_RAM {
             return;
         }
-        self.started = true;
         let tx = self.tx.clone();
         crate::spawn("fastload-auto", move || {
             std::thread::sleep(delay);
@@ -761,15 +771,17 @@ impl Worker {
     fn scan(&mut self) {
         let found = crate::shaders::games::find_all();
         let mut drives = HashMap::new();
-        let old: HashMap<String, Load> = self
+        // Stan wczytywania i trwająca nauka przechodzą na nową listę.
+        let old: HashMap<String, (Load, Option<usize>)> = self
             .shared
             .lock()
-            .map(|s| s.games.iter().map(|g| (g.id.clone(), g.load.clone())).collect())
+            .map(|s| s.games.iter().map(|g| (g.id.clone(), (g.load.clone(), g.learning))).collect())
             .unwrap_or_default();
         let games: Vec<Entry> = found
             .into_iter()
             .map(|g| Entry {
-                load: old.get(&g.id).cloned().unwrap_or(Load::Idle),
+                load: old.get(&g.id).map(|o| o.0.clone()).unwrap_or(Load::Idle),
+                learning: old.get(&g.id).and_then(|o| o.1),
                 drive: drive_of(&g.dir, &mut drives),
                 profile: self.profile_info(&g.id),
                 id: g.id,
@@ -778,7 +790,6 @@ impl Worker {
                 dir: g.dir,
                 size: None,
                 dstorage: None,
-                learning: None,
             })
             .collect();
         let dirs: Vec<(String, PathBuf)> = games.iter().map(|g| (g.id.clone(), g.dir.clone())).collect();
@@ -844,8 +855,21 @@ impl Worker {
             return;
         }
         let mut pinned = false;
-        if pin {
+        // Dysk USB można odłączyć w trakcie - odczyt zmapowanej pamięci
+        // zakończyłby wtedy program, więc takich gier nie trzymamy.
+        let usb = self
+            .shared
+            .lock()
+            .is_ok_and(|s| s.games.iter().any(|g| g.id == id && g.drive.kind == DriveKind::Usb));
+        if pin && !usb {
             let held = Pin::hold(&segs, done, &go_on);
+            // Stop w trakcie przypinania: dane zostają w pamięci podręcznej,
+            // ale nic nie jest trzymane.
+            if self.stop.load(Ordering::Relaxed) {
+                drop(held);
+                self.with(id, |g| g.load = Load::Stopped);
+                return;
+            }
             pinned = held.bytes > 0;
             if pinned {
                 self.pins.insert(id.to_owned(), (held, dir, false));
@@ -891,6 +915,22 @@ impl Worker {
         #[cfg(windows)]
         {
             let session = l.trace.finish();
+            if session.values().all(|c| c.is_empty()) {
+                // Nic nie zapisano: gra nie była uruchomiona albo jej folder
+                // leży na dysku, którego ścieżek nie da się dopasować (dysk
+                // sieciowy, SUBST, dowiązanie do innego woluminu).
+                if let Ok(mut s) = self.shared.lock() {
+                    s.message = Some(
+                        crate::i18n::tr(
+                            "Nauka nie zapisała żadnych odczytów - uruchom grę w trakcie zapisu. Gry na dysku sieciowym albo za dowiązaniem do innego dysku nie są obsługiwane.",
+                            "Learning recorded no reads - start the game while recording. Games on a network drive or behind a link to another drive are not supported.",
+                        )
+                        .to_owned(),
+                    );
+                }
+            } else if let Ok(mut s) = self.shared.lock() {
+                s.message = None;
+            }
             self.store.games.entry(l.id.clone()).or_default().merge(&session);
             self.store.save();
         }
@@ -1127,5 +1167,14 @@ mod tests {
             let ver = dll.as_deref().map(|p| sys::file_version(p).unwrap_or_default());
             eprintln!("{:<40} {:>7.1} GB  {} {:?} {:?}  dstorage {:?}", g.name, size as f64 / GIB as f64, d.letter, d.kind, d.bypass, ver);
         }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for FastLoad {
+    fn drop(&mut self) {
+        // Zamknięcie programu w trakcie nauki: sesja śledzenia plików nie może zostać.
+        self.stop();
+        crate::fastload_trace::stop_stale();
     }
 }

@@ -160,6 +160,16 @@ struct Inner {
 impl Inner {
     /// Przelicza tryby na wysterowanie i ustawia tylko zmiany.
     fn apply(&mut self) {
+        // Program się zamyka: wentylatory zostały już oddane płycie i nie
+        // wolno ustawić ich ponownie (proces skończy się bez przywracania).
+        if self.quitting {
+            return;
+        }
+        // Awaryjne oddanie wentylatorów płycie (błąd w innym wątku) skasowało
+        // nasze ustawienia w układzie - zapominamy je, żeby ustawić od nowa.
+        if self.applied.values().any(Option::is_some) && self.service.lock().is_ok_and(|s| !s.touched()) {
+            self.applied.clear();
+        }
         let Some(snap) = &self.snapshot else { return };
         let mut changes = Vec::new();
 
@@ -261,18 +271,37 @@ impl Backend {
             skip_kinds,
         }));
         let thread_inner = inner.clone();
-        crate::spawn("sensors", move || loop {
-            let started = Instant::now();
-            if thread_inner.lock().map(|s| s.quitting).unwrap_or(true) {
-                break;
+        crate::spawn("sensors", move || {
+            let run = std::panic::AssertUnwindSafe(|| loop {
+                let started = Instant::now();
+                if thread_inner.lock().map(|s| s.quitting).unwrap_or(true) {
+                    break;
+                }
+                let snap = match service.lock() {
+                    Ok(mut s) => s.read(),
+                    Err(_) => break,
+                };
+                handle_snapshot(&thread_inner, snap, &meter, &gpu, &board);
+                ctx.request_repaint();
+                std::thread::sleep(Duration::from_secs(1).saturating_sub(started.elapsed()));
+            });
+            // Błąd w odczycie albo sterowaniu: wentylatory wracają do płyty
+            // (także przez "zatrutą" blokadę), a interfejs pokazuje błąd
+            // zamiast zamrożonych odczytów.
+            if std::panic::catch_unwind(run).is_err() {
+                service.lock().unwrap_or_else(|e| e.into_inner()).restore_all();
+                let mut s = thread_inner.lock().unwrap_or_else(|e| e.into_inner());
+                s.applied.clear();
+                s.status = Status::Error(
+                    crate::i18n::tr(
+                        "Czujniki zatrzymane po błędzie - wentylatory oddane płycie głównej. Uruchom program ponownie.",
+                        "Sensors stopped after an error - fans handed back to the motherboard. Restart the program.",
+                    )
+                    .to_owned(),
+                );
+                drop(s);
+                ctx.request_repaint();
             }
-            let snap = match service.lock() {
-                Ok(mut s) => s.read(),
-                Err(_) => break,
-            };
-            handle_snapshot(&thread_inner, snap, &meter, &gpu, &board);
-            ctx.request_repaint();
-            std::thread::sleep(Duration::from_secs(1).saturating_sub(started.elapsed()));
         });
         Self { inner }
     }
@@ -300,12 +329,15 @@ impl Backend {
 impl Drop for Backend {
     fn drop(&mut self) {
         // Oddajemy płycie wszystkie wentylatory i zatrzymujemy wątek odczytów.
-        if let Ok(mut s) = self.inner.lock() {
-            s.quitting = true;
-            if let Ok(mut service) = s.service.lock() {
-                service.restore_all();
-            }
-        }
+        // Blokada "zatruta" po panice wątku też jest otwierana - wentylatory
+        // muszą wrócić do płyty niezależnie od tego, co zawiodło wcześniej.
+        let mut s = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        s.quitting = true;
+        let service = s.service.clone();
+        // Bez trzymania `inner`: wątek odczytów bierze blokady w kolejności
+        // inner -> service i mógłby się z nami zakleszczyć.
+        drop(s);
+        service.lock().unwrap_or_else(|e| e.into_inner()).restore_all();
     }
 }
 

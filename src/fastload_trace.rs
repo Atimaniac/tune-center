@@ -290,6 +290,11 @@ mod etw {
         consumer: Option<std::thread::JoinHandle<()>>,
     }
 
+    /// Zatrzymuje sesję programu, jeśli została (zamknięcie w trakcie nauki, awaria).
+    pub fn stop_stale() {
+        stop_session(CONTROLTRACE_HANDLE::default());
+    }
+
     fn stop_session(handle: CONTROLTRACE_HANDLE) {
         let mut p = props();
         unsafe {
@@ -380,7 +385,7 @@ mod etw {
 }
 
 #[cfg(windows)]
-pub use etw::Trace;
+pub use etw::{stop_stale, Trace};
 
 #[cfg(test)]
 mod tests {

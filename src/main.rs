@@ -532,7 +532,7 @@ impl App {
             dpc: dpc::Dpc::new(),
             power_plan: {
                 let ctx = cc.egui_ctx.clone();
-                power_plan::PowerPlan::start(plan_settings, move || ctx.request_repaint())
+                power_plan::PowerPlan::start(plan_settings, demo, move || ctx.request_repaint())
             },
             bench: bench_tab::BenchTab::new(),
             cpu_temp: None,
