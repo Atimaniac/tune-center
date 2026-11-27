@@ -92,6 +92,9 @@ pub struct Config {
     /// W trakcie gry nie pozwalać zasnąć rdzeniowi obsługującemu kartę graficzną.
     #[serde(default)]
     pub gpu_core_awake: bool,
+    /// W trakcie gry przypisywać ją do rdzeni P (procesory hybrydowe).
+    #[serde(default)]
+    pub game_p_cores: bool,
     /// Kopie przypisań przerwań sprzed przeniesienia dźwięku na inny rdzeń.
     #[serde(default)]
     pub irq_backup: Vec<crate::irq::Backup>,
@@ -175,6 +178,7 @@ impl Default for Config {
             power_plan_game: String::new(),
             power_plan_idle: String::new(),
             gpu_core_awake: false,
+            game_p_cores: false,
             irq_backup: Vec::new(),
             check_updates: true,
             nv_driver_check: true,

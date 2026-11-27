@@ -707,6 +707,47 @@ Pomiar na i7-13850HX z RTX 5070: wątek o najwyższym priorytecie na rdzeniu
 karty graficznej był w spoczynku opóźniony o ponad 0,5 ms 135 razy w 30 s, na
 innych rdzeniach 0-1 raz.
 
+## TUNE - FPS (pomiar klatek)
+
+Strona FPS mierzy klatki gry od kliknięcia Start do kliknięcia Stop: średni
+FPS, 1% low i 0,1% low (średni FPS z najwolniejszego 1 % i 0,1 % klatek),
+najniższy FPS i liczbę zacięć (klatek dłuższych niż 50 ms). Przerwy dłuższe
+niż sekunda (ekran ładowania, przełączenie okna) nie są liczone jako klatki.
+
+Do gry nic nie jest wstrzykiwane: program słucha zdarzeń Windows (ETW) o
+wyświetlaniu klatek - DXGI i Direct3D 9 (wywołanie Present w grze) oraz jądra
+grafiki DxgKrnl (każda klatka, także Vulkan i OpenGL). Wymaga administratora.
+Mierzona jest uruchomiona gra z listy wykrytych gier, a gdy program jej nie
+rozpozna - program wyświetlający najwięcej klatek. Nakładki na ekranie gry
+nie ma; odczyt na żywo jest w oknie programu.
+
+Każdy zakończony pomiar trafia do historii (plik `tunecenter-fps.json`, 200
+najnowszych): data, gra, czas, statystyki i włączone w tym czasie opcje
+programu (plan zasilania, rdzenie P, podtrzymywanie rdzenia karty). Kolumna
+"Zmiana 1% low" pokazuje różnicę wobec poprzedniego pomiaru tej samej gry;
+różnice do około 2 % mieszczą się w rozrzucie między przebiegami. Żeby
+porównanie miało sens, mierz to samo miejsce w grze przez minutę lub dłużej i
+zmieniaj jedno ustawienie naraz.
+
+### Rdzenie P dla gry
+
+Opcja na stronie Power plan (tylko procesory hybrydowe, domyślnie wyłączona):
+procesy uruchomionej gry dostają do dyspozycji tylko rdzenie wydajne (P).
+Program używa zestawów procesorów Windows (CPU Sets,
+`SetProcessDefaultCpuSets`), więc po zamknięciu gry albo wyłączeniu opcji nic
+nie zostaje. Pomaga w grach, których wątki Windows przenosi na rdzenie E; w
+innych nic nie zmienia albo szkodzi, dlatego warto zmierzyć na stronie FPS
+przed i po. Gra chroniona przez anticheat może odrzucić zmianę - strona
+pokazuje wtedy liczbę odrzuconych procesów.
+
+### Sprawdzanie wydajności procesora co 1 ms
+
+Pozycja na stronie System w grupie "Do przetestowania": odstęp, w jakim
+Windows ocenia obciążenie i decyduje o taktowaniu oraz rozdziale wątków
+(ustawienie planu zasilania PERFCHECK, domyślnie 30 ms). Zgłaszane przez
+graczy CS2 jako poprawa 1% low na procesorach z rdzeniami P i E; nie ma
+niezależnych pomiarów.
+
 ## TUNE - Fast Load (32GB RAM+)
 
 Trzecia strona zakładki TUNE. Wczytuje pliki gry do wolnej pamięci RAM, zanim

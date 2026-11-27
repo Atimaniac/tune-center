@@ -92,6 +92,7 @@ pub fn install() {
         {
             crate::dpc::stop_sessions();
             crate::fastload_trace::stop_stale();
+            crate::fps::stop_stale();
         }
         let thread = std::thread::current();
         let name = thread.name().unwrap_or("?").to_owned();
@@ -197,6 +198,7 @@ mod native {
         {
             crate::dpc::stop_sessions();
             crate::fastload_trace::stop_stale();
+            crate::fps::stop_stale();
         }
         let (code, address) = match info.as_ref().and_then(|i| i.record.as_ref()) {
             Some(r) => (r.code, r.address as *const c_void),

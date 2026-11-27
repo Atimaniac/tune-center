@@ -696,6 +696,9 @@ fn reg_state(t: &RegTweak, path: &str) -> State {
 
 /// Wartość ustawienia planu zasilania po ludzku.
 fn power_text(key: &str, v: u32) -> String {
+    if key == "cpu_perfcheck" {
+        return crate::trf!("co {v} ms", "every {v} ms");
+    }
     if key.starts_with("cpu_parking") {
         return if v >= 100 {
             crate::i18n::tr(
@@ -1802,6 +1805,15 @@ const POWER_TWEAKS: &[(&str, &str, &str, u32, u32)] = &[
         100,
         0,
     ),
+    // PERFCHECK: co ile ms Windows ocenia obciążenie i zmienia taktowanie
+    // oraz rozdział wątków między rdzenie (domyślnie 30 ms w planie Zrównoważony).
+    (
+        "cpu_perfcheck",
+        "54533251-82be-4824-96c1-47b60b740d00",
+        "4d2b0152-7d5c-498b-88e2-34345392a2c5",
+        1,
+        30,
+    ),
 ];
 
 /// Plan "Ultimate Performance" (ukryty wzorzec Windows).
@@ -1959,6 +1971,13 @@ pub(crate) fn read_all(cpu_x3d: bool) -> Vec<Item> {
                     "Windows does not park the performance cores - they do not have to wake up on a sudden load, which smooths frame times. A few W more at idle. Applies to the active power plan.",
                 ),
             ),
+            "cpu_perfcheck" => (
+                text("Procesor: sprawdzanie wydajności co 1 ms", "CPU: performance check every 1 ms"),
+                crate::i18n::tr(
+                    "Windows co ten odstęp ocenia obciążenie i decyduje o taktowaniu oraz o tym, które rdzenie dostają wątki (domyślnie co 30 ms). Krótszy odstęp ma szybciej reagować na nagłe obciążenie. Zgłaszane przez graczy CS2 na procesorach z rdzeniami P i E jako poprawa 1% low; nie ma niezależnych pomiarów, więc zmierz na stronie FPS przed i po. Nieco wyższy pobór mocy. Dotyczy aktywnego planu zasilania.",
+                    "At this interval Windows evaluates the load and decides on clock speed and on which cores get threads (default every 30 ms). A shorter interval should react faster to sudden load. Reported by CS2 players on processors with P and E cores as a 1% low improvement; there are no independent measurements, so measure on the FPS page before and after. Slightly higher power draw. Applies to the active power plan.",
+                ),
+            ),
             _ => (
                 text("Procesor: parkowanie rdzeni E wyłączone", "CPU: E-core parking off"),
                 crate::i18n::tr(
@@ -1980,7 +1999,8 @@ pub(crate) fn read_all(cpu_x3d: bool) -> Vec<Item> {
             key: (*key).into(),
             name,
             desc,
-            group: Group::Proven,
+            // Sprawdzanie wydajności nie ma potwierdzenia w pomiarach - do przetestowania.
+            group: if *key == "cpu_perfcheck" { Group::Test } else { Group::Proven },
             restart: false,
             state,
             warning: None,

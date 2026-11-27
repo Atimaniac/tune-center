@@ -325,6 +325,11 @@ mod sys {
     /// Klasa wydajności każdego procesora logicznego (grupa 0): w procesorze
     /// hybrydowym rdzenie P mają wyższą klasę niż E. Pusta lista przy błędzie.
     pub fn topology() -> Vec<u8> {
+        super::parse_cpu_sets(&cpu_sets_raw())
+    }
+
+    /// Surowa lista struktur SYSTEM_CPU_SET_INFORMATION; pusta przy błędzie.
+    pub fn cpu_sets_raw() -> Vec<u8> {
         let mut need = 0u32;
         unsafe { GetSystemCpuSetInformation(std::ptr::null_mut(), 0, &mut need, 0, 0) };
         if need == 0 {
@@ -334,7 +339,8 @@ mod sys {
         if unsafe { GetSystemCpuSetInformation(buf.as_mut_ptr(), need, &mut need, 0, 0) } == 0 {
             return Vec::new();
         }
-        super::parse_cpu_sets(&buf[..need as usize])
+        buf.truncate(need as usize);
+        buf
     }
 
     pub fn scan() -> Vec<Device> {
@@ -461,6 +467,9 @@ mod sys {
         Vec::new()
     }
     pub fn topology() -> Vec<u8> {
+        Vec::new()
+    }
+    pub fn cpu_sets_raw() -> Vec<u8> {
         Vec::new()
     }
     pub fn pin(_: &str, _: u16) -> Result<Backup, (Option<Backup>, String)> {
@@ -632,5 +641,66 @@ mod live {
         let after = read(&instance);
         eprintln!("restored ({restored:?}): {after:?}");
         assert_eq!(after, before);
+    }
+}
+
+/// Identyfikatory zestawów procesorów (CPU Sets) rdzeni P z listy struktur
+/// SYSTEM_CPU_SET_INFORMATION (identyfikator: u32 pod 8, klasa: u8 pod 18).
+/// Pusta lista, gdy wszystkie rdzenie są jednakowe.
+pub fn parse_p_core_ids(mut data: &[u8]) -> Vec<u32> {
+    let mut sets: Vec<(u32, u8)> = Vec::new();
+    while data.len() >= 20 {
+        let size = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        if size < 20 || size > data.len() {
+            break;
+        }
+        if u32::from_le_bytes([data[4], data[5], data[6], data[7]]) == 0 {
+            sets.push((u32::from_le_bytes([data[8], data[9], data[10], data[11]]), data[18]));
+        }
+        data = &data[size..];
+    }
+    let top = sets.iter().map(|s| s.1).max().unwrap_or(0);
+    if sets.iter().all(|s| s.1 == top) {
+        return Vec::new();
+    }
+    sets.into_iter().filter(|s| s.1 == top).map(|s| s.0).collect()
+}
+
+/// Zestawy procesorów rdzeni P tego komputera (odczyt raz); puste w
+/// procesorze bez rdzeni E.
+pub fn p_core_set_ids() -> &'static [u32] {
+    static IDS: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
+    IDS.get_or_init(|| parse_p_core_ids(&sys::cpu_sets_raw()))
+}
+
+#[cfg(test)]
+mod cpu_set_tests {
+    use super::*;
+
+    #[test]
+    fn p_core_ids() {
+        let entry = |id: u32, class: u8| {
+            let mut e = vec![0u8; 32];
+            e[0] = 32;
+            e[8..12].copy_from_slice(&id.to_le_bytes());
+            e[18] = class;
+            e
+        };
+        let mut data = entry(256, 1);
+        data.extend(entry(257, 1));
+        data.extend(entry(258, 0));
+        assert_eq!(parse_p_core_ids(&data), vec![256, 257]);
+        // Jednakowe rdzenie: nie ma czego wybierać.
+        let mut same = entry(256, 0);
+        same.extend(entry(257, 0));
+        assert!(parse_p_core_ids(&same).is_empty());
+        assert!(parse_p_core_ids(&[]).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn p_core_ids_live() {
+        eprintln!("P core set ids: {:?}", p_core_set_ids());
     }
 }

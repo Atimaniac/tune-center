@@ -119,6 +119,8 @@ pub struct Settings {
     pub idle: String,
     /// W trakcie gry nie pozwalać zasnąć rdzeniowi obsługującemu kartę graficzną.
     pub keep_awake: bool,
+    /// W trakcie gry przypisywać jej procesy do rdzeni P.
+    pub p_cores: bool,
 }
 
 #[derive(Default)]
@@ -132,6 +134,8 @@ struct Shared {
     /// Rdzeń podtrzymywany w trakcie gry i błąd jego wykrycia.
     awake_cpu: Option<u16>,
     awake_error: Option<String>,
+    /// Procesy gry przypisane do rdzeni P: (udane, odrzucone).
+    p_cores: Option<(usize, usize)>,
     quit: bool,
 }
 
@@ -145,9 +149,40 @@ pub struct PowerPlan {
 }
 
 /// Nazwa gry, której proces działa: foldery gier (małymi literami) i nazwy.
-fn running_game(games: &[(String, String)]) -> Option<String> {
-    let procs = crate::game_watch::process_paths();
-    games.iter().find(|(dir, _)| procs.iter().any(|p| crate::game_watch::matches(dir, p))).map(|(_, n)| n.clone())
+fn running_game(games: &[(String, String)]) -> Option<(String, Vec<u32>)> {
+    let procs = crate::game_watch::process_list();
+    let (dir, name) = games.iter().find(|(dir, _)| procs.iter().any(|(_, p)| crate::game_watch::matches(dir, p)))?;
+    // Wszystkie procesy z folderu tej gry (launcher, właściwa gra).
+    let pids = procs.iter().filter(|(_, p)| crate::game_watch::matches(dir, p)).map(|(pid, _)| *pid).collect();
+    Some((name.clone(), pids))
+}
+
+/// Przypisanie procesów gry do rdzeni P (zestawy procesorów Windows).
+#[cfg(windows)]
+mod cores {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+        fn SetProcessDefaultCpuSets(process: isize, ids: *const u32, count: u32) -> i32;
+        fn CloseHandle(handle: isize) -> i32;
+    }
+    const PROCESS_SET_LIMITED_INFORMATION: u32 = 0x2000;
+
+    /// Ustawia domyślne zestawy procesorów procesu; pusta lista zdejmuje
+    /// ograniczenie. `false`, gdy system odmówił dostępu do procesu (np. gra
+    /// chroniona przez anticheat).
+    pub fn set(pid: u32, ids: &[u32]) -> bool {
+        unsafe {
+            let h = OpenProcess(PROCESS_SET_LIMITED_INFORMATION, 0, pid);
+            if h == 0 {
+                return false;
+            }
+            let ptr = if ids.is_empty() { std::ptr::null() } else { ids.as_ptr() };
+            let ok = SetProcessDefaultCpuSets(h, ptr, ids.len() as u32) != 0;
+            CloseHandle(h);
+            ok
+        }
+    }
 }
 
 impl PowerPlan {
@@ -165,6 +200,9 @@ impl PowerPlan {
             let mut tried = false;
             // W tej sesji gry już próbowano włączyć plan gry.
             let mut plan_tried = false;
+            // Procesy gry przypisane do rdzeni P i czy się to udało.
+            #[cfg(windows)]
+            let mut pinned: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
             loop {
                 let (settings, quit) = match s.lock() {
                     Ok(g) => (g.settings.clone(), g.quit),
@@ -173,7 +211,7 @@ impl PowerPlan {
                 if quit {
                     break;
                 }
-                let now = if settings.enabled || settings.keep_awake {
+                let found = if settings.enabled || settings.keep_awake || settings.p_cores {
                     // Lista gier odświeżana co 5 minut (nowo zainstalowane gry).
                     if listed.is_none_or(|t| t.elapsed() >= Duration::from_secs(300)) {
                         listed = Some(Instant::now());
@@ -184,6 +222,35 @@ impl PowerPlan {
                     }
                     running_game(&games)
                 } else {
+                    None
+                };
+                let game_pids: Vec<u32> = found.as_ref().map(|f| f.1.clone()).unwrap_or_default();
+                let now = found.map(|f| f.0);
+                // Rdzenie P: każdy nowy proces gry dostaje zestawy procesorów
+                // rdzeni P; po wyłączeniu opcji ograniczenie jest zdejmowane.
+                #[cfg(windows)]
+                let p_cores_state = {
+                    let ids = crate::irq::p_core_set_ids();
+                    if settings.p_cores && !ids.is_empty() {
+                        for pid in &game_pids {
+                            if !pinned.contains_key(pid) {
+                                pinned.insert(*pid, cores::set(*pid, ids));
+                            }
+                        }
+                    } else {
+                        for (pid, ok) in pinned.drain() {
+                            if ok {
+                                cores::set(pid, &[]);
+                            }
+                        }
+                    }
+                    pinned.retain(|pid, _| game_pids.contains(pid));
+                    let ok = pinned.values().filter(|v| **v).count();
+                    (!pinned.is_empty()).then_some((ok, pinned.len() - ok))
+                };
+                #[cfg(not(windows))]
+                let p_cores_state: Option<(usize, usize)> = {
+                    let _ = &game_pids;
                     None
                 };
                 // Plan zasilania: przy uruchomieniu gry i po jej zamknięciu (albo
@@ -227,7 +294,8 @@ impl PowerPlan {
                     None
                 };
                 if let Ok(mut g) = s.lock() {
-                    let changed = g.running != now || g.awake_cpu != awake_cpu || awake_error.is_some();
+                    let changed = g.running != now || g.awake_cpu != awake_cpu || awake_error.is_some() || g.p_cores != p_cores_state;
+                    g.p_cores = p_cores_state;
                     if let Some(r) = &result {
                         g.error = r.as_ref().err().cloned();
                     }
@@ -257,11 +325,18 @@ impl PowerPlan {
         self.shared.lock().map(|s| (s.running.clone(), s.awake_cpu, s.awake_error.clone())).unwrap_or_default()
     }
 
+    /// Procesy działającej gry przypisane do rdzeni P: (udane, odrzucone
+    /// przez system); `None`, gdy nic nie jest przypisane.
+    pub fn p_cores(&self) -> Option<(usize, usize)> {
+        self.shared.lock().ok().and_then(|s| s.p_cores)
+    }
+
     pub fn set(&self, mut settings: Settings) {
         // Tryb demonstracyjny: nic nie trafia do systemu.
         if self.dry {
             settings.enabled = false;
             settings.keep_awake = false;
+            settings.p_cores = false;
         }
         if let Ok(mut s) = self.shared.lock() {
             s.settings = settings;
@@ -289,6 +364,37 @@ impl PowerPlan {
         );
         ui.add_space(6.0);
         ui.checkbox(&mut settings.enabled, tr("Przełączaj plan zasilania dla gier", "Switch the power plan for games"));
+        // Rdzenie P: tylko w procesorach hybrydowych.
+        let hybrid = !crate::irq::p_core_set_ids().is_empty();
+        ui.horizontal_wrapped(|ui| {
+            ui.add_enabled(
+                hybrid,
+                egui::Checkbox::new(&mut settings.p_cores, tr("W trakcie gry przypisz grę do rdzeni P", "While a game runs, assign it to the P cores")),
+            )
+            .on_hover_text(tr(
+                "Procesy uruchomionej gry dostają do dyspozycji tylko rdzenie wydajne (P); rdzenie E zostają dla reszty systemu. Pomaga w grach, których wątki Windows przenosi na rdzenie E - w innych nic nie zmienia albo szkodzi, więc sprawdź na stronie FPS przed i po. Używa zestawów procesorów Windows (CPU Sets); po zamknięciu gry albo wyłączeniu opcji nic nie zostaje. Gra chroniona przez anticheat może odrzucić zmianę - wtedy program to pokaże.",
+                "The running game's processes get only the performance (P) cores; the E cores stay for the rest of the system. Helps in games whose threads Windows moves to E cores - in others it changes nothing or hurts, so check on the FPS page before and after. Uses Windows CPU Sets; nothing stays after the game closes or the option is turned off. A game protected by anti-cheat may reject the change - the program shows it then.",
+            ))
+            .on_disabled_hover_text(tr("Ten procesor nie ma rdzeni E.", "This processor has no E cores."));
+            if settings.p_cores {
+                match self.p_cores() {
+                    Some((ok, 0)) => {
+                        ui.label(RichText::new(crate::trf!("przypisane procesy: {ok}", "assigned processes: {ok}")).size(12.5).color(theme::ok()));
+                    }
+                    Some((ok, refused)) => {
+                        ui.label(
+                            RichText::new(crate::trf!(
+                                "przypisane: {ok}, odrzucone przez system: {refused}",
+                                "assigned: {ok}, refused by the system: {refused}"
+                            ))
+                            .size(12.5)
+                            .color(theme::warn()),
+                        );
+                    }
+                    None => {}
+                }
+            }
+        });
         ui.add_space(6.0);
 
         let plans = self.plans.clone();
@@ -312,7 +418,7 @@ impl PowerPlan {
             ui.label(tr("Gra", "Game"));
             match &running {
                 Some(name) => ui.label(RichText::new(name).color(theme::ok())),
-                None if settings.enabled => {
+                None if settings.enabled || settings.p_cores || settings.keep_awake => {
                     ui.label(RichText::new(tr("żadna nie jest uruchomiona", "none is running")).color(theme::muted()))
                 }
                 None => ui.label(RichText::new(tr("funkcja wyłączona", "feature off")).color(theme::muted())),

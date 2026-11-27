@@ -51,6 +51,8 @@ mod history;
 mod fastload;
 mod fastload_trace;
 mod fastload_ui;
+mod fps;
+mod fps_ui;
 mod hw;
 mod hw_names;
 mod i18n;
@@ -358,12 +360,14 @@ struct App {
     tune: tune::Tune,
     /// Zakładka TUNE: strona Fast Load (gry w pamięci RAM, DirectStorage).
     fast_load: fastload::FastLoad,
-    /// Otwarta strona zakładki TUNE: 0 = System, 1 = DPC, 2 = Fast Load, 3 = Power plan.
+    /// Otwarta strona zakładki TUNE: 0 = System, 1 = DPC, 2 = Fast Load, 3 = Power plan, 4 = FPS.
     tune_page: u8,
     /// Zakładka TUNE: plan zasilania przełączany dla gier.
     power_plan: power_plan::PowerPlan,
     /// Zakładka TUNE: analizator DPC.
     dpc: dpc::Dpc,
+    /// Zakładka TUNE: pomiar klatek gry i historia pomiarów.
+    fps: fps::Meter,
     /// Zakładka BENCH (test wydajności i stress test).
     bench: bench_tab::BenchTab,
     /// Temperatura procesora z kafelków SENSORS (co sekundę).
@@ -530,6 +534,7 @@ impl App {
             },
             tune_page: 0,
             dpc: dpc::Dpc::new(),
+            fps: fps::Meter::default(),
             power_plan: {
                 let ctx = cc.egui_ctx.clone();
                 power_plan::PowerPlan::start(plan_settings, demo, move || ctx.request_repaint())
@@ -649,6 +654,7 @@ impl App {
                 "dpc" => 1,
                 "fastload" => 2,
                 "powerplan" => 3,
+                "fps" => 4,
                 _ => 0,
             };
             self.gpu.open_page(&page);
@@ -1076,7 +1082,7 @@ impl App {
                     crate::i18n::tr("CPU - Intel: limity mocy, offsety napięcia, IccMax, mnożniki turbo. AMD Ryzen: Curve Optimizer i limity PBO.", "CPU - Intel: power limits, voltage offsets, IccMax, turbo ratios. AMD Ryzen: Curve Optimizer and PBO limits."),
                     crate::i18n::tr("FAN - wentylatory płyty i karty: ręcznie albo krzywą zależną od temperatury, profile, także osobne dla gier.", "FAN - motherboard and card fans: manual or a temperature-based curve, profiles, also per game."),
                     crate::i18n::tr("SENSORS i POWER - najważniejsze temperatury oraz pobór mocy procesora i karty z licznikiem energii i kosztem; zasilacz z USB (Corsair HXi/RMi, MSI Ai) i bateria laptopa pokazują pobór całego komputera.", "SENSORS and POWER - key temperatures and CPU and card power draw with an energy counter and cost; a USB power supply (Corsair HXi/RMi, MSI Ai) and a laptop battery show the whole computer's power draw."),
-                    crate::i18n::tr("TUNE - ustawienia Windows wpływające na opóźnienia i DPC (przełączniki ON/OFF z kopią oryginałów), analizator DPC (czasy DPC i ISR sterowników), Fast Load (wczytanie gry do pamięci RAM, profil odczytów gry, gotowość do DirectStorage) i plan zasilania przełączany na czas gry.", "TUNE - Windows settings that affect latency and DPC (ON/OFF switches with a backup of the originals), a DPC analyzer (DPC and ISR times per driver), Fast Load (loading a game into RAM, per-game read profile, DirectStorage readiness) and a power plan switched while a game runs."),
+                    crate::i18n::tr("TUNE - ustawienia Windows wpływające na opóźnienia i DPC (przełączniki ON/OFF z kopią oryginałów), analizator DPC (czasy DPC i ISR sterowników), pomiar FPS z 1% low i historią pomiarów, Fast Load (wczytanie gry do pamięci RAM, profil odczytów gry, gotowość do DirectStorage) i plan zasilania przełączany na czas gry.", "TUNE - Windows settings that affect latency and DPC (ON/OFF switches with a backup of the originals), a DPC analyzer (DPC and ISR times per driver), FPS measurement with 1% low and a run history, Fast Load (loading a game into RAM, per-game read profile, DirectStorage readiness) and a power plan switched while a game runs."),
                     crate::i18n::tr("RGB - podświetlenie RAM, taśm Skydimo, urządzeń Logitech G, kart NVIDIA, płyt ASUS, Gigabyte i MSI oraz kontrolerów Corsair: kolor z jasnością, efekty (oddychanie, miganie, cykl kolorów, tęcza - tyle, ile ma dane urządzenie) z szybkością albo wyłączenie.", "RGB - lighting of RAM, Skydimo strips, Logitech G devices, NVIDIA cards, ASUS, Gigabyte and MSI boards and Corsair controllers: color with brightness, effects (breathing, flashing, color cycle, rainbow - as many as the device has) with speed, or off."),
                     crate::i18n::tr("BENCH - test wydajności procesora, stress test i test stabilności karty graficznej.", "BENCH - CPU performance test, stress test and graphics card stability test."),
                     crate::i18n::tr("OPTIONS - język, autostart, zasobnik, motywy (Tune, Neon Green, Neon City, Crimson) i diagnostyka zgodności ze zgłaszaniem na GitHubie.", "OPTIONS - language, autostart, tray, themes (Tune, Neon Green, Neon City, Crimson) and a compatibility check with GitHub reporting."),
@@ -1707,6 +1713,7 @@ impl eframe::App for App {
                         for (page, icon, label) in [
                             (0u8, Icon::Options, "System"),
                             (1, Icon::Gauge, "DPC"),
+                            (4, Icon::Bench, "FPS"),
                             (2, Icon::Memory, "Fast Load (32GB RAM+)"),
                             (3, Icon::Power, "Power plan"),
                         ] {
@@ -1729,6 +1736,21 @@ impl eframe::App for App {
                                 self.fans.config.save();
                             }
                         }
+                        4 => {
+                            // Opis włączonych opcji - zapisywany przy pomiarze do porównań.
+                            let c = &self.fans.config;
+                            let mut setup: Vec<&str> = Vec::new();
+                            if c.power_plan_enabled {
+                                setup.push(crate::i18n::tr("plan zasilania", "power plan"));
+                            }
+                            if c.game_p_cores {
+                                setup.push(crate::i18n::tr("rdzenie P", "P cores"));
+                            }
+                            if c.gpu_core_awake {
+                                setup.push(crate::i18n::tr("rdzeń karty", "GPU core awake"));
+                            }
+                            self.fps.ui(ui, self.elevated, &setup.join(", "));
+                        }
                         3 => {
                             let c = &mut self.fans.config;
                             let mut s = plan_settings(c, false);
@@ -1736,6 +1758,7 @@ impl eframe::App for App {
                                 c.power_plan_enabled = s.enabled;
                                 c.power_plan_game = s.game;
                                 c.power_plan_idle = s.idle;
+                                c.game_p_cores = s.p_cores;
                                 c.save();
                             }
                         }
@@ -2007,5 +2030,6 @@ fn plan_settings(c: &config::Config, demo: bool) -> power_plan::Settings {
         game: c.power_plan_game.clone(),
         idle: c.power_plan_idle.clone(),
         keep_awake: c.gpu_core_awake && !demo,
+        p_cores: c.game_p_cores && !demo,
     }
 }

@@ -50,7 +50,7 @@ pub fn find(rules: &[Rule], processes: &[String]) -> Option<Active> {
 
 /// Pełne ścieżki uruchomionych procesów (w kolejności z Toolhelp32).
 #[cfg(windows)]
-pub fn process_paths() -> Vec<String> {
+pub fn process_list() -> Vec<(u32, String)> {
     #[repr(C)]
     struct Entry {
         size: u32,
@@ -96,7 +96,7 @@ pub fn process_paths() -> Vec<String> {
                     let mut buf = [0u16; 1024];
                     let mut len = buf.len() as u32;
                     if QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len) != 0 {
-                        out.push(String::from_utf16_lossy(&buf[..len as usize]));
+                        out.push((e.pid, String::from_utf16_lossy(&buf[..len as usize])));
                     }
                     CloseHandle(h);
                 }
@@ -106,6 +106,17 @@ pub fn process_paths() -> Vec<String> {
         CloseHandle(snap);
     }
     out
+}
+
+/// Pełne ścieżki uruchomionych procesów (w kolejności z Toolhelp32).
+#[cfg(windows)]
+pub fn process_paths() -> Vec<String> {
+    process_list().into_iter().map(|(_, path)| path).collect()
+}
+
+#[cfg(not(windows))]
+pub fn process_list() -> Vec<(u32, String)> {
+    Vec::new()
 }
 
 #[cfg(not(windows))]
